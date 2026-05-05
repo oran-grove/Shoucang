@@ -1,0 +1,245 @@
+"""
+反馈智能体
+==========
+接收管理员反馈（误报/漏报标记），结合历史判定记录，调整知识库规则。
+支持规则升级、降级、调整置信度和TTL，以及学习管理员偏好。
+"""
+
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+from ..core.agent import BaseAgent
+from ..core.message import (
+    AgentMessage, FlowEvent, MessageType, ThreatVerdict,
+    TrafficVerdict, SeverityLevel, RuleEntry, RuleAction,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class AdminFeedback:
+    """管理员反馈数据结构"""
+
+    def __init__(
+        self,
+        verdict_id: str = "",
+        feedback_type: str = "false_positive",  # false_positive / false_negative / confirm_malicious
+        admin_note: str = "",
+        src_ip: str = "",
+        dst_ip: str = "",
+    ):
+        self.verdict_id = verdict_id
+        self.feedback_type = feedback_type
+        self.admin_note = admin_note
+        self.src_ip = src_ip
+        self.dst_ip = dst_ip
+        self.timestamp = datetime.now(timezone.utc)
+
+
+class FeedbackAgent(BaseAgent):
+    """
+    反馈智能体：
+    - 接收管理员反馈
+    - 查询历史判定记录
+    - 调整知识库规则权重/TTL/动作
+    - 输出规则变更建议
+    """
+
+    def __init__(
+        self,
+        name: str = "FeedbackAgent",
+        system_prompt: str = "",
+        model_name: str = "qwen2.5-7b-instruct",
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ):
+        default_prompt = (
+            "你是一个网络安全规则优化专家。根据管理员反馈和历史判定记录，"
+            "提出规则调整建议。"
+            "回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|"
+            "\"adjust_confidence\"|\"no_change\", "
+            "\"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, "
+            "\"ttl_minutes\": 整数, \"reasoning\": \"理由\" }"
+        )
+        super().__init__(
+            name=name,
+            system_prompt=system_prompt or default_prompt,
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        # 存储最近的判定历史（用于学习）
+        self._verdict_history: dict[str, ThreatVerdict] = {}  # verdict_id -> ThreatVerdict
+        self._feedback_history: list[AdminFeedback] = []
+        self._max_history = 1000
+
+    def record_verdict(self, verdict: ThreatVerdict) -> None:
+        """记录判定结果"""
+        self._verdict_history[verdict.verdict_id] = verdict
+        if len(self._verdict_history) > self._max_history:
+            oldest = next(iter(self._verdict_history))
+            del self._verdict_history[oldest]
+
+    async def process(
+        self,
+        feedback: Optional[AdminFeedback] = None,
+        verdict: Optional[ThreatVerdict] = None,
+    ) -> dict:
+        """
+        处理管理员反馈，返回规则变更建议。
+        """
+        if feedback is None and verdict is not None:
+            # 仅记录判定
+            self.record_verdict(verdict)
+            return {"action": "no_change", "reasoning": "记录判定结果"}
+
+        if feedback is None:
+            return {"action": "no_change", "reasoning": "无反馈"}
+
+        self._feedback_history.append(feedback)
+        if len(self._feedback_history) > self._max_history:
+            self._feedback_history.pop(0)
+
+        # 查找历史判定
+        hist_verdict = self._verdict_history.get(feedback.verdict_id)
+
+        # 规则化处理
+        result = self._apply_feedback_rules(feedback, hist_verdict)
+
+        # 同时生成 LLM 增强建议
+        if hist_verdict:
+            try:
+                llm_result = await self._llm_enhance(feedback, hist_verdict)
+                if llm_result:
+                    result["llm_suggestion"] = llm_result
+            except Exception as e:
+                logger.warning("[%s] LLM 增强失败: %s", self.name, e)
+
+        return result
+
+    def process_sync(
+        self,
+        feedback: Optional[AdminFeedback] = None,
+        verdict: Optional[ThreatVerdict] = None,
+    ) -> dict:
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.process(feedback, verdict))
+        else:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(
+                    lambda: asyncio.run(self.process(feedback, verdict))
+                ).result()
+
+    def _apply_feedback_rules(
+        self, feedback: AdminFeedback, hist_verdict: Optional[ThreatVerdict]
+    ) -> dict:
+        """
+        基于规则的反馈处理（确定性行为，不依赖 LLM）。
+        """
+        if feedback.feedback_type == "confirm_malicious":
+            # 管理员确认恶意 → 直接加入黑名单
+            rule = RuleEntry(
+                src_ip=feedback.src_ip,
+                dst_ip=feedback.dst_ip,
+                action=RuleAction.BLOCK,
+                confidence=1.0,
+                source="admin",
+                ttl_minutes=10080,  # 管理员确认的规则保留 7 天
+                comment=f"管理员确认: {feedback.admin_note}",
+            )
+            if self._knowledge_base:
+                self._knowledge_base.add_rule(rule)
+            return {
+                "action": "upgrade_to_blacklist",
+                "rule_id": rule.rule_id,
+                "new_confidence": 1.0,
+                "ttl_minutes": 10080,
+                "reasoning": "管理员确认恶意，已生成黑名单规则",
+            }
+
+        elif feedback.feedback_type == "false_positive":
+            # 误报 → 查找并降级/删除相关规则
+            if self._knowledge_base and feedback.src_ip:
+                rules = self._knowledge_base.query_by_src_ip(
+                    feedback.src_ip, action=RuleAction.BLOCK
+                )
+                removed = []
+                for rule in rules:
+                    if rule.source in ("auto", "admin"):
+                        self._knowledge_base.remove_rule(rule.rule_id)
+                        removed.append(rule.rule_id)
+                if hist_verdict:
+                    hist_verdict.verdict = TrafficVerdict.FALSE_POSITIVE
+                return {
+                    "action": "downgrade_to_whitelist",
+                    "rule_id": removed[0] if removed else "",
+                    "new_confidence": 0.0,
+                    "ttl_minutes": 0,
+                    "reasoning": f"管理员标记误报，已移除 {len(removed)} 条规则: {removed}",
+                }
+            return {
+                "action": "downgrade_to_whitelist",
+                "reasoning": "管理员标记误报，无匹配规则",
+            }
+
+        elif feedback.feedback_type == "false_negative":
+            # 漏报 → 将目标IP加入黑名单
+            rule = RuleEntry(
+                src_ip=feedback.src_ip,
+                dst_ip=feedback.dst_ip,
+                action=RuleAction.BLOCK,
+                confidence=0.90,
+                source="auto",
+                ttl_minutes=4320,
+                comment=f"管理员标记漏报: {feedback.admin_note}",
+            )
+            if self._knowledge_base:
+                self._knowledge_base.add_rule(rule)
+            return {
+                "action": "upgrade_to_blacklist",
+                "rule_id": rule.rule_id,
+                "new_confidence": 0.90,
+                "ttl_minutes": 4320,
+                "reasoning": "管理员标记漏报，已生成黑名单规则",
+            }
+
+        return {"action": "no_change", "reasoning": f"未知反馈类型: {feedback.feedback_type}"}
+
+    async def _llm_enhance(
+        self, feedback: AdminFeedback, hist_verdict: ThreatVerdict
+    ) -> Optional[dict]:
+        """使用 LLM 增强反馈处理"""
+        prompt = (
+            f"管理员反馈: {feedback.feedback_type}\n"
+            f"管理员备注: {feedback.admin_note}\n"
+            f"源IP: {feedback.src_ip}, 目的IP: {feedback.dst_ip}\n"
+            f"原判定: {hist_verdict.verdict.value} "
+            f"(置信度: {hist_verdict.confidence})\n"
+            f"原威胁类型: {hist_verdict.threat_type}\n"
+            f"原理由: {hist_verdict.reasoning}\n"
+        )
+        try:
+            response = await self.call_llm(prompt)
+            return self.extract_json_from_response(response)
+        except Exception as e:
+            logger.error("[%s] LLM 增强调用失败: %s", self.name, e)
+            return None
+
+    def get_statistics(self) -> dict:
+        """返回统计信息"""
+        fb_types = {}
+        for fb in self._feedback_history[-200:]:
+            fb_types[fb.feedback_type] = fb_types.get(fb.feedback_type, 0) + 1
+        return {
+            "total_feedbacks": len(self._feedback_history),
+            "recent_feedback_types": fb_types,
+            "total_verdicts_recorded": len(self._verdict_history),
+        }
+
+
+__all__ = ["FeedbackAgent", "AdminFeedback"]
