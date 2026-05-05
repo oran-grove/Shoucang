@@ -23,6 +23,8 @@
     rules = system.get_p4_rules()
 """
 
+from typing import Optional
+
 from .config import (
     BackendType,
     LLMBackendConfig,

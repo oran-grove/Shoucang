@@ -104,7 +104,8 @@ async def async_example():
     #    LM Studio 本地 AI（用于快速检测和反馈）
     system.add_lmstudio_backend(
         api_base="http://localhost:1234/v1",
-        model_name="qwen2.5-7b-instruct",
+        model_name="qwen3.5-9b",
+        timeout=300.0,
     )
     #    OpenAI API（用于关联分析和综合研判）
     # system.add_openai_backend(
