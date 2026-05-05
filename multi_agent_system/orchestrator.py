@@ -8,19 +8,15 @@ Orchestrator 是整个系统的入口。
 - 管理完整的分析管线（检测 → 关联 → 研判 → 反馈）
 """
 
-import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 from uuid import uuid4
 
 from .config import (
-    BackendType, LLMBackendConfig, OrchestratorConfig,
-    DetectionAgentConfig, CorrelationAgentConfig,
-    JudgmentAgentConfig, FeedbackAgentConfig, KnowledgeBaseConfig,
+    BackendType, OrchestratorConfig,
 )
 from .core.message import (
-    FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel,
+    FlowEvent, ThreatVerdict, TrafficVerdict,
     AgentMessage, MessageType, RuleEntry, RuleAction,
 )
 from .core.knowledge import KnowledgeBase
@@ -76,7 +72,7 @@ class Orchestrator:
                     max_retries=backend_cfg.max_retries,
                     default_model=backend_cfg.model_name,
                 )
-            elif backend_type == BackendType.LMSTUDIO:
+            elif backend_type == BackendType.LMSTUDIO:  # type: ignore[attr-defined]  # cSpell:disable-line
                 backend = LMStudioBackend(
                     api_base=backend_cfg.api_base,
                     api_key=backend_cfg.api_key,
@@ -128,13 +124,13 @@ class Orchestrator:
         self._agents["correlation"] = correlation_agent
 
         # --- 研判智能体 ---
-        judg_cfg = self.config.judgment
+        judgment_cfg = self.config.judgment
         judgment_agent = JudgmentAgent(
             name="JudgmentAgent",
-            system_prompt=judg_cfg.system_prompt,
-            model_name=judg_cfg.model_name,
+            system_prompt=judgment_cfg.system_prompt,
+            model_name=judgment_cfg.model_name,
         )
-        self._inject_agent_deps(judgment_agent, judg_cfg.backend)
+        self._inject_agent_deps(judgment_agent, judgment_cfg.backend)
         self._agents["judgment"] = judgment_agent
 
         # --- 反馈智能体 ---
@@ -148,6 +144,7 @@ class Orchestrator:
         self._agents["feedback"] = feedback_agent
 
         # 注册到消息总线
+        assert self._message_bus is not None
         for name in self._agents:
             self._message_bus.register_agent(name)
 
@@ -180,7 +177,7 @@ class Orchestrator:
         self._init_agents()
 
         # 启动关联智能体后台任务
-        corr_agent: CorrelationAgent = self._agents.get("correlation")
+        corr_agent = cast(CorrelationAgent, self._agents.get("correlation"))
         if corr_agent and self.config.correlation.enabled:
             await corr_agent.start_background_cleanup()
 
@@ -192,17 +189,17 @@ class Orchestrator:
         logger.info("Orchestrator 停止中...")
         self._running = False
 
-        corr_agent: CorrelationAgent = self._agents.get("correlation")
+        corr_agent = cast(CorrelationAgent, self._agents.get("correlation"))
         if corr_agent:
             await corr_agent.stop_background_cleanup()
 
         # 关闭后端连接
         for backend in self._backends.values():
             if hasattr(backend, "close"):
-                backend.close()
+                backend.close()  # type: ignore[attr-defined]
             if hasattr(backend, "aclose"):
                 try:
-                    await backend.aclose()
+                    await backend.aclose()  # type: ignore[attr-defined]
                 except Exception:
                     pass
         logger.info("Orchestrator 已停止")
@@ -231,7 +228,7 @@ class Orchestrator:
         )
 
         # ---- 阶段1: 检测 ----
-        detection_agent: DetectionAgent = self._agents["detection"]
+        detection_agent = cast(DetectionAgent, self._agents["detection"])
         detection_result = await detection_agent.process(flow)
         logger.info(
             "[%s] 检测结果: %s (置信度: %.2f)",
@@ -246,7 +243,7 @@ class Orchestrator:
 
         # ---- 阶段2: 关联分析 ----
         correlation_result: Optional[ThreatVerdict] = None
-        corr_agent: CorrelationAgent = self._agents["correlation"]
+        corr_agent = cast(CorrelationAgent, self._agents["correlation"])
         if self.config.correlation.enabled and detection_result.verdict in (
             TrafficVerdict.SUSPICIOUS, TrafficVerdict.MALICIOUS
         ):
@@ -263,12 +260,12 @@ class Orchestrator:
                     )
 
         # ---- 阶段3: 综合研判 ----
-        judgment_agent: JudgmentAgent = self._agents["judgment"]
+        judgment_agent = cast(JudgmentAgent, self._agents["judgment"])
         if self.config.judgment.enabled:
             final_verdict = await judgment_agent.process(
                 detection_result=detection_result,
                 correlation_result=correlation_result,
-                correlation_id=correlation_id,
+                _correlation_id=correlation_id,
             )
         else:
             final_verdict = detection_result
@@ -287,6 +284,7 @@ class Orchestrator:
            final_verdict.confidence >= self.config.knowledge_base.confidence_threshold_block:
             rule = judgment_agent.create_rule_from_verdict(final_verdict, flow)
             if rule:
+                assert self._knowledge_base is not None
                 self._knowledge_base.add_rule(rule)
                 logger.info(
                     "[%s] 自动生成黑名单规则: %s -> %s",
@@ -294,7 +292,7 @@ class Orchestrator:
                 )
 
         # ---- 阶段5: 反馈记录 ----
-        feedback_agent: FeedbackAgent = self._agents.get("feedback")
+        feedback_agent = cast(FeedbackAgent, self._agents.get("feedback"))
         if feedback_agent and self.config.feedback.enabled:
             await feedback_agent.process(verdict=final_verdict)
 
@@ -307,7 +305,7 @@ class Orchestrator:
         """
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(self.analyze_flow(flow))
         else:
@@ -345,7 +343,7 @@ class Orchestrator:
             src_ip=src_ip,
             dst_ip=dst_ip,
         )
-        feedback_agent: FeedbackAgent = self._agents.get("feedback")
+        feedback_agent = cast(FeedbackAgent, self._agents.get("feedback"))
         if not feedback_agent:
             return {"error": "反馈智能体不可用"}
         result = await feedback_agent.process(feedback=feedback)
@@ -362,7 +360,7 @@ class Orchestrator:
     ) -> dict:
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(
                 self.admin_feedback(feedback_type, src_ip, dst_ip,
@@ -418,10 +416,12 @@ class Orchestrator:
             ttl_minutes=ttl_minutes,
             comment=comment or f"手动添加: {action}",
         )
+        assert self._knowledge_base is not None
         return self._knowledge_base.add_rule(rule)
 
     def remove_rule(self, rule_id: str) -> bool:
         """删除规则"""
+        assert self._knowledge_base is not None
         return self._knowledge_base.remove_rule(rule_id)
 
     def match_rule(
@@ -430,6 +430,7 @@ class Orchestrator:
         protocol: str = "",
     ) -> Optional[RuleEntry]:
         """查询匹配的规则"""
+        assert self._knowledge_base is not None
         return self._knowledge_base.match(
             src_ip=src_ip, dst_ip=dst_ip,
             src_port=src_port, dst_port=dst_port,
@@ -438,11 +439,11 @@ class Orchestrator:
 
     def get_statistics(self) -> dict:
         """获取系统统计信息"""
-        feedback_agent: FeedbackAgent = self._agents.get("feedback")
+        feedback_agent = cast(FeedbackAgent, self._agents.get("feedback"))
         return {
             "running": self._running,
             "agents": list(self._agents.keys()),
-            "backends": {k.value: v.default_model if hasattr(v, 'default_model') else str(v)
+            "backends": {k.value: getattr(v, 'default_model', str(v))
                         for k, v in self._backends.items()},
             "knowledge_base_size": self._knowledge_base.size() if self._knowledge_base else 0,
             "feedback_stats": feedback_agent.get_statistics() if feedback_agent else {},

@@ -6,12 +6,11 @@
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 
 from ..core.agent import BaseAgent
 from ..core.message import (
-    AgentMessage, FlowEvent, MessageType, ThreatVerdict,
+    FlowEvent, ThreatVerdict,
     TrafficVerdict, SeverityLevel, RuleEntry, RuleAction,
 )
 
@@ -59,7 +58,7 @@ class JudgmentAgent(BaseAgent):
         self,
         detection_result: Optional[ThreatVerdict] = None,
         correlation_result: Optional[ThreatVerdict] = None,
-        correlation_id: str = "",
+        _correlation_id: str = "",
     ) -> ThreatVerdict:
         """
         综合 detect + correlate 的结果，生成最终判定。
@@ -82,6 +81,8 @@ class JudgmentAgent(BaseAgent):
                 reasoning="无可用分析结果",
                 recommended_action="monitor",
             )
+        # Both results exist now — type-narrow for Pyright
+        assert detection_result is not None and correlation_result is not None
 
         # -- 两条结果都有，构建综合提示 --
         prompt_parts = [
@@ -103,30 +104,30 @@ class JudgmentAgent(BaseAgent):
             response = await self.call_llm(prompt)
         except Exception as e:
             logger.error("[%s] LLM 研判失败: %s", self.name, e)
-            return self._rule_based_fallback(detection_result, correlation_result)
+            return self._rule_based_fallback(cast(ThreatVerdict, detection_result), cast(ThreatVerdict, correlation_result))
 
         parsed = self.extract_json_from_response(response)
-        return self._build_verdict(parsed, detection_result, correlation_result, response)
+        return self._build_verdict(parsed, cast(ThreatVerdict, detection_result), cast(ThreatVerdict, correlation_result), response)
 
     def process_sync(
         self,
         detection_result: Optional[ThreatVerdict] = None,
         correlation_result: Optional[ThreatVerdict] = None,
-        correlation_id: str = "",
+        _correlation_id: str = "",
     ) -> ThreatVerdict:
         import asyncio
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(
-                self.process(detection_result, correlation_result, correlation_id)
+                self.process(detection_result, correlation_result, _correlation_id)
             )
         else:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 return pool.submit(
                     lambda: asyncio.run(
-                        self.process(detection_result, correlation_result, correlation_id)
+                        self.process(detection_result, correlation_result, _correlation_id)
                     )
                 ).result()
 
@@ -248,3 +249,4 @@ class JudgmentAgent(BaseAgent):
 
 
 __all__ = ["JudgmentAgent"]
+

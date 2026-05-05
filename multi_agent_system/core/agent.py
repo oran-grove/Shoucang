@@ -9,10 +9,9 @@ import json5
 import logging
 import re
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, cast
 
-from .message import AgentMessage, MessageType, ThreatVerdict, TrafficVerdict, SeverityLevel
+from .message import AgentMessage, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +70,7 @@ class BaseAgent(ABC):
         else:
             logger.warning("[%s] 消息总线未注入，消息丢弃: %s", self.name, msg_type.value)
 
-    def receive(self, msg: AgentMessage) -> Any:
+    def receive(self, _msg: AgentMessage) -> Any:
         """
         接收消息并响应（可在子类覆写）。
         返回处理结果，None 表示不响应。
@@ -145,7 +144,7 @@ class BaseAgent(ABC):
 
         # 2. 尝试 json5（处理无引号键名、单引号正常值）
         try:
-            return json5.loads(json_str)
+            return cast(dict[str, Any], json5.loads(json_str))
         except Exception:
             pass
 
@@ -153,7 +152,7 @@ class BaseAgent(ABC):
         repaired = BaseAgent._fix_nested_quotes(json_str)
         if repaired:
             try:
-                return json5.loads(repaired)
+                return cast(dict[str, Any], json5.loads(repaired))
             except Exception:
                 pass
 
