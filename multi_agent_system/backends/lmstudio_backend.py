@@ -20,7 +20,7 @@ class LMStudioBackend(OpenAIBackend):
         api_key: str = "lm-studio",
         timeout: float = 120.0,      # 本地模型可能较慢
         max_retries: int = 2,
-        default_model: str = "qwen2.5-7b-instruct",
+        default_model: str = "qwen3.5-9b",
     ):
         super().__init__(
             api_base=api_base,
