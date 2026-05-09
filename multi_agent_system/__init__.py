@@ -35,6 +35,7 @@ from .config import (
     KnowledgeBaseConfig,
     OrchestratorConfig,
 )
+from .backends.base import ModelInfo, LoadModelConfig
 from .core.message import (
     FlowEvent,
     ThreatVerdict,
@@ -119,10 +120,26 @@ class MultiAgentSystem:
     def add_lmstudio_backend(
         self,
         api_base: str = "http://localhost:1234/v1",
-        model_name: str = "qwen2.5-7b-instruct",
+        model_name: str = "qwen3.5-9b",
         timeout: float = 120.0,
+        auto_load: bool = True,
+        load_config: Optional[dict] = None,
     ) -> None:
-        """添加 LM Studio 本地 AI 后端"""
+        """
+        添加 LM Studio 本地 AI 后端。
+
+        Args:
+            api_base: LM Studio OpenAI 兼容 API 地址
+            model_name: 模型名称（如 "qwen3.5-9b"）
+            timeout: 请求超时秒数
+            auto_load: 是否在调用前自动加载未就绪的模型
+            load_config: 模型加载参数，如：
+                {
+                    "context_length": 16384,
+                    "flash_attention": True,
+                    "eval_batch_size": 512,
+                }
+        """
         self._config.default_backends[BackendType.LMSTUDIO] = LLMBackendConfig(
             backend_type=BackendType.LMSTUDIO,
             api_base=api_base,
@@ -130,6 +147,8 @@ class MultiAgentSystem:
             model_name=model_name,
             timeout=timeout,
             max_retries=2,
+            auto_load=auto_load,
+            load_config=load_config or {},
         )
 
     def set_detection_backend(self, backend: BackendType = BackendType.LMSTUDIO) -> None:
@@ -272,6 +291,171 @@ class MultiAgentSystem:
         """获取系统统计"""
         return self._orchestrator.get_statistics()
 
+    # ============================================================
+    # 模型管理接口（供前端/CLI 使用）
+    # ============================================================
+
+    def get_lm_backend(self) -> "LMStudioBackend":
+        """
+        获取 LM Studio 后端实例。
+        供高级用户直接操作模型管理 API。
+        """
+        backend = self._orchestrator._backends.get(BackendType.LMSTUDIO)
+        if backend is None:
+            raise RuntimeError(
+                "LM Studio 后端未配置。请先调用 add_lmstudio_backend()"
+            )
+        from .backends.lmstudio_backend import LMStudioBackend
+        if not isinstance(backend, LMStudioBackend):
+            raise RuntimeError("已注册的 LMSTUDIO 后端类型不正确")
+        return backend
+
+    def list_lm_models(self) -> list[ModelInfo]:
+        """
+        列出 LM Studio 中所有可用的模型（包括已加载和未加载）。
+
+        对应 LM Studio GET /api/v1/models 管理接口。
+        可用于前端模型下拉选择。
+        """
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            return backend.list_models()
+        except RuntimeError:
+            return []
+
+    def get_lm_loaded_models(self) -> list[ModelInfo]:
+        """
+        列出 LM Studio 中当前已加载的模型。
+
+        可用于前端显示"当前激活模型"。
+        """
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            return backend.list_loaded_models()
+        except RuntimeError:
+            return []
+
+    def load_lm_model(
+        self,
+        model: str,
+        context_length: Optional[int] = None,
+        eval_batch_size: Optional[int] = None,
+        flash_attention: Optional[bool] = None,
+        num_experts: Optional[int] = None,
+        offload_kv_cache_to_gpu: Optional[bool] = None,
+        echo_load_config: bool = False,
+    ) -> ModelInfo:
+        """
+        通过 LM Studio 管理 API 加载指定模型。
+
+        Args:
+            model: 模型名称/ID
+            context_length: 上下文长度 (最大 token 数)
+            eval_batch_size: 批处理大小
+            flash_attention: 是否启用 Flash Attention
+            num_experts: MoE 专家数
+            offload_kv_cache_to_gpu: KV 缓存是否放 GPU
+            echo_load_config: 是否在响应中回显最终加载配置
+
+        Returns:
+            ModelInfo: 加载后的模型信息（含 instance_id、耗时等）
+        """
+        self._ensure_started()
+        backend = self.get_lm_backend()
+        config = LoadModelConfig(
+            model=model,
+            context_length=context_length,
+            eval_batch_size=eval_batch_size,
+            flash_attention=flash_attention,
+            num_experts=num_experts,
+            offload_kv_cache_to_gpu=offload_kv_cache_to_gpu,
+            echo_load_config=echo_load_config,
+        )
+        return backend.load_model(config)
+
+    def unload_lm_model(self, model_id: str) -> bool:
+        """
+        卸载 LM Studio 中指定的模型。
+
+        Args:
+            model_id: 模型标识符（名称或 instance_id）
+
+        Returns:
+            bool: 是否成功卸载
+        """
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            return backend.unload_model(model_id)
+        except RuntimeError:
+            return False
+
+    def is_lm_model_loaded(self, model_id: str) -> bool:
+        """检查指定模型是否已在 LM Studio 中加载"""
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            return backend.is_model_loaded(model_id)
+        except RuntimeError:
+            return False
+
+    def refresh_lm_models(self) -> list[ModelInfo]:
+        """从 LM Studio 服务端刷新已加载模型缓存"""
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            updated = backend.refresh_loaded_models()
+            return list(updated.values())
+        except RuntimeError:
+            return []
+
+    def set_lm_auto_load(self, enabled: bool) -> None:
+        """
+        设置是否在调用前自动加载未就绪的模型。
+
+        Args:
+            enabled: True 启用自动加载，False 需手动调用 load_lm_model
+        """
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            backend.auto_load = enabled
+        except RuntimeError:
+            pass
+
+    def get_lm_backend_info(self) -> dict:
+        """
+        获取 LM Studio 后端运行信息（用于前端状态面板）。
+
+        Returns:
+            dict: 包含 api_base、auto_load、已加载模型列表等
+        """
+        self._ensure_started()
+        try:
+            backend = self.get_lm_backend()
+            return {
+                "api_base": backend.api_base,
+                "mgmt_api_base": backend._mgmt_api_base,
+                "default_model": backend.default_model,
+                "auto_load": backend.auto_load,
+                "loaded_models": [
+                    {
+                        "model_id": m.model_id,
+                        "type": m.type,
+                        "status": m.status,
+                        "instance_id": m.instance_id,
+                        "context_length": m.context_length,
+                        "load_time_seconds": m.load_time_seconds,
+                    }
+                    for m in backend.list_loaded_models()
+                ],
+                "is_available": backend.is_available(),
+            }
+        except RuntimeError:
+            return {"error": "LM Studio 后端未配置"}
+
 
 __all__ = [
     # 主类
@@ -306,4 +490,7 @@ __all__ = [
     "AdminFeedback",
     # 知识库
     "KnowledgeBase",
+    # 模型管理接口数据类
+    "ModelInfo",
+    "LoadModelConfig",
 ]

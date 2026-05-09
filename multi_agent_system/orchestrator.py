@@ -13,8 +13,10 @@ from typing import Optional, cast
 from uuid import uuid4
 
 from .config import (
-    BackendType, OrchestratorConfig,
+    BackendType,
+    OrchestratorConfig,
 )
+from .backends.base import LoadModelConfig
 from .core.message import (
     FlowEvent, ThreatVerdict, TrafficVerdict,
     AgentMessage, MessageType, RuleEntry, RuleAction,
@@ -73,12 +75,25 @@ class Orchestrator:
                     default_model=backend_cfg.model_name,
                 )
             elif backend_type == BackendType.LMSTUDIO:  # type: ignore[attr-defined]  # cSpell:disable-line
+                # 从 load_config 字典提取加载参数
+                lc = backend_cfg.load_config
+                default_load_config = LoadModelConfig(
+                    model=backend_cfg.model_name,
+                    context_length=lc.get("context_length"),
+                    eval_batch_size=lc.get("eval_batch_size"),
+                    flash_attention=lc.get("flash_attention"),
+                    num_experts=lc.get("num_experts"),
+                    offload_kv_cache_to_gpu=lc.get("offload_kv_cache_to_gpu"),
+                    echo_load_config=lc.get("echo_load_config", False),
+                )
                 backend = LMStudioBackend(
                     api_base=backend_cfg.api_base,
                     api_key=backend_cfg.api_key,
                     timeout=backend_cfg.timeout,
                     max_retries=backend_cfg.max_retries,
                     default_model=backend_cfg.model_name,
+                    auto_load=backend_cfg.auto_load,
+                    default_load_config=default_load_config,
                 )
             else:
                 raise ValueError(f"不支持的后端类型: {backend_type}")

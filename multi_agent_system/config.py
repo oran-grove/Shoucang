@@ -7,7 +7,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 
 class BackendType(Enum):
@@ -34,13 +34,19 @@ class LLMBackendConfig:
     # api_base: "http://localhost:1234/v1"
     # api_key: "lm-studio"（占位即可）
 
+    # —— 模型智能加载（仅 LM Studio 后端有效）——
+    auto_load: bool = True                  # 是否在调用前自动加载模型
+    load_config: dict[str, Any] = field(default_factory=dict)  # 模型加载参数
+    # load_config 可包含: context_length, eval_batch_size, flash_attention,
+    #                     num_experts, offload_kv_cache_to_gpu, echo_load_config
+
 
 @dataclass
 class DetectionAgentConfig:
     """检测智能体配置"""
     enabled: bool = True
     backend: BackendType = BackendType.LMSTUDIO    # 默认用本地模型做快速检测
-    model_name: str = "qwen2.5-7b-instruct"
+    model_name: str = "qwen3.5-9b"
     system_prompt: str = (
         "你是一个网络安全流量分析专家。请根据提供的流量元数据，判断该流量是否为恶意。"
         "回复格式：{ verdict: 'malicious'|'suspicious'|'safe', "
@@ -90,7 +96,7 @@ class FeedbackAgentConfig:
     """反馈智能体配置"""
     enabled: bool = True
     backend: BackendType = BackendType.LMSTUDIO
-    model_name: str = "qwen2.5-7b-instruct"
+    model_name: str = "qwen3.5-9b"
     system_prompt: str = (
         "你是一个网络安全规则优化专家。根据管理员反馈和历史判定记录，"
         "提出规则调整建议。"
