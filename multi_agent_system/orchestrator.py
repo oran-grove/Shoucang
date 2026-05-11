@@ -22,7 +22,7 @@ from .core.message import (
     AgentMessage, MessageType, RuleEntry, RuleAction,
 )
 from .core.knowledge import KnowledgeBase
-from .backends import OpenAIBackend, LMStudioBackend, BaseLLMBackend
+from .backends import OpenAIBackend, LMStudioBackend, DeepSeekBackend, BaseLLMBackend
 from .bus.message_bus import MessageBus
 from .agents.detection_agent import DetectionAgent
 from .agents.correlation_agent import CorrelationAgent
@@ -94,6 +94,16 @@ class Orchestrator:
                     default_model=backend_cfg.model_name,
                     auto_load=backend_cfg.auto_load,
                     default_load_config=default_load_config,
+                )
+            elif backend_type == BackendType.DEEPSEEK:  # type: ignore[attr-defined]
+                backend = DeepSeekBackend(
+                    api_base=backend_cfg.api_base,
+                    api_key=backend_cfg.api_key,
+                    timeout=backend_cfg.timeout,
+                    max_retries=backend_cfg.max_retries,
+                    default_model=backend_cfg.model_name,
+                    default_reasoning_effort=backend_cfg.reasoning_effort,
+                    include_reasoning=backend_cfg.include_reasoning,
                 )
             else:
                 raise ValueError(f"不支持的后端类型: {backend_type}")

@@ -14,13 +14,14 @@ class BackendType(Enum):
     """LLM 后端类型"""
     OPENAI = "openai"
     LMSTUDIO = "lmstudio"
+    DEEPSEEK = "deepseek"
 
 
 @dataclass
 class LLMBackendConfig:
     """
     LLM 后端通用配置。
-    用于 OpenAI 兼容 API 或 LM Studio 本地模型。
+    用于 OpenAI 兼容 API、LM Studio 本地模型、DeepSeek API 等。
     """
     backend_type: BackendType
     model_name: str = "gpt-4o-mini"
@@ -39,6 +40,10 @@ class LLMBackendConfig:
     load_config: dict[str, Any] = field(default_factory=dict)  # 模型加载参数
     # load_config 可包含: context_length, eval_batch_size, flash_attention,
     #                     num_experts, offload_kv_cache_to_gpu, echo_load_config
+
+    # —— DeepSeek 专有参数 ——
+    reasoning_effort: Optional[str] = None  # 推理深度: "low" | "medium" | "high"
+    include_reasoning: bool = False         # 是否在回复中包含思考过程
 
 
 @dataclass

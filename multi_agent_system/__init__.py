@@ -36,6 +36,7 @@ from .config import (
     OrchestratorConfig,
 )
 from .backends.base import ModelInfo, LoadModelConfig
+from .backends.deepseek_backend import DeepSeekBackend, DeepSeekModel, ReasoningEffort
 from .core.message import (
     FlowEvent,
     ThreatVerdict,
@@ -290,6 +291,41 @@ class MultiAgentSystem:
     def get_statistics(self) -> dict:
         """获取系统统计"""
         return self._orchestrator.get_statistics()
+
+    # --- DeepSeek 后端配置 ---
+
+    def add_deepseek_backend(
+        self,
+        api_key: str,
+        api_base: str = "https://api.deepseek.com/v1",
+        model_name: str = "deepseek-chat",
+        timeout: float = 120.0,
+        max_retries: int = 5,
+        reasoning_effort: Optional[str] = None,
+        include_reasoning: bool = False,
+    ) -> None:
+        """
+        添加 DeepSeek API 后端。
+
+        Args:
+            api_key: DeepSeek API 密钥（sk- 开头）
+            api_base: API 地址（默认 https://api.deepseek.com/v1）
+            model_name: 模型名称（"deepseek-chat" 或 "deepseek-reasoner"）
+            timeout: 请求超时秒数（推理模型建议 >= 120s）
+            max_retries: 最大重试次数
+            reasoning_effort: 推理深度 "low" | "medium" | "high"（None 表示不启用）
+            include_reasoning: 是否在回复中包含思考过程
+        """
+        self._config.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
+            backend_type=BackendType.DEEPSEEK,
+            api_base=api_base,
+            api_key=api_key,
+            model_name=model_name,
+            timeout=timeout,
+            max_retries=max_retries,
+            reasoning_effort=reasoning_effort,
+            include_reasoning=include_reasoning,
+        )
 
     # ============================================================
     # 模型管理接口（供前端/CLI 使用）

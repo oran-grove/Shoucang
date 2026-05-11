@@ -91,34 +91,58 @@ class LMStudioBackend(OpenAIBackend):
         同时会尝试通过 /v1/models (OpenAI 兼容) 作为辅助确认。
         """
         loaded: dict[str, ModelInfo] = {}
-        # 主路径：管理 API GET /api/v1/models（已加载 + 可能包含未加载）
+        # 主路径：管理 API GET /api/v1/models
+        # 实际返回格式: {"models": [{"key": "...", "loaded_instances": [...], "type": "llm", ...}]}
+        # 加载状态: "loaded_instances" 非空数组表示已加载
         try:
             resp = self._do_mgmt_get("/api/v1/models")
             data = resp.json()
-            model_list: list = data.get("data", data) if isinstance(data, dict) else data
+            # 兼容 {"models": [...]} 和 {"data": [...]} 两种格式
+            model_list: Any = (
+                data.get("models") if isinstance(data, dict) and "models" in data
+                else data.get("data") if isinstance(data, dict) and "data" in data
+                else data
+            )
+            if isinstance(model_list, dict):
+                model_list = [model_list]
             if not isinstance(model_list, list):
-                model_list = [model_list] if model_list else []
+                model_list = []
             for m in model_list:
-                mid = m.get("id", str(m))
-                if not isinstance(mid, str) or not mid:
+                if not isinstance(m, dict):
                     continue
-                # 区分已加载/未加载：有 "loaded"/"state"/"status" 字段
-                is_loaded = (
-                    m.get("loaded", False) is True
-                    or m.get("state") == "loaded"
-                    or m.get("status") == "loaded"
-                    or "loaded" in str(m.get("state", "")).lower()  # 兜底
-                )
-                # 管理 API 可能列出所有已下载模型，只将确实 loaded 的加入缓存
+                # 模型 ID: LM Studio 用 "key"，兼容 "id"
+                mid = m.get("key") or m.get("id", "")
+                if not mid:
+                    continue
+                # 判断是否已加载: loaded_instances 非空数组 > status > state > loaded 字段
+                loaded_insts = m.get("loaded_instances", [])
+                is_loaded = bool(loaded_insts)  # 有一个及以上实例即已加载
+                if not is_loaded:
+                    is_loaded = (
+                        m.get("status") == "loaded"
+                        or m.get("state") == "loaded"
+                        or m.get("loaded") is True
+                    )
                 if is_loaded:
+                    # 提取已加载实例信息
+                    inst = loaded_insts[0] if loaded_insts else {}
                     info = ModelInfo(
                         model_id=mid,
                         type=m.get("type", "llm"),
                         status="loaded",
-                        instance_id=m.get("instance_id", mid),
-                        load_time_seconds=float(m.get("load_time_seconds", 0.0)),
-                        context_length=m.get("context_length")
-                        or m.get("load_config", {}).get("context_length", 4096),
+                        instance_id=(
+                            inst.get("instance_id")
+                            or m.get("instance_id")
+                            or mid
+                        ),
+                        load_time_seconds=float(
+                            inst.get("load_time_seconds") or m.get("load_time_seconds", 0.0)
+                        ),
+                        context_length=(
+                            m.get("max_context_length")
+                            or m.get("context_length")
+                            or inst.get("context_length", 4096)
+                        ),
                     )
                     loaded[mid] = info
         except Exception as e:
@@ -130,10 +154,19 @@ class LMStudioBackend(OpenAIBackend):
                 resp = self._get_client().get(f"{self.api_base}/models")
                 if resp.status_code == 200:
                     data = resp.json()
-                    model_list = data.get("data", data) if isinstance(data, dict) else data
-                    if isinstance(model_list, list):
-                        for m in model_list:
-                            mid = m.get("id", str(m))
+                    # 兼容 {"data": [...]} 和 {"models": [...]}
+                    v1_data: Any = (
+                        data.get("data") if isinstance(data, dict) and "data" in data
+                        else data.get("models") if isinstance(data, dict) and "models" in data
+                        else data
+                    )
+                    if isinstance(v1_data, dict):
+                        v1_data = [v1_data]
+                    if isinstance(v1_data, list):
+                        for m in v1_data:
+                            if not isinstance(m, dict):
+                                continue
+                            mid = m.get("key") or m.get("id", str(m))
                             if mid:
                                 loaded[mid] = ModelInfo(
                                     model_id=mid,
@@ -163,16 +196,26 @@ class LMStudioBackend(OpenAIBackend):
             resp = self._do_mgmt_get("/api/v1/models")
             data = resp.json()
             models: list[ModelInfo] = []
-            model_list = data.get("data", data) if isinstance(data, dict) else data
+            # 兼容 {"models": [...]} 和 {"data": [...]} 两种格式
+            model_list: Any = (
+                data.get("models") if isinstance(data, dict) and "models" in data
+                else data.get("data") if isinstance(data, dict) and "data" in data
+                else data
+            )
+            if isinstance(model_list, dict):
+                model_list = [model_list]
             if not isinstance(model_list, list):
-                model_list = [model_list] if model_list else []
+                model_list = []
 
             # 先刷新已加载缓存
             loaded_map = self._fetch_and_cache_loaded_models()
 
             for m in model_list:
-                mid = m.get("id", str(m))
-                if not isinstance(mid, str) or not mid:
+                if not isinstance(m, dict):
+                    continue
+                # 模型 ID: LM Studio 用 "key"，兼容 "id"
+                mid = m.get("key") or m.get("id", str(m))
+                if not mid:
                     continue
                 cached = loaded_map.get(mid)
                 model_type = m.get("type", "llm")
@@ -180,7 +223,10 @@ class LMStudioBackend(OpenAIBackend):
                     model_id=mid,
                     type=model_type,
                     status=cached.status if cached else "not-loaded",
-                    context_length=m.get("context_length", 4096),
+                    context_length=(
+                        m.get("max_context_length")
+                        or m.get("context_length", 4096)
+                    ),
                     instance_id=getattr(cached, "instance_id", None)
                     or m.get("instance_id", mid),
                     load_time_seconds=float(getattr(cached, "load_time_seconds", 0.0) or 0.0),
@@ -390,30 +436,44 @@ class LMStudioBackend(OpenAIBackend):
     def refresh_loaded_models(self) -> dict[str, ModelInfo]:
         """
         从服务端刷新加载状态，更新缓存。返回最新加载列表。
-        通过 GET /v1/models (OpenAI 兼容) 来获取当前已加载模型。
+        优先通过管理 API (GET /api/v1/models) 获取完整状态，
+        回退到 /v1/models (OpenAI 兼容)。
         """
+        # 主路径：管理 API + 缓存刷新
+        try:
+            self._fetch_and_cache_loaded_models()
+        except Exception as e:
+            logger.debug("管理 API 刷新失败: %s", e)
+        # 辅助：OpenAI 兼容 /v1/models
         try:
             resp = self._get_client().get(f"{self.api_base}/models")
             resp.raise_for_status()
             data = resp.json()
-            model_list = data.get("data", data) if isinstance(data, dict) else data
-            if not isinstance(model_list, list):
-                model_list = [model_list] if model_list else []
-            with self._loaded_models_lock:
-                self._loaded_models.clear()
-                for m in model_list:
-                    mid = m.get("id", str(m))
-                    self._loaded_models[mid] = ModelInfo(
-                        model_id=mid,
-                        type="llm",
-                        status="loaded",
-                        instance_id=mid,
-                    )
-            return dict(self._loaded_models)
+            # 兼容 {"data": [...]} 和 {"models": [...]}
+            v1_data2: Any = (
+                data.get("data") if isinstance(data, dict) and "data" in data
+                else data.get("models") if isinstance(data, dict) and "models" in data
+                else data
+            )
+            if isinstance(v1_data2, dict):
+                v1_data2 = [v1_data2]
+            if isinstance(v1_data2, list):
+                with self._loaded_models_lock:
+                    for m in v1_data2:
+                        if not isinstance(m, dict):
+                            continue
+                        mid = m.get("key") or m.get("id", str(m))
+                        if mid and mid not in self._loaded_models:
+                            self._loaded_models[mid] = ModelInfo(
+                                model_id=mid,
+                                type="llm",
+                                status="loaded",
+                                instance_id=mid,
+                            )
         except Exception as e:
-            logger.debug("刷新加载状态失败: %s", e)
-            with self._loaded_models_lock:
-                return dict(self._loaded_models)
+            logger.debug("OpenAI /v1/models 刷新失败: %s", e)
+        with self._loaded_models_lock:
+            return dict(self._loaded_models)
 
     def _resolve_model_id(self, model_id: str) -> Optional[str]:
         """
@@ -467,19 +527,31 @@ class LMStudioBackend(OpenAIBackend):
         try:
             resp = self._do_mgmt_get("/api/v1/models")
             data = resp.json()
-            model_list: list = data.get("data", data) if isinstance(data, dict) else data
+            # 兼容 {"models": [...]} 和 {"data": [...]} 两种格式
+            model_list: Any = (
+                data.get("models") if isinstance(data, dict) and "models" in data
+                else data.get("data") if isinstance(data, dict) and "data" in data
+                else data
+            )
+            if isinstance(model_list, dict):
+                model_list = [model_list]
             if not isinstance(model_list, list):
-                model_list = [model_list] if model_list else []
+                model_list = []
             found_loaded = False
             for m in model_list:
-                mid = m.get("id", str(m))
-                # 管理 API 可能包含 "loaded" 字段或 "state" 字段
-                is_loaded = (
-                    m.get("loaded", False)
-                    or m.get("state") == "loaded"
-                    or m.get("status") == "loaded"
-                )
-                # 管理 API 精准判断已加载状态
+                if not isinstance(m, dict):
+                    continue
+                # 模型 ID: LM Studio 用 "key"，兼容 "id"
+                mid = m.get("key") or m.get("id", str(m))
+                # 管理 API 判断已加载状态: loaded_instances 非空数组
+                loaded_insts = m.get("loaded_instances", [])
+                is_loaded = bool(loaded_insts)
+                if not is_loaded:
+                    is_loaded = (
+                        m.get("status") == "loaded"
+                        or m.get("state") == "loaded"
+                        or m.get("loaded") is True
+                    )
                 if is_loaded:
                     info = ModelInfo(
                         model_id=mid,
@@ -507,10 +579,18 @@ class LMStudioBackend(OpenAIBackend):
                 resp = self._get_client().get(f"{self.api_base}/models")
                 if resp.status_code == 200:
                     data = resp.json()
-                    model_list = data.get("data", data) if isinstance(data, dict) else data
-                    if isinstance(model_list, list):
-                        for m in model_list:
-                            mid = m.get("id", str(m))
+                    fallback_data: Any = (
+                        data.get("data") if isinstance(data, dict) and "data" in data
+                        else data.get("models") if isinstance(data, dict) and "models" in data
+                        else data
+                    )
+                    if isinstance(fallback_data, dict):
+                        fallback_data = [fallback_data]
+                    if isinstance(fallback_data, list):
+                        for m in fallback_data:
+                            if not isinstance(m, dict):
+                                continue
+                            mid = m.get("key") or m.get("id", str(m))
                             # /v1/models 通常只返回已加载模型
                             info = ModelInfo(
                                 model_id=mid,
