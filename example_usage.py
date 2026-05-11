@@ -211,8 +211,8 @@ async def deepseek_example():
     # 添加 DeepSeek 后端（作为主要 LLM）
     system.add_deepseek_backend(
         api_key=api_key,
-        api_base="https://api.deepseek.com/v1",
-        model_name="deepseek-chat",
+        api_base="https://api.deepseek.com",
+        model_name="deepseek-v4-flash",
         timeout=120.0,
         max_retries=5,
     )
@@ -223,15 +223,16 @@ async def deepseek_example():
     system.set_judgment_backend(BackendType.DEEPSEEK)
     system.set_feedback_backend(BackendType.DEEPSEEK)
 
-    print(f"后端配置完成，模型: deepseek-chat")
-    print(f"API 地址: https://api.deepseek.com/v1")
+    print(f"后端配置完成，模型: deepseek-v4-flash")
+    print(f"API 地址: https://api.deepseek.com")
     print()
 
     # 可选：演示推理模型
     if api_key != "sk-your-deepseek-key":
-        print("💡 提示：如需使用推理模型 (deepseek-reasoner)，")
-        print("   调用 add_deepseek_backend() 并设置 model_name='deepseek-reasoner'")
-        print("   推理模型支持 reasoning_effort 参数: 'low', 'medium', 'high'")
+        print("💡 提示：如需使用推理模型 (deepseek-v4-pro)，")
+        print("   调用 add_deepseek_backend() 并设置 model_name='deepseek-v4-pro'")
+        print("   V4 推理模型支持 thinking_enabled=True/False 控制思考模式")
+        print("   以及 reasoning_effort 参数: 'high' 或 'max'")
         print("   可通过 include_reasoning=True 查看模型思考过程")
     else:
         print("⚠ 未设置 DEEPSEEK_API_KEY，跳过实际调用。")

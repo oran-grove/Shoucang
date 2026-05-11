@@ -38,6 +38,9 @@ class BaseLLMBackend(ABC):
     所有后端（OpenAI API / LM Studio / 其他）均需实现此接口。
     """
 
+    def __init__(self):
+        self.default_model: str = ""
+
     @abstractmethod
     def chat_sync(
         self,

@@ -16,7 +16,7 @@ from .config import (
     BackendType,
     OrchestratorConfig,
 )
-from .backends.base import LoadModelConfig
+from .backends.base import LoadModelConfig, ModelInfo
 from .core.message import (
     FlowEvent, ThreatVerdict, TrafficVerdict,
     AgentMessage, MessageType, RuleEntry, RuleAction,
@@ -102,6 +102,7 @@ class Orchestrator:
                     timeout=backend_cfg.timeout,
                     max_retries=backend_cfg.max_retries,
                     default_model=backend_cfg.model_name,
+                    default_thinking_enabled=backend_cfg.thinking_enabled,
                     default_reasoning_effort=backend_cfg.reasoning_effort,
                     include_reasoning=backend_cfg.include_reasoning,
                 )
@@ -190,6 +191,14 @@ class Orchestrator:
         agent.set_backend(backend)
         agent.set_message_bus(self._message_bus)
         agent.set_knowledge_base(self._knowledge_base)
+        # 同步模型名称：确保智能体发送给后端的模型名与实际后端匹配
+        # （例如切换到 DeepSeek 后端时，不再使用 LMStudio 的 "qwen3.5-9b"）
+        if hasattr(backend, 'default_model') and backend.default_model:
+            agent.model_name = backend.default_model
+        logger.debug(
+            "智能体 [%s] -> 后端 %s, 模型: %s",
+            agent.name, backend_type.value, agent.model_name,
+        )
 
     # ========== 生命周期 ==========
 
@@ -461,6 +470,112 @@ class Orchestrator:
             src_port=src_port, dst_port=dst_port,
             protocol=protocol,
         )
+
+    # ========== 模型管理（LM Studio）==========
+
+    def _get_lm_backend(self) -> LMStudioBackend:
+        """获取 LM Studio 后端实例"""
+        backend = self._backends.get(BackendType.LMSTUDIO)
+        if backend is None:
+            raise RuntimeError("LM Studio 后端未配置")
+        return cast(LMStudioBackend, backend)
+
+    def list_lm_models(self) -> list[ModelInfo]:
+        """
+        列出 LM Studio 中所有可用的模型（包括已加载和未加载）。
+        对应 LM Studio GET /api/v1/models 管理接口。
+        """
+        try:
+            return self._get_lm_backend().list_models()
+        except RuntimeError:
+            return []
+
+    def list_lm_loaded_models(self) -> list[ModelInfo]:
+        """列出 LM Studio 中当前已加载的模型"""
+        try:
+            return self._get_lm_backend().list_loaded_models()
+        except RuntimeError:
+            return []
+
+    def load_lm_model(
+        self,
+        model: str,
+        context_length: Optional[int] = None,
+        eval_batch_size: Optional[int] = None,
+        flash_attention: Optional[bool] = None,
+        num_experts: Optional[int] = None,
+        offload_kv_cache_to_gpu: Optional[bool] = None,
+        echo_load_config: bool = False,
+    ) -> ModelInfo:
+        """
+        通过 LM Studio 管理 API 加载指定模型。
+        POST /api/v1/models/load
+        """
+        backend = self._get_lm_backend()
+        config = LoadModelConfig(
+            model=model,
+            context_length=context_length,
+            eval_batch_size=eval_batch_size,
+            flash_attention=flash_attention,
+            num_experts=num_experts,
+            offload_kv_cache_to_gpu=offload_kv_cache_to_gpu,
+            echo_load_config=echo_load_config,
+        )
+        return backend.load_model(config)
+
+    def unload_lm_model(self, model_id: str) -> bool:
+        """卸载 LM Studio 中指定的模型"""
+        try:
+            return self._get_lm_backend().unload_model(model_id)
+        except RuntimeError:
+            return False
+
+    def is_lm_model_loaded(self, model_id: str) -> bool:
+        """检查指定模型是否已在 LM Studio 中加载"""
+        try:
+            return self._get_lm_backend().is_model_loaded(model_id)
+        except RuntimeError:
+            return False
+
+    def refresh_lm_models(self) -> list[ModelInfo]:
+        """从 LM Studio 服务端刷新已加载模型缓存"""
+        try:
+            updated = self._get_lm_backend().refresh_loaded_models()
+            return list(updated.values())
+        except RuntimeError:
+            return []
+
+    def set_lm_auto_load(self, enabled: bool) -> None:
+        """设置是否在调用前自动加载未就绪的模型"""
+        try:
+            self._get_lm_backend().auto_load = enabled
+        except RuntimeError:
+            pass
+
+    def get_lm_backend_info(self) -> dict:
+        """获取 LM Studio 后端运行信息（用于前端状态面板）"""
+        try:
+            backend = self._get_lm_backend()
+            return {
+                "api_base": backend.api_base,
+                "mgmt_api_base": backend._mgmt_api_base,
+                "default_model": backend.default_model,
+                "auto_load": backend.auto_load,
+                "loaded_models": [
+                    {
+                        "model_id": m.model_id,
+                        "type": m.type,
+                        "status": m.status,
+                        "instance_id": m.instance_id,
+                        "context_length": m.context_length,
+                        "load_time_seconds": m.load_time_seconds,
+                    }
+                    for m in backend.list_loaded_models()
+                ],
+                "is_available": backend.is_available(),
+            }
+        except RuntimeError:
+            return {"error": "LM Studio 后端未配置"}
 
     def get_statistics(self) -> dict:
         """获取系统统计信息"""

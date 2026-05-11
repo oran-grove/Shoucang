@@ -1,7 +1,7 @@
 from .base import BaseLLMBackend, ModelInfo, LoadModelConfig
 from .openai_backend import OpenAIBackend
 from .lmstudio_backend import LMStudioBackend
-from .deepseek_backend import DeepSeekBackend, DeepSeekModel, ReasoningEffort
+from .deepseek_backend import DeepSeekBackend, DeepSeekModel
 
 __all__ = [
     "BaseLLMBackend",
@@ -9,7 +9,6 @@ __all__ = [
     "LMStudioBackend",
     "DeepSeekBackend",
     "DeepSeekModel",
-    "ReasoningEffort",
     "ModelInfo",
     "LoadModelConfig",
 ]

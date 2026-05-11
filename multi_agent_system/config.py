@@ -41,9 +41,10 @@ class LLMBackendConfig:
     # load_config 可包含: context_length, eval_batch_size, flash_attention,
     #                     num_experts, offload_kv_cache_to_gpu, echo_load_config
 
-    # —— DeepSeek 专有参数 ——
-    reasoning_effort: Optional[str] = None  # 推理深度: "low" | "medium" | "high"
-    include_reasoning: bool = False         # 是否在回复中包含思考过程
+    # —— DeepSeek V4 专有参数 ——
+    thinking_enabled: Optional[bool] = None   # 思考模式开关 (True/False)，None 表示不显式设置
+    reasoning_effort: Optional[str] = None    # 推理强度: "high" | "max"
+    include_reasoning: bool = False           # 是否在回复中包含思考过程
 
 
 @dataclass
@@ -150,4 +151,13 @@ class OrchestratorConfig:
                 model_name="qwen2.5-7b-instruct",
                 api_base="http://localhost:1234/v1",
                 api_key="lm-studio",
+            )
+        if BackendType.DEEPSEEK not in self.default_backends:
+            self.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
+                backend_type=BackendType.DEEPSEEK,
+                model_name="deepseek-v4-flash",
+                api_base="https://api.deepseek.com",
+                api_key="",
+                timeout=120.0,
+                max_retries=5,
             )

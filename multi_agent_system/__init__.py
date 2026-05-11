@@ -36,7 +36,7 @@ from .config import (
     OrchestratorConfig,
 )
 from .backends.base import ModelInfo, LoadModelConfig
-from .backends.deepseek_backend import DeepSeekBackend, DeepSeekModel, ReasoningEffort
+from .backends.deepseek_backend import DeepSeekBackend, DeepSeekModel
 from .core.message import (
     FlowEvent,
     ThreatVerdict,
@@ -297,23 +297,25 @@ class MultiAgentSystem:
     def add_deepseek_backend(
         self,
         api_key: str,
-        api_base: str = "https://api.deepseek.com/v1",
-        model_name: str = "deepseek-chat",
+        api_base: str = "https://api.deepseek.com",
+        model_name: str = "deepseek-v4-flash",
         timeout: float = 120.0,
         max_retries: int = 5,
+        thinking_enabled: Optional[bool] = None,
         reasoning_effort: Optional[str] = None,
         include_reasoning: bool = False,
     ) -> None:
         """
-        添加 DeepSeek API 后端。
+        添加 DeepSeek V4 API 后端。
 
         Args:
             api_key: DeepSeek API 密钥（sk- 开头）
-            api_base: API 地址（默认 https://api.deepseek.com/v1）
-            model_name: 模型名称（"deepseek-chat" 或 "deepseek-reasoner"）
+            api_base: API 地址（默认 https://api.deepseek.com）
+            model_name: 模型名称（"deepseek-v4-flash" 或 "deepseek-v4-pro"）
             timeout: 请求超时秒数（推理模型建议 >= 120s）
             max_retries: 最大重试次数
-            reasoning_effort: 推理深度 "low" | "medium" | "high"（None 表示不启用）
+            thinking_enabled: 思考模式开关（True/False），None 表示不显式设置
+            reasoning_effort: 推理强度 "high" | "max"（None 表示不启用）
             include_reasoning: 是否在回复中包含思考过程
         """
         self._config.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
@@ -323,6 +325,7 @@ class MultiAgentSystem:
             model_name=model_name,
             timeout=timeout,
             max_retries=max_retries,
+            thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
             include_reasoning=include_reasoning,
         )
