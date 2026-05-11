@@ -30,7 +30,7 @@ class DetectionAgent(BaseAgent):
         self,
         name: str = "DetectionAgent",
         system_prompt: str = "",
-        model_name: str = "qwen2.5-7b-instruct",
+        model_name: str = "qwen3.5-9b",
         temperature: float = 0.3,
         max_tokens: int = 1024,
         confidence_threshold_malicious: float = 0.85,

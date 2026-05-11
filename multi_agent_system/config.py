@@ -59,7 +59,11 @@ class DetectionAgentConfig:
         "confidence: 0.0-1.0, reasoning: '简短理由', "
         "threat_type: '数据泄露'|'C2通信'|'扫描'|'正常'|'未知' }"
     )
+    temperature: float = 0.3
+    max_tokens: int = 1024
     max_context_tokens: int = 4096
+    confidence_threshold_malicious: float = 0.85
+    confidence_threshold_suspect: float = 0.50
 
 
 @dataclass
@@ -75,8 +79,12 @@ class CorrelationAgentConfig:
         "correlation_type: '数据外传'|'横向移动'|'C2心跳'|'无关联', "
         "confidence: 0.0-1.0, reasoning: '分析逻辑' }"
     )
+    temperature: float = 0.3
+    max_tokens: int = 2048
     correlation_window_minutes: int = 30
     min_records_to_correlate: int = 5
+    max_buffer_per_src: int = 100
+    cleanup_interval_seconds: int = 60
 
 
 @dataclass
@@ -95,6 +103,8 @@ class JudgmentAgentConfig:
         "reasoning: '综合研判逻辑', "
         "evidence_summary: ['证据1', '证据2'] }"
     )
+    temperature: float = 0.3
+    max_tokens: int = 2048
 
 
 @dataclass
@@ -111,6 +121,8 @@ class FeedbackAgentConfig:
         "rule_id: '规则ID', new_confidence: 0.0-1.0, "
         "ttl_minutes: 整数, reasoning: '理由' }"
     )
+    temperature: float = 0.2
+    max_tokens: int = 1024
 
 
 @dataclass
@@ -148,7 +160,7 @@ class OrchestratorConfig:
         if BackendType.LMSTUDIO not in self.default_backends:
             self.default_backends[BackendType.LMSTUDIO] = LLMBackendConfig(
                 backend_type=BackendType.LMSTUDIO,
-                model_name="qwen2.5-7b-instruct",
+                model_name="qwen3.5-9b",
                 api_base="http://localhost:1234/v1",
                 api_key="lm-studio",
             )

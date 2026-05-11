@@ -1,0 +1,57 @@
+{
+  "_comment": "多智能体反泄密系统 — 用户配置文件",
+  "_description": "此文件覆盖 config_default.json 中的对应字段。请在下方填入必要信息。",
+  "_version": "1.1",
+
+  "backends": {
+    "openai": {
+      "api_key": "sk-your-openai-api-key",
+      "model_name": "gpt-4o-mini"
+    },
+    "lmstudio": {
+      "model_name": "qwen3.5-9b",
+      "api_base": "http://localhost:1234/v1",
+      "api_key": "lm-studio",
+      "auto_load": true,
+      "load_config": {
+        "context_length": 16384,
+        "flash_attention": true
+      }
+    },
+    "deepseek": {
+      "api_key": "sk-6b6d74d0535f438abc16b62f6b30fc66",
+      "model_name": "deepseek-v4-flash"
+    }
+  },
+
+  "detection": {
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.3,
+    "max_tokens": 1024,
+    "confidence_threshold_malicious": 0.85,
+    "confidence_threshold_suspect": 0.50
+  },
+
+  "correlation": {
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.3,
+    "max_tokens": 2048,
+    "min_records_to_correlate": 5
+  },
+
+  "judgment": {
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.3,
+    "max_tokens": 2048
+  },
+
+  "feedback": {
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.2,
+    "max_tokens": 1024
+  }
+}

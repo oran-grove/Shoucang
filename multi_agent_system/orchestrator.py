@@ -131,8 +131,10 @@ class Orchestrator:
             name="DetectionAgent",
             system_prompt=det_cfg.system_prompt,
             model_name=det_cfg.model_name,
-            temperature=0.3,
-            max_tokens=det_cfg.max_context_tokens,
+            temperature=det_cfg.temperature,
+            max_tokens=det_cfg.max_tokens,
+            confidence_threshold_malicious=det_cfg.confidence_threshold_malicious,
+            confidence_threshold_suspect=det_cfg.confidence_threshold_suspect,
         )
         self._inject_agent_deps(detection_agent, det_cfg.backend)
         self._agents["detection"] = detection_agent
@@ -143,6 +145,8 @@ class Orchestrator:
             name="CorrelationAgent",
             system_prompt=corr_cfg.system_prompt,
             model_name=corr_cfg.model_name,
+            temperature=corr_cfg.temperature,
+            max_tokens=corr_cfg.max_tokens,
             correlation_window_minutes=corr_cfg.correlation_window_minutes,
             min_records_to_correlate=corr_cfg.min_records_to_correlate,
         )
@@ -155,6 +159,8 @@ class Orchestrator:
             name="JudgmentAgent",
             system_prompt=judgment_cfg.system_prompt,
             model_name=judgment_cfg.model_name,
+            temperature=judgment_cfg.temperature,
+            max_tokens=judgment_cfg.max_tokens,
         )
         self._inject_agent_deps(judgment_agent, judgment_cfg.backend)
         self._agents["judgment"] = judgment_agent
@@ -165,6 +171,8 @@ class Orchestrator:
             name="FeedbackAgent",
             system_prompt=fb_cfg.system_prompt,
             model_name=fb_cfg.model_name,
+            temperature=fb_cfg.temperature,
+            max_tokens=fb_cfg.max_tokens,
         )
         self._inject_agent_deps(feedback_agent, fb_cfg.backend)
         self._agents["feedback"] = feedback_agent

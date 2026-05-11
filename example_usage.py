@@ -27,6 +27,7 @@ from multi_agent_system import (
     ModelInfo,
     LoadModelConfig,
 )
+from config_loader import load_config, save_config, quick_all_local, quick_all_deepseek
 
 # 配置日志
 logging.basicConfig(
@@ -100,22 +101,29 @@ async def lmstudio_management_example():
     运行前提：
         LM Studio 已在本地运行并启用 API (http://localhost:1234)。
         新版本 LM Studio (>=0.3.x) 支持管理 API 端口 1234。
+
+    推荐用法：
+        通过 load_config("config_user.json") 加载配置，
+        无需在代码中手动 add_lmstudio_backend()。
     """
     print("=" * 60)
     print("LM Studio 模型管理功能演示")
     print("=" * 60)
 
-    system = MultiAgentSystem()
-    system.add_lmstudio_backend(
-        api_base="http://localhost:1234/v1",
-        model_name="qwen3.5-9b",
-        auto_load=True,  # 启用智能自动加载
-        load_config={
-            "context_length": 16384,
-            "flash_attention": True,
-            "eval_batch_size": 512,
-        },
-    )
+    # ---- 推荐：从 JSON 配置文件加载 ----
+    config = load_config("config_user.json")
+    # 确保后端配置指向本地 LM Studio
+    lm_cfg = config.default_backends[BackendType.LMSTUDIO]
+    lm_cfg.api_base = "http://localhost:1234/v1"
+    lm_cfg.model_name = "qwen3.5-9b"
+    lm_cfg.auto_load = True
+    lm_cfg.load_config = {
+        "context_length": 16384,
+        "flash_attention": True,
+        "eval_batch_size": 512,
+    }
+
+    system = MultiAgentSystem(config)
     await system.start()
 
     try:
@@ -387,6 +395,66 @@ def sync_example():
 
 
 # ======== 主程序集成伪代码 ========
+async def json_config_example():
+    """
+    演示 JSON 配置文件加载方式。
+
+    不使用代码硬编码配置，而是从 config_default.json + config_user.json
+    加载，实现了默认配置与用户配置的分层管理。
+
+    运行前提：
+        将此目录下的 config_default.json 作为基础配置。
+        可选创建 config_user.json 覆盖需要修改的字段。
+    """
+    print("=" * 60)
+    print("JSON 配置文件加载演示")
+    print("=" * 60)
+
+    # ---- 方式 1：只使用默认配置 ----
+    print("\n📋 方式 1：load_config() — 仅默认配置")
+    config1 = load_config()
+    print(f"  检测智能体后端: {config1.detection.backend.value}")
+    print(f"  检测模型: {config1.detection.model_name}")
+    print(f"  研判智能体后端: {config1.judgment.backend.value}")
+
+    # ---- 方式 2：默认 + 用户覆盖 ----
+    print("\n📋 方式 2：load_config('config_user.json') — 默认 + 用户覆盖")
+    print("  (如果 config_user.json 不存在，将回退到默认配置)")
+    config2 = load_config("config_user.json")
+    system = MultiAgentSystem(config2)
+    await system.start()
+    print(f"  系统已启动 — 后端数: {len(config2.default_backends)}")
+    print(f"  队列上限: {config2.max_queue_size}")
+    await system.stop()
+
+    # ---- 方式 3：快速函数 ----
+    print("\n📋 方式 3：quick_all_local() — 全部使用本地模型")
+    config3 = quick_all_local(
+        model_name="qwen3.5-9b",
+        api_base="http://localhost:1234/v1",
+    )
+    print(f"  检测: {config3.detection.backend.value}/{config3.detection.model_name}")
+    print(f"  关联: {config3.correlation.backend.value}/{config3.correlation.model_name}")
+
+    # ---- 方式 4：保存配置 ----
+    print("\n📋 方式 4：save_config() — 保存运行时配置")
+    save_config(config3, "config_exported_demo.json")
+    print("  (已生成 config_exported_demo.json)")
+
+    # ---- 方式 5：演示 DeepSeek 配置 ----
+    print("\n📋 DeepSeek V4 可选参数说明:")
+    print("  在 config_user.json 的 backends.deepseek 中可设置:")
+    print("    'thinking_enabled': true | false | null")
+    print("      null = 不显式设置（API 默认行为，当前 SDK 默认开启）")
+    print("    'reasoning_effort': 'high' | 'max' | null")
+    print("      null = 不启用增强推理")
+    print("      'high' 和 'max' 仅在 deepseek-v4-pro 模型上有效")
+    print("    'include_reasoning': true | false")
+    print("      是否在 reply 中附加模型的思考过程")
+
+    print("\n✅ JSON 配置演示完成\n")
+
+
 def integration_example_pseudocode():
     """
     展示如何与 P4 交换机控制程序集成。
@@ -458,15 +526,16 @@ if __name__ == "__main__":
     print("  [2] 多智能体异步流程演示")
     print("  [3] 多智能体同步流程演示")
     print("  [4] DeepSeek 后端使用演示")
-    print("  [5] 运行全部示例")
+    print("  [5] JSON 配置文件加载演示")
+    print("  [6] 运行全部示例")
 
     # 允许命令行参数选择
     if len(sys.argv) > 1:
         choice = sys.argv[1]
     else:
-        print("\n用法: python example_usage.py [1|2|3|4|5]")
+        print("\n用法: python example_usage.py [1|2|3|4|5|6]")
         print("默认运行全部示例...\n")
-        choice = "5"
+        choice = "6"
 
     async def run_choice(choice: str):
         if choice == "1":
@@ -478,8 +547,18 @@ if __name__ == "__main__":
         elif choice == "4":
             await deepseek_example()
         elif choice == "5":
+            await json_config_example()
+        elif choice == "6":
             print("\n" + "█" * 60)
-            print("  [1/4] LM Studio 模型管理演示")
+            print("  [1/5] JSON 配置文件加载演示")
+            print("█" * 60)
+            try:
+                await json_config_example()
+            except Exception as e:
+                print(f"⚠ JSON 配置演示跳过: {e}")
+
+            print("\n" + "█" * 60)
+            print("  [2/5] LM Studio 模型管理演示")
             print("█" * 60)
             try:
                 await lmstudio_management_example()
@@ -487,7 +566,7 @@ if __name__ == "__main__":
                 print(f"⚠ LM Studio 演示跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [2/4] 多智能体异步流程演示")
+            print("  [3/5] 多智能体异步流程演示")
             print("█" * 60)
             try:
                 await async_example()
@@ -495,7 +574,7 @@ if __name__ == "__main__":
                 print(f"⚠ 异步示例跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [3/4] 多智能体同步流程演示")
+            print("  [4/5] 多智能体同步流程演示")
             print("█" * 60)
             try:
                 sync_example()
@@ -503,7 +582,7 @@ if __name__ == "__main__":
                 print(f"⚠ 同步示例跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [4/4] DeepSeek 后端使用演示")
+            print("  [5/5] DeepSeek 后端使用演示")
             print("█" * 60)
             try:
                 await deepseek_example()

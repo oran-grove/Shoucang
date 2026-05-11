@@ -1,0 +1,132 @@
+{
+  "_comment": "多智能体反泄密系统 — 默认配置文件",
+  "_description": "所有字段均为出厂默认值。此文件仅用于重置设置或错误配置回滚，日常运行请编辑 config_user.json。",
+  "_version": "1.1",
+
+  "backends": {
+    "openai": {
+      "_comment": "OpenAI 兼容 API 后端",
+      "model_name": "gpt-4o-mini",
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 60.0,
+      "max_retries": 3
+    },
+    "lmstudio": {
+      "_comment": "LM Studio 本地 AI 后端",
+      "model_name": "qwen3.5-9b",
+      "api_base": "http://localhost:1234/v1",
+      "api_key": "lm-studio",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 120.0,
+      "max_retries": 2,
+      "auto_load": true,
+      "load_config": {
+        "context_length": 16384,
+        "eval_batch_size": 512,
+        "flash_attention": true,
+        "num_experts": null,
+        "offload_kv_cache_to_gpu": true,
+        "echo_load_config": false
+      }
+    },
+    "deepseek": {
+      "_comment": "DeepSeek V4 API 后端",
+      "model_name": "deepseek-v4-flash",
+      "api_base": "https://api.deepseek.com",
+      "api_key": "",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 120.0,
+      "max_retries": 5,
+      "thinking_enabled": null,
+      "reasoning_effort": null,
+      "include_reasoning": false,
+      "_deepseek_options": {
+        "thinking_enabled": {
+          "description": "思考模式开关",
+          "type": "boolean|null",
+          "options": [true, false, null],
+          "null_means": "不显式设置，由 API 默认行为决定"
+        },
+        "reasoning_effort": {
+          "description": "推理强度（仅 deepseek-v4-pro 有效）",
+          "type": "string|null",
+          "options": ["high", "max", null],
+          "null_means": "不启用增强推理"
+        },
+        "include_reasoning": {
+          "description": "是否在回复中附加模型的思考过程",
+          "type": "boolean",
+          "options": [true, false]
+        }
+      }
+    }
+  },
+
+    "detection": {
+    "_comment": "检测智能体 — 单流初步筛查",
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.3,
+    "max_tokens": 1024,
+    "max_context_tokens": 4096,
+    "confidence_threshold_malicious": 0.85,
+    "confidence_threshold_suspect": 0.50,
+    "system_prompt": "你是一个网络安全流量分析专家。请根据提供的流量元数据，判断该流量是否为恶意。回复格式：{ verdict: 'malicious'|'suspicious'|'safe', confidence: 0.0-1.0, reasoning: '简短理由', threat_type: '数据泄露'|'C2通信'|'扫描'|'正常'|'未知' }",
+    "_backend_options": ["openai", "lmstudio", "deepseek"]
+  },
+
+  "correlation": {
+    "_comment": "关联智能体 — 分析多条流量的关联攻击模式",
+    "enabled": true,
+    "backend": "openai",
+    "model_name": "gpt-4o",
+    "temperature": 0.3,
+    "max_tokens": 2048,
+    "correlation_window_minutes": 30,
+    "min_records_to_correlate": 5,
+    "max_buffer_per_src": 100,
+    "cleanup_interval_seconds": 60,
+    "system_prompt": "你是一个网络安全关联分析专家。给定一组来自同一源IP或同类特征的流量记录，请判断它们之间是否存在关联的恶意行为模式。回复格式：{ is_correlated: true|false, correlation_type: '数据外传'|'横向移动'|'C2心跳'|'无关联', confidence: 0.0-1.0, reasoning: '分析逻辑' }",
+    "_backend_options": ["openai", "lmstudio", "deepseek"]
+  },
+
+  "judgment": {
+    "_comment": "研判智能体 — 综合检测+关联结果给出最终判定",
+    "enabled": true,
+    "backend": "openai",
+    "model_name": "gpt-4o",
+    "temperature": 0.3,
+    "max_tokens": 2048,
+    "system_prompt": "你是一个网络安全威胁研判专家。请综合单流检测结果和关联分析结果，给出最终的威胁判定和处置建议。回复格式：{ verdict: 'malicious'|'suspicious'|'safe', severity: 'critical'|'high'|'medium'|'low'|'info', confidence: 0.0-1.0, recommended_action: 'block'|'monitor'|'allow'|'quarantine', reasoning: '综合研判逻辑', evidence_summary: ['证据1', '证据2'] }",
+    "_backend_options": ["openai", "lmstudio", "deepseek"]
+  },
+
+    "feedback": {
+    "_comment": "反馈智能体 — 处理管理员反馈并优化规则",
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "temperature": 0.2,
+    "max_tokens": 1024,
+    "system_prompt": "你是一个网络安全规则优化专家。根据管理员反馈和历史判定记录，提出规则调整建议。回复格式：{ action: 'upgrade_to_blacklist'|'downgrade_to_whitelist'|'adjust_confidence'|'no_change', rule_id: '规则ID', new_confidence: 0.0-1.0, ttl_minutes: 整数, reasoning: '理由' }",
+    "_backend_options": ["openai", "lmstudio", "deepseek"]
+  },
+
+  "knowledge_base": {
+    "_comment": "知识库 / 规则引擎配置",
+    "max_rules": 100000,
+    "blacklist_default_ttl_minutes": 1440,
+    "whitelist_default_ttl_minutes": 10080,
+    "cleanup_interval_seconds": 300,
+    "confidence_threshold_block": 0.85,
+    "confidence_threshold_suspect": 0.50
+  },
+
+  "max_queue_size": 10000
+}
