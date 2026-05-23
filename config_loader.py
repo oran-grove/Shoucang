@@ -35,6 +35,9 @@ from multi_agent_system.config import (
     CorrelationAgentConfig,
     JudgmentAgentConfig,
     FeedbackAgentConfig,
+    BaselineProfilingAgentConfig,
+    TemporalAnomalyAgentConfig,
+    SlowBrainConfig,
     KnowledgeBaseConfig,
     OrchestratorConfig,
 )
@@ -193,6 +196,50 @@ def _build_feedback_config(d: dict) -> FeedbackAgentConfig:
     )
 
 
+def _build_baseline_profiling_config(d: dict) -> BaselineProfilingAgentConfig:
+    return BaselineProfilingAgentConfig(
+        enabled=d.get("enabled", True),
+        backend=BackendType(d.get("backend", "deepseek")),
+        model_name=d.get("model_name", "deepseek-v4-flash"),
+        system_prompt=d.get(
+            "system_prompt",
+            BaselineProfilingAgentConfig.system_prompt,
+        ),
+        temperature=d.get("temperature", 0.2),
+        max_tokens=d.get("max_tokens", 2048),
+        update_interval_hours=d.get("update_interval_hours", 24),
+        max_baseline_age_days=d.get("max_baseline_age_days", 90),
+    )
+
+
+def _build_temporal_anomaly_config(d: dict) -> TemporalAnomalyAgentConfig:
+    return TemporalAnomalyAgentConfig(
+        enabled=d.get("enabled", True),
+        backend=BackendType(d.get("backend", "deepseek")),
+        model_name=d.get("model_name", "deepseek-v4-flash"),
+        system_prompt=d.get(
+            "system_prompt",
+            TemporalAnomalyAgentConfig.system_prompt,
+        ),
+        temperature=d.get("temperature", 0.3),
+        max_tokens=d.get("max_tokens", 2048),
+        default_window_days=d.get("default_window_days", 30),
+        slice_size_hours=d.get("slice_size_hours", 6),
+    )
+
+
+def _build_slow_brain_config(d: dict) -> SlowBrainConfig:
+    return SlowBrainConfig(
+        analysis_interval_hours=d.get("analysis_interval_hours", 24),
+        baseline_profiling=_build_baseline_profiling_config(
+            d.get("baseline_profiling", {})
+        ),
+        temporal_anomaly=_build_temporal_anomaly_config(
+            d.get("temporal_anomaly", {})
+        ),
+    )
+
+
 def _build_knowledge_base_config(d: dict) -> KnowledgeBaseConfig:
     return KnowledgeBaseConfig(
         max_rules=d.get("max_rules", 100000),
@@ -273,6 +320,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         correlation=_build_correlation_config(merged.get("correlation", {})),
         judgment=_build_judgment_config(merged.get("judgment", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
+        slow_brain=_build_slow_brain_config(merged.get("slow_brain", {})),
         knowledge_base=_build_knowledge_base_config(merged.get("knowledge_base", {})),
         default_backends=default_backends,
         max_queue_size=merged.get("max_queue_size", 10000),

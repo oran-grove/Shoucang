@@ -6,6 +6,7 @@
 - 模拟流量事件分析
 - 管理员反馈闭环
 - 获取 P4 交换机规则
+- 慢脑层长周期分析
 
 运行前请确保：
 1. LM Studio 已运行于 http://localhost:1234
@@ -16,13 +17,14 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from multi_agent_system import (
     MultiAgentSystem,
     FlowEvent,
     ThreatVerdict,
     TrafficVerdict,
+    SeverityLevel,
     BackendType,
     ModelInfo,
     LoadModelConfig,
@@ -35,6 +37,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+
+# ============================================================
+# 示例数据构建 — 快脑层（实时单流）
+# ============================================================
 
 def build_sample_flows() -> list[FlowEvent]:
     """构造示例流量事件"""
@@ -93,6 +99,123 @@ def build_sample_flows() -> list[FlowEvent]:
         ),
     ]
 
+
+# ============================================================
+# 示例数据构建 — 慢脑层（长期历史日志）
+# ============================================================
+
+def build_historical_flows(entity_id: str = "user_zhangsan") -> list[FlowEvent]:
+    """
+    构造90天历史流量数据，模拟长周期低频率泄密模式。
+
+    策略：
+    - 前60天为正常行为基线（工作日朝九晚五模式）
+    - 第61-90天混入隐蔽泄密模式：每3天凌晨2点传输2-5MB到境外IP
+    - 同时在正常工作时间出现一些渐进递增的小量传输
+    """
+    now = datetime.now(timezone.utc)
+    flows: list[FlowEvent] = []
+
+    normal_dst_ips = ["142.250.80.46", "93.184.216.34", "151.101.1.140"]
+    exfil_ips = ["203.0.113.42", "198.51.100.77", "45.33.32.156"]
+
+    for day_offset in range(90, 0, -1):
+        day = now - timedelta(days=day_offset)
+
+        # ---------- 第一阶段：正常行为基线 (day_offset 90..31) ----------
+        if day_offset > 30:
+            # 工作日：08:00-18:00 正常办公流量
+            if day.weekday() < 5:  # Mon-Fri
+                for hour in [9, 10, 11, 14, 15, 16, 17]:
+                    ts = day.replace(hour=hour, minute=0, second=0)
+                    flows.append(FlowEvent(
+                        timestamp=ts,
+                        src_ip="192.168.1.50",
+                        dst_ip=normal_dst_ips[hour % 3],
+                        src_port=50000 + hour,
+                        dst_port=443,
+                        protocol="TCP",
+                        app_protocol="TLS",
+                        pkt_count=60,
+                        byte_count=30000,
+                        duration_seconds=5.0,
+                        avg_pkt_size=500,
+                        entropy_score=5.5,
+                        user_id=entity_id,
+                        department="研发部",
+                    ))
+            continue
+
+        # ---------- 第二阶段：混入隐蔽泄密 (day_offset 30..1) ----------
+        # 正常办公行为照常
+        if day.weekday() < 5:
+            for hour in [9, 10, 11, 14, 15, 16, 17]:
+                ts = day.replace(hour=hour, minute=0, second=0)
+                flows.append(FlowEvent(
+                    timestamp=ts,
+                    src_ip="192.168.1.50",
+                    dst_ip=normal_dst_ips[hour % 3],
+                    src_port=50000 + hour,
+                    dst_port=443,
+                    protocol="TCP",
+                    app_protocol="TLS",
+                    pkt_count=60,
+                    byte_count=30000,
+                    duration_seconds=5.0,
+                    avg_pkt_size=500,
+                    entropy_score=5.5,
+                    user_id=entity_id,
+                    department="研发部",
+                ))
+
+        # 每3天一次低频泄密（凌晨2点，2-5MB）
+        if day_offset % 3 == 0:
+            exfil_size = 2_000_000 + (30 - day_offset) * 100_000  # 渐进递增
+            ts = day.replace(hour=2, minute=15, second=0)
+            flows.append(FlowEvent(
+                timestamp=ts,
+                src_ip="192.168.1.50",
+                dst_ip=exfil_ips[day_offset % 3],
+                src_port=49152 + (day_offset % 10),
+                dst_port=8443,
+                protocol="TCP",
+                app_protocol="TLS",
+                pkt_count=int(exfil_size / 1400),
+                byte_count=exfil_size,
+                duration_seconds=20.0,
+                avg_pkt_size=1400,
+                entropy_score=7.85,
+                user_id=entity_id,
+                department="研发部",
+            ))
+
+        # 每天几次低频DNS查询到可疑域名
+        if day_offset % 2 == 0:
+            ts = day.replace(hour=23, minute=45, second=0)
+            flows.append(FlowEvent(
+                timestamp=ts,
+                src_ip="192.168.1.50",
+                dst_ip="8.8.8.8",
+                src_port=30000 + (day_offset % 100),
+                dst_port=53,
+                protocol="UDP",
+                app_protocol="DNS",
+                pkt_count=3,
+                byte_count=600,
+                duration_seconds=1.0,
+                avg_pkt_size=200,
+                entropy_score=6.1,
+                dns_query=f"data-{day_offset}.sync.exfil.example.com",
+                user_id=entity_id,
+                department="研发部",
+            ))
+
+    return flows
+
+
+# ============================================================
+# 快脑层演示 — LM Studio 模型管理
+# ============================================================
 
 async def lmstudio_management_example():
     """
@@ -199,16 +322,24 @@ async def lmstudio_management_example():
     print("\n✅ LM Studio 管理演示完成\n")
 
 
+# ============================================================
+# 快脑层演示 — DeepSeek 后端
+# ============================================================
+
 async def deepseek_example():
     """
     演示 DeepSeek API 后端用法。
 
     运行前提：
         设置环境变量 DEEPSEEK_API_KEY 或在代码中直接替换。
+
+    API 密钥、模型名、超时等参数均从 config_user.json 读取，
+    无需在代码中硬编码。
     """
     import os
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "sk-your-deepseek-key")
+    config = load_config("config_user.json")
+    ds_cfg = config.default_backends[BackendType.DEEPSEEK]
 
     print("=" * 60)
     print("DeepSeek API 后端演示")
@@ -216,13 +347,13 @@ async def deepseek_example():
 
     system = MultiAgentSystem()
 
-    # 添加 DeepSeek 后端（作为主要 LLM）
+    # 添加 DeepSeek 后端（参数全部来自配置文件）
     system.add_deepseek_backend(
-        api_key=api_key,
-        api_base="https://api.deepseek.com",
-        model_name="deepseek-v4-flash",
-        timeout=120.0,
-        max_retries=5,
+        api_key=ds_cfg.api_key,
+        api_base=ds_cfg.api_base,
+        model_name=ds_cfg.model_name,
+        timeout=ds_cfg.timeout,
+        max_retries=ds_cfg.max_retries,
     )
 
     # 设置所有智能体使用 DeepSeek
@@ -231,23 +362,28 @@ async def deepseek_example():
     system.set_judgment_backend(BackendType.DEEPSEEK)
     system.set_feedback_backend(BackendType.DEEPSEEK)
 
-    print(f"后端配置完成，模型: deepseek-v4-flash")
-    print(f"API 地址: https://api.deepseek.com")
+    print(f"后端配置完成，模型: {ds_cfg.model_name}")
+    print(f"API 地址: {ds_cfg.api_base}")
     print()
 
     # 可选：演示推理模型
-    if api_key != "sk-your-deepseek-key":
+    api_key_set = ds_cfg.api_key and ds_cfg.api_key not in ("sk-your-deepseek-key", "")
+    if api_key_set:
         print("💡 提示：如需使用推理模型 (deepseek-v4-pro)，")
         print("   调用 add_deepseek_backend() 并设置 model_name='deepseek-v4-pro'")
         print("   V4 推理模型支持 thinking_enabled=True/False 控制思考模式")
         print("   以及 reasoning_effort 参数: 'high' 或 'max'")
         print("   可通过 include_reasoning=True 查看模型思考过程")
     else:
-        print("⚠ 未设置 DEEPSEEK_API_KEY，跳过实际调用。")
-        print("  请 export DEEPSEEK_API_KEY=sk-your-key 后重试。")
+        print("⚠ 未设置有效的 DEEPSEEK_API_KEY，跳过实际调用。")
+        print("  请在 config_user.json 中配置，或设置环境变量 DEEPSEEK_API_KEY 后重试。")
 
     print("\n✅ DeepSeek 后端演示完成\n")
 
+
+# ============================================================
+# 快脑层演示 — 异步流程
+# ============================================================
 
 async def async_example():
     """异步使用示例"""
@@ -255,27 +391,11 @@ async def async_example():
     print("多智能体反泄密系统 — 异步示例")
     print("=" * 60)
 
-    # 1. 创建系统
-    system = MultiAgentSystem()
+    # 1. 创建系统 — 使用 DeepSeek API 配置
+    config = load_config("config_user.json")
+    system = MultiAgentSystem(config)
 
-    # 2. 配置后端
-    #    LM Studio 本地 AI（用于快速检测和反馈）
-    system.add_lmstudio_backend(
-        api_base="http://localhost:1234/v1",
-        model_name="qwen3.5-9b",
-        timeout=300.0,
-    )
-    #    OpenAI API（用于关联分析和综合研判）
-    # system.add_openai_backend(
-    #     api_key="sk-your-key",
-    #     api_base="https://api.openai.com/v1",
-    #     model_name="gpt-4o-mini",
-    # )
-
-    # 3. 设置各智能体使用的后端（默认已合理设置，可按需调整）
-    # system.set_detection_backend(BackendType.LMSTUDIO)    # 默认
-    # system.set_correlation_backend(BackendType.LMSTUDIO)  # 无在线API时全用本地
-    # system.set_judgment_backend(BackendType.LMSTUDIO)
+    # 2. 所有智能体使用默认的 DeepSeek API（由 config_user.json 配置）
 
     # 4. 启动系统
     await system.start()
@@ -340,10 +460,14 @@ async def async_example():
     print("\n系统已停止")
 
 
+# ============================================================
+# 快脑层演示 — 同步流程
+# ============================================================
+
 async def _sync_example_impl():
     """同步示例的内部异步实现（可在任意上下文中被调用）"""
-    system = MultiAgentSystem()
-    system.add_lmstudio_backend("http://localhost:1234/v1")  # 无 LM Studio 时会报错
+    config = load_config("config_user.json")
+    system = MultiAgentSystem(config)
     try:
         await system.start()
         flow = FlowEvent(
@@ -379,22 +503,300 @@ def sync_example():
     try:
         loop = asyncio.get_running_loop()
         if loop.is_running():
-            print("⚠ 检测到已在异步事件循环中运行，切换到兼容模式运行...")
-            # 在已有循环中创建任务同步等待结果
-            task = loop.create_task(_sync_example_impl())
-            # 必须通过 loop.run_until_complete 或手动等待
-            # 但 run_until_complete 不可重入，改用 gather/wait
-            import concurrent.futures
-            future = asyncio.run_coroutine_threadsafe(_sync_example_impl(), loop)
-            future.result(timeout=300)  # 阻塞当前线程直到完成
-            return
+            print("⚠ 已在异步事件循环中运行，直接 await 内部实现...")
+            # 在已有循环中返回协程，由外层调用者 await
+            return _sync_example_impl()
     except RuntimeError:
         pass  # 无运行中的事件循环，可以安全使用 asyncio.run
 
     asyncio.run(_sync_example_impl())
 
 
-# ======== 主程序集成伪代码 ========
+# ============================================================
+# 慢脑层演示 — 长周期深度分析（全部配置来自 config_user.json）
+# ============================================================
+
+async def slow_brain_example():
+    """
+    演示慢脑层智能体的完整工作流程：
+    1. BaselineProfilingAgent — 构建/更新用户行为基线
+    2. TemporalAnomalyAgent — 检测90天窗口内的时序异常
+    3. SlowBrainOrchestrator — 协调分析流程并生成告警
+
+    演示目的：
+        - 展示基线画像智能体如何从历史日志中提取正常行为模式
+        - 展示时序异常智能体如何发现"每3天凌晨2点低频泄密"
+        - 展示慢脑编排器如何将基线偏离和时序异常合并研判
+
+    所有智能体的提示词、模型名、后端参数均从 config_user.json 读取，
+    代码中不再硬编码任何配置。
+    """
+    from multi_agent_system.agents.baseline_profiling_agent import BaselineProfilingAgent
+    from multi_agent_system.agents.temporal_anomaly_agent import TemporalAnomalyAgent
+    from multi_agent_system.agents.judgment_agent import JudgmentAgent
+    from multi_agent_system.orchestrators.slow_brain_orchestrator import SlowBrainOrchestrator
+    from multi_agent_system.backends import (
+        LMStudioBackend,
+        OpenAIBackend,
+        DeepSeekBackend,
+    )
+
+    print("=" * 60)
+    print("慢脑层长周期深度分析演示")
+    print("=" * 60)
+
+    # ============================================================
+    # 步骤 1: 构造历史数据
+    # ============================================================
+    print("\n📊 步骤 1: 生成90天模拟历史日志...")
+    print("   模式设计:")
+    print("   - 第1-60天: 正常办公行为基线（工作日09:00-18:00）")
+    print("   - 第61-90天: 混入隐蔽泄密（每3天凌晨2点传输2-5MB到境外）")
+    print("   - 同时存在低频DNS隧道查询")
+
+    historical_flows = build_historical_flows("user_zhangsan")
+    print(f"   生成日志数: {len(historical_flows)} 条")
+
+    # 按时间窗口划分：前60天=基线，后30天=待分析
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=30)
+    baseline_flows = [f for f in historical_flows if f.timestamp < cutoff_date]
+    recent_flows = [f for f in historical_flows if f.timestamp >= cutoff_date]
+    print(f"   基线窗口 (前60天): {len(baseline_flows)} 条")
+    print(f"   分析窗口 (后30天): {len(recent_flows)} 条")
+
+    # ============================================================
+    # 步骤 2: 从 config_user.json 加载配置，创建智能体实例
+    # ============================================================
+    print("\n🔧 步骤 2: 从配置文件加载慢脑层智能体配置...")
+    _slow_cfg = load_config("config_user.json")
+
+    # 基线画像智能体 — 配置来自 slow_brain.baseline_profiling
+    _bcfg = _slow_cfg.slow_brain.baseline_profiling
+    baseline_agent = BaselineProfilingAgent(
+        name="BaselineProfilingAgent",
+        system_prompt=_bcfg.system_prompt,
+        model_name=_bcfg.model_name,
+        temperature=_bcfg.temperature,
+        max_tokens=_bcfg.max_tokens,
+    )
+    # 时序异常智能体 — 配置来自 slow_brain.temporal_anomaly
+    _tcfg = _slow_cfg.slow_brain.temporal_anomaly
+    temporal_agent = TemporalAnomalyAgent(
+        name="TemporalAnomalyAgent",
+        system_prompt=_tcfg.system_prompt,
+        model_name=_tcfg.model_name,
+        temperature=_tcfg.temperature,
+        max_tokens=_tcfg.max_tokens,
+    )
+    # 研判智能体 — 配置来自 judgment（与快脑层共用提示词）
+    _jcfg = _slow_cfg.judgment
+    judgment_agent = JudgmentAgent(
+        name="SlowJudgmentAgent",
+        system_prompt=_jcfg.system_prompt,
+        model_name=_jcfg.model_name,
+        temperature=_jcfg.temperature,
+        max_tokens=_jcfg.max_tokens,
+    )
+    print(f"   基线画像: backend={_bcfg.backend.value}, model={_bcfg.model_name}")
+    print(f"   时序异常: backend={_tcfg.backend.value}, model={_tcfg.model_name}")
+    print(f"   综合研判: backend={_jcfg.backend.value}, model={_jcfg.model_name}")
+
+    # 注入后端 — 全部从 config.default_backends 读取
+    print("   尝试连接后端...")
+    backend_available = True
+    try:
+        _lm_cfg = _slow_cfg.default_backends[BackendType.LMSTUDIO]
+        _ds_cfg = _slow_cfg.default_backends[BackendType.DEEPSEEK]
+        _oa_cfg = _slow_cfg.default_backends[BackendType.OPENAI]
+
+        # 基线智能体用 LM Studio
+        lm_backend = LMStudioBackend(
+            api_base=_lm_cfg.api_base,
+            api_key=_lm_cfg.api_key,
+            timeout=_lm_cfg.timeout,
+            max_retries=_lm_cfg.max_retries,
+            default_model=_lm_cfg.model_name,
+            auto_load=_lm_cfg.auto_load,
+            default_load_config=LoadModelConfig(
+                context_length=_lm_cfg.load_config.get("context_length"),
+                eval_batch_size=_lm_cfg.load_config.get("eval_batch_size"),
+                flash_attention=_lm_cfg.load_config.get("flash_attention"),
+                num_experts=_lm_cfg.load_config.get("num_experts"),
+                offload_kv_cache_to_gpu=_lm_cfg.load_config.get("offload_kv_cache_to_gpu"),
+                echo_load_config=_lm_cfg.load_config.get("echo_load_config", False),
+            ),
+        )
+        baseline_agent.set_backend(lm_backend)
+        baseline_agent.model_name = _lm_cfg.model_name
+        print(f"   ✅ LM Studio 后端已连接 (基线画像, model={_lm_cfg.model_name})")
+
+        def _create_backend(bt: BackendType):
+            """根据配置中的后端类型创建对应后端实例"""
+            if bt == BackendType.DEEPSEEK:
+                return DeepSeekBackend(
+                    api_base=_ds_cfg.api_base,
+                    api_key=_ds_cfg.api_key,
+                    timeout=_ds_cfg.timeout,
+                    max_retries=_ds_cfg.max_retries,
+                    default_model=_ds_cfg.model_name,
+                )
+            elif bt == BackendType.OPENAI:
+                return OpenAIBackend(
+                    api_base=_oa_cfg.api_base,
+                    api_key=_oa_cfg.api_key,
+                    timeout=_oa_cfg.timeout,
+                    max_retries=_oa_cfg.max_retries,
+                    default_model=_oa_cfg.model_name,
+                )
+            else:
+                return lm_backend
+
+        # 时序智能体后端
+        _tbe = _create_backend(_tcfg.backend)
+        if _tbe is lm_backend and _tcfg.backend != BackendType.LMSTUDIO:
+            temporal_agent.model_name = _lm_cfg.model_name  # 降级时修正模型名
+        temporal_agent.set_backend(_tbe)
+        print(f"   ✅ 时序分析后端已连接 ({_tcfg.backend.value})")
+
+        # 研判智能体后端
+        _jbe = _create_backend(_jcfg.backend)
+        if _jbe is lm_backend and _jcfg.backend != BackendType.LMSTUDIO:
+            judgment_agent.model_name = _lm_cfg.model_name
+        judgment_agent.set_backend(_jbe)
+        print(f"   ✅ 综合研判后端已连接 ({_jcfg.backend.value})")
+    except Exception as e:
+        print(f"   ⚠ 后端连接失败: {e}")
+        print("   ℹ️ 将使用模拟数据演示分析流程...")
+        backend_available = False
+
+    # 创建慢脑编排器
+    slow_brain = SlowBrainOrchestrator(
+        baseline_agent=baseline_agent,
+        temporal_agent=temporal_agent,
+        judgment_agent=judgment_agent,
+        analysis_interval_hours=_slow_cfg.slow_brain.analysis_interval_hours,
+    )
+    print("   ✅ SlowBrainOrchestrator 初始化完成")
+
+    # ============================================================
+    # 步骤 3: 执行基线画像（纯统计，不需要 LLM）
+    # ============================================================
+    print("\n📈 步骤 3: 构建用户行为基线...")
+    baseline = None
+    try:
+        baseline = slow_brain.baseline_agent.build_or_update_baseline(
+            entity_id="user_zhangsan",
+            entity_type="user",
+            historical_flows=baseline_flows,
+        )
+        print(f"   基线构建完成:")
+        print(f"   - 实体: {baseline.entity_id} ({baseline.entity_type})")
+        print(f"   - 样本数: {baseline.sample_count}")
+        print(f"   - 日均流量: {baseline.avg_flows_per_day * (baseline.avg_bytes_per_flow or 1):.0f} 次/天")
+        print(f"   - 每小时平均字节: {baseline.avg_bytes_per_hour / 1024:.1f} KB/h")
+        print(f"   - 协议分布: {baseline.protocol_distribution}")
+        print(f"   - 非工作时段占比: {baseline.off_hours_ratio:.1%}")
+    except Exception as e:
+        print(f"   ⚠ 基线构建出错: {e}")
+
+    # ============================================================
+    # 步骤 4: 时序异常检测（统计预分析，LLM 解释）
+    # ============================================================
+    print("\n🔍 步骤 4: 时序异常检测...")
+    print("   分析窗口: 后30天")
+    print("   检测目标: 周期性低频传输 / 渐进递增 / 信标心跳 / 非工作时段活动")
+    try:
+        temporal_result = await slow_brain.temporal_agent.analyze(
+            entity_id="user_zhangsan",
+            historical_flows=recent_flows,
+            window_days=30,
+        )
+        print(f"   时序分析结果:")
+        print(f"   - 判定: {temporal_result.verdict.value}")
+        print(f"   - 置信度: {temporal_result.confidence:.2%}")
+        print(f"   - 威胁类型: {temporal_result.threat_type}")
+        if temporal_result.reasoning:
+            print(f"   - 推理: {temporal_result.reasoning[:300]}")
+    except Exception as e:
+        print(f"   ⚠ 时序分析出错 (可能无LLM后端): {e}")
+        print("   ℹ️ 预期检测到的模式:")
+        print("     ✓ 周期性低频传输: 每3天凌晨2点出现大流量")
+        print("     ✓ 渐进递增: 每3天的传输量从2MB递增到5MB")
+        print("     ✓ 非工作时段活动: 02:00-02:20 的高熵出站连接")
+        print("     ✓ 目标轮换: 3个境外IP周期轮换")
+
+    # ============================================================
+    # 步骤 5: 基线偏离评估
+    # ============================================================
+    print("\n📉 步骤 5: 基线偏离评估...")
+    try:
+        deviation_count = 0
+        for flow in recent_flows[:50]:  # 采样分析
+            dev_result = slow_brain.baseline_agent.evaluate_flow(flow, baseline)
+            if dev_result.verdict == TrafficVerdict.SUSPICIOUS:
+                deviation_count += 1
+        print(f"   偏离事件数 (采样50条): {deviation_count}")
+        print(f"   偏离率: {deviation_count / 50 * 100:.1f}%")
+        if deviation_count > 0:
+            print("   ⚠ 存在基线偏离 — 正常办公时间外的异常流量模式")
+
+        # 基线变化分析
+        shift_result = await slow_brain.baseline_agent.analyze_baseline_shift(
+            "user_zhangsan", recent_flows[:100]
+        )
+        print(f"   基线偏移判定: {shift_result.verdict.value}")
+        print(f"   偏移置信度: {shift_result.confidence:.2%}")
+    except Exception as e:
+        print(f"   ⚠ 偏离评估出错: {e}")
+
+    # ============================================================
+    # 步骤 6: 慢脑编排器批量分析
+    # ============================================================
+    print("\n🧠 步骤 6: SlowBrainOrchestrator 综合研判...")
+    print("   协调基线+时序结果 → 综合判定")
+    try:
+        entity_flows = {"user_zhangsan": ("user", baseline_flows)}
+        recent_map = {"user_zhangsan": recent_flows}
+        alerts = await slow_brain.batch_analyze(entity_flows, recent_map)
+        print(f"   生成告警数: {len(alerts)}")
+        for i, alert in enumerate(alerts):
+            print(f"\n   --- 告警 #{i+1} ---")
+            print(f"   判定: {alert.verdict.value} | 严重度: {alert.severity.value}")
+            print(f"   置信度: {alert.confidence:.2%}")
+            print(f"   威胁类型: {alert.threat_type}")
+            if alert.reasoning:
+                print(f"   理由: {alert.reasoning[:250]}")
+
+        # 获取高严重度告警
+        high_alerts = slow_brain.get_recent_alerts(severity_min=SeverityLevel.MEDIUM)
+        print(f"\n   📊 中高危告警数: {len(high_alerts)}")
+
+        # 获取统计
+        stats = slow_brain.get_statistics()
+        print(f"\n   📊 慢脑层统计:")
+        for k, v in stats.items():
+            print(f"      {k}: {v}")
+
+    except Exception as e:
+        print(f"   ⚠ 综合研判出错 (可能无LLM后端): {e}")
+        print("   ℹ️ 预期输出示例 (实际运行时需要LLM后端):")
+        print("     --- 告警 #1 ---")
+        print("     判定: malicious | 严重度: high")
+        print("     置信度: 92.00%")
+        print("     威胁类型: 长周期低频数据泄密")
+        print("     理由: 综合基线偏离和时序异常检测，用户 zhangsan")
+        print("           在30天内出现10次非工作时段(凌晨2点)的异常外传，")
+        print("           传输量从2MB递进到5MB，形成低慢外传模式，")
+        print("           已触发三层时序模式匹配：周期性低频+渐进递增+目标轮换")
+
+    print("\n✅ 慢脑层长周期分析演示完成")
+    print("   (完整功能需要LLM后端运行)")
+
+
+# ============================================================
+# JSON 配置演示
+# ============================================================
+
 async def json_config_example():
     """
     演示 JSON 配置文件加载方式。
@@ -452,8 +854,25 @@ async def json_config_example():
     print("    'include_reasoning': true | false")
     print("      是否在 reply 中附加模型的思考过程")
 
+    # ---- 方式 6：慢脑层配置说明 ----
+    print("\n📋 慢脑层 (SlowBrain) 配置结构说明:")
+    print("  OrchestratorConfig.slow_brain 包含:")
+    print("    - analysis_interval_hours: 分析周期（默认24h）")
+    print("    - baseline_profiling: BaselineProfilingAgentConfig")
+    print("        backend: LMSTUDIO (建议本地模型，低成本高频调用)")
+    print("        update_interval_hours: 基线更新时间")
+    print("        max_baseline_age_days: 基线数据窗口")
+    print("    - temporal_anomaly: TemporalAnomalyAgentConfig")
+    print("        backend: OPENAI (建议在线模型，复杂时序推理)")
+    print("        default_window_days: 分析窗口天数")
+    print("        slice_size_hours: 切片粒度")
+
     print("\n✅ JSON 配置演示完成\n")
 
+
+# ============================================================
+# P4 集成伪代码
+# ============================================================
 
 def integration_example_pseudocode():
     """
@@ -463,9 +882,8 @@ def integration_example_pseudocode():
     假设主程序结构如下：
 
         # 主程序启动时
-        system = MultiAgentSystem()
-        system.add_lmstudio_backend("http://localhost:1234/v1")
-        system.add_openai_backend("sk-xxx")
+        config = load_config("config_user.json")
+        system = MultiAgentSystem(config)
         # 在异步上下文中
         await system.start()
 
@@ -509,10 +927,27 @@ def integration_example_pseudocode():
                 p4_controller.sync_rules(rules)
                 print(f"[定时同步] 已同步 {len(rules)} 条规则到 P4")
 
+        # ====== 慢脑层定时分析（每24小时） ======
+        async def periodic_slow_brain_analysis():
+            while True:
+                await asyncio.sleep(86400)  # 24h
+                history = db.query_flows_since(slow_brain._last_analysis_time)
+                alerts = await slow_brain.batch_analyze(history)
+                for alert in alerts:
+                    if alert.severity >= SeverityLevel.HIGH:
+                        # 推送到 WebUI
+                        web_ui.push_alert(alert)
+                        # 更新快脑检测阈值
+                        fast_brain.update_thresholds(alert)
+
     ============================================
     """
     pass
 
+
+# ============================================================
+# 主入口
+# ============================================================
 
 if __name__ == "__main__":
     import sys
@@ -527,15 +962,16 @@ if __name__ == "__main__":
     print("  [3] 多智能体同步流程演示")
     print("  [4] DeepSeek 后端使用演示")
     print("  [5] JSON 配置文件加载演示")
-    print("  [6] 运行全部示例")
+    print("  [6] 慢脑层长周期深度分析演示")
+    print("  [7] 运行全部示例")
 
     # 允许命令行参数选择
     if len(sys.argv) > 1:
         choice = sys.argv[1]
     else:
-        print("\n用法: python example_usage.py [1|2|3|4|5|6]")
+        print("\n用法: python example_usage.py [1|2|3|4|5|6|7]")
         print("默认运行全部示例...\n")
-        choice = "6"
+        choice = "7"
 
     async def run_choice(choice: str):
         if choice == "1":
@@ -543,14 +979,16 @@ if __name__ == "__main__":
         elif choice == "2":
             await async_example()
         elif choice == "3":
-            sync_example()
+            await _sync_example_impl()
         elif choice == "4":
             await deepseek_example()
         elif choice == "5":
             await json_config_example()
         elif choice == "6":
+            await slow_brain_example()
+        elif choice == "7":
             print("\n" + "█" * 60)
-            print("  [1/5] JSON 配置文件加载演示")
+            print("  [1/6] JSON 配置文件加载演示")
             print("█" * 60)
             try:
                 await json_config_example()
@@ -558,7 +996,7 @@ if __name__ == "__main__":
                 print(f"⚠ JSON 配置演示跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [2/5] LM Studio 模型管理演示")
+            print("  [2/6] LM Studio 模型管理演示")
             print("█" * 60)
             try:
                 await lmstudio_management_example()
@@ -566,7 +1004,7 @@ if __name__ == "__main__":
                 print(f"⚠ LM Studio 演示跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [3/5] 多智能体异步流程演示")
+            print("  [3/6] 多智能体异步流程演示")
             print("█" * 60)
             try:
                 await async_example()
@@ -574,22 +1012,30 @@ if __name__ == "__main__":
                 print(f"⚠ 异步示例跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [4/5] 多智能体同步流程演示")
+            print("  [4/6] 多智能体同步流程演示")
             print("█" * 60)
             try:
-                sync_example()
+                await _sync_example_impl()
             except Exception as e:
                 print(f"⚠ 同步示例跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [5/5] DeepSeek 后端使用演示")
+            print("  [5/6] DeepSeek 后端使用演示")
             print("█" * 60)
             try:
                 await deepseek_example()
             except Exception as e:
                 print(f"⚠ DeepSeek 演示跳过: {e}")
+
+            print("\n" + "█" * 60)
+            print("  [6/6] 慢脑层长周期深度分析演示")
+            print("█" * 60)
+            try:
+                await slow_brain_example()
+            except Exception as e:
+                print(f"⚠ 慢脑层演示跳过: {e}")
         else:
-            print(f"未知选项: {choice}，可选值 1-5")
+            print(f"未知选项: {choice}，可选值 1-7")
 
     try:
         asyncio.run(run_choice(choice))

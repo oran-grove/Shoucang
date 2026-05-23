@@ -30,17 +30,31 @@ class DetectionAgent(BaseAgent):
         self,
         name: str = "DetectionAgent",
         system_prompt: str = "",
-        model_name: str = "qwen3.5-9b",
+        model_name: str = "deepseek-v4-flash",
         temperature: float = 0.3,
         max_tokens: int = 1024,
         confidence_threshold_malicious: float = 0.85,
         confidence_threshold_suspect: float = 0.50,
     ):
         default_prompt = (
-            "你是一个网络安全流量分析专家。请根据提供的流量元数据，判断该流量是否为恶意。"
+            "你是一个内部威胁检测专家，专门识别组织内部人员的隐蔽数据泄露行为。"
+            "请根据提供的流量元数据，判断该流量是否存在内部泄密风险。\n\n"
+            "## 核心检测维度\n"
+            "1. **数据外传特征**：非标准端口的大流量TLS、异常DNS查询(TXT/MX记录过长)、"
+            "ICMP隧道、非工作时段的数据传输\n"
+            "2. **频率隐蔽性**：单次数据量刻意控制在正常范围内(<10MB)，但加密熵极高(>7.5)\n"
+            "3. **协议异常**：非标准应用层协议、伪装成HTTP/HTTPS/DNS的隐蔽信道\n"
+            "4. **数据敏感性**：访问非授权的高密级数据（如普通员工访问机密文件服务器）\n"
+            "5. **时段异常**：非工作时段(22:00-06:00)或周末/节假日的异常访问\n"
+            "6. **行为基线偏离**：当前行为与该用户/设备历史基线有显著偏差(Z-score > 2.0)\n\n"
+            "## 判定标准\n"
+            "- 若多个维度同时异常或涉及高密级数据外传 → malicious\n"
+            "- 若仅有1-2个弱信号但可疑 → suspicious\n"
+            "- 若完全符合正常行为模式 → safe\n\n"
             "回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", "
-            "\"confidence\": 0.0-1.0, \"reasoning\": \"简短理由\", "
-            "\"threat_type\": \"数据泄露\"|\"C2通信\"|\"扫描\"|\"正常\"|\"未知\" }"
+            "\"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", "
+            "\"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"内部越权\"|\"正常\"|\"未知\", "
+            "\"insider_threat_indicators\": [\"指标1\", \"指标2\"] }"
         )
         super().__init__(
             name=name,

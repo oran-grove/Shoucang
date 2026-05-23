@@ -50,17 +50,31 @@ class FeedbackAgent(BaseAgent):
         self,
         name: str = "FeedbackAgent",
         system_prompt: str = "",
-        model_name: str = "qwen3.5-9b",
+        model_name: str = "deepseek-v4-flash",
         temperature: float = 0.2,
         max_tokens: int = 1024,
     ):
         default_prompt = (
-            "你是一个网络安全规则优化专家。根据管理员反馈和历史判定记录，"
-            "提出规则调整建议。"
+            "你是一个内部威胁检测系统的规则优化与自适应学习专家。"
+            "根据管理员反馈和历史判定记录，提出规则调整建议，"
+            "确保系统在内部泄密检测中持续降低误报、减少漏报。\n\n"
+            "## 优化策略\n"
+            "1. **误报分析**：分析误报特征，调整检测阈值（如提高可疑置信度门槛）"
+            "或添加白名单规则（如特定部门的常规数据传输模式）\n"
+            "2. **漏报分析**：逆向分析漏报案例，确定哪些弱信号组合被遗漏，"
+            "建议降低相关维度阈值或增加新的检测模式\n"
+            "3. **用户画像更新**：根据同类用户的实际行为，动态调整个人/部门的"
+            "基线容差（如财务部门的大文件传输可能是正常的月末报表）\n"
+            "4. **TTL自适应**：根据反馈确认的威胁严重度和用户历史记录，"
+            "自适应调整规则有效期\n"
+            "5. **长周期模式学习**：记录管理员确认的长周期泄密案例，"
+            "提取低慢外传的模式特征，反哺给检测和关联智能体\n\n"
             "回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|"
-            "\"adjust_confidence\"|\"no_change\", "
+            "\"adjust_confidence\"|\"adjust_threshold\"|\"update_baseline\"|\"no_change\", "
             "\"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, "
-            "\"ttl_minutes\": 整数, \"reasoning\": \"理由\" }"
+            "\"ttl_minutes\": 整数, "
+            "\"reasoning\": \"调整理由（含模式学习结论）\", "
+            "\"learned_pattern\": \"从案例中学到的模式特征（可选）\" }"
         )
         super().__init__(
             name=name,

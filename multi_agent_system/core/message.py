@@ -56,6 +56,10 @@ class RuleAction(Enum):
 class FlowEvent:
     """
     流量事件：从 P4 交换机镜像/遥测获得的单流元数据。
+
+    2026-05 增强：新增内部威胁检测所需字段
+    - 用户/部门/数据密级维度
+    - 行为基线偏离度量
     """
     flow_id: str = field(default_factory=lambda: uuid4().hex[:12])
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -74,25 +78,56 @@ class FlowEvent:
     tls_sni: Optional[str] = None
     ja4_fingerprint: Optional[str] = None
     dns_query: Optional[str] = None
-    # 扩展字段
+
+    # === 内部威胁检测扩展字段（2026-05） ===
+    user_id: str = ""                 # 关联用户 / 员工 ID（如 LDAP/SSO 账号）
+    department: str = ""              # 所属部门（研发/财务/人事/运维…）
+    data_sensitivity: str = ""        # 访问/传输数据的密级标签（公开/内部/机密/绝密/DLP标签）
+    asset_type: str = ""              # 目标资产类型（文件服务器/数据库/邮件系统/云存储/SaaS）
+    work_hours_violation: bool = False  # 是否在非工作时段（如 22:00–06:00 或周末）
+    historical_frequency_zscore: float = 0.0  # 频率与历史基线的 Z-score 偏离度
+    historical_volume_zscore: float = 0.0     # 数据量与历史基线的 Z-score 偏离度
+
+    # 扩展字段（向后兼容）
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_prompt_text(self) -> str:
-        """转为 LLM 提示文本"""
-        return (
-            f"流量ID: {self.flow_id}\n"
-            f"时间: {self.timestamp.isoformat()}\n"
-            f"源IP: {self.src_ip}:{self.src_port}\n"
-            f"目的IP: {self.dst_ip}:{self.dst_port}\n"
-            f"协议: {self.protocol}/{self.app_protocol}\n"
-            f"报文数: {self.pkt_count}, 字节数: {self.byte_count}\n"
-            f"持续时间: {self.duration_seconds:.2f}s\n"
-            f"平均包长: {self.avg_pkt_size:.1f} bytes\n"
-            f"载荷熵: {self.entropy_score:.2f}\n"
-            + (f"TLS SNI: {self.tls_sni}\n" if self.tls_sni else "")
-            + (f"JA4: {self.ja4_fingerprint}\n" if self.ja4_fingerprint else "")
-            + (f"DNS查询: {self.dns_query}\n" if self.dns_query else "")
-        )
+        """转为 LLM 提示文本（含内部威胁扩展字段）"""
+        lines = [
+            f"流量ID: {self.flow_id}",
+            f"时间: {self.timestamp.isoformat()}",
+            f"源IP: {self.src_ip}:{self.src_port}",
+            f"目的IP: {self.dst_ip}:{self.dst_port}",
+            f"协议: {self.protocol}/{self.app_protocol}",
+            f"报文数: {self.pkt_count}, 字节数: {self.byte_count}",
+            f"持续时间: {self.duration_seconds:.2f}s",
+            f"平均包长: {self.avg_pkt_size:.1f} bytes",
+            f"载荷熵: {self.entropy_score:.2f}",
+        ]
+        if self.tls_sni:
+            lines.append(f"TLS SNI: {self.tls_sni}")
+        if self.ja4_fingerprint:
+            lines.append(f"JA4: {self.ja4_fingerprint}")
+        if self.dns_query:
+            lines.append(f"DNS查询: {self.dns_query}")
+
+        # 内部威胁扩展字段（仅非空时输出）
+        if self.user_id:
+            lines.append(f"用户ID: {self.user_id}")
+        if self.department:
+            lines.append(f"部门: {self.department}")
+        if self.data_sensitivity:
+            lines.append(f"数据密级: {self.data_sensitivity}")
+        if self.asset_type:
+            lines.append(f"目标资产: {self.asset_type}")
+        if self.work_hours_violation:
+            lines.append("⚠ 非工作时段操作")
+        if self.historical_frequency_zscore != 0.0:
+            lines.append(f"频率偏离(Z): {self.historical_frequency_zscore:.2f}")
+        if self.historical_volume_zscore != 0.0:
+            lines.append(f"数据量偏离(Z): {self.historical_volume_zscore:.2f}")
+
+        return "\n".join(lines)
 
 
 @dataclass

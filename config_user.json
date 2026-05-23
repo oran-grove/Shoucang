@@ -1,7 +1,7 @@
 {
   "_comment": "多智能体反泄密系统 — 用户配置文件",
   "_description": "此文件覆盖 config_default.json 中的对应字段。请在下方填入必要信息。",
-  "_version": "1.1",
+  "_version": "2.0",
 
   "backends": {
     "openai": {
@@ -25,8 +25,8 @@
   },
 
   "detection": {
-    "backend": "lmstudio",
-    "model_name": "qwen3.5-9b",
+    "backend": "deepseek",
+    "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 1024,
     "confidence_threshold_malicious": 0.85,
@@ -34,24 +34,43 @@
   },
 
   "correlation": {
-    "backend": "lmstudio",
-    "model_name": "qwen3.5-9b",
+    "backend": "deepseek",
+    "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 2048,
     "min_records_to_correlate": 5
   },
 
   "judgment": {
-    "backend": "lmstudio",
-    "model_name": "qwen3.5-9b",
+    "backend": "deepseek",
+    "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 2048
   },
 
   "feedback": {
-    "backend": "lmstudio",
-    "model_name": "qwen3.5-9b",
+    "backend": "deepseek",
+    "model_name": "deepseek-v4-flash",
     "temperature": 0.2,
     "max_tokens": 1024
+  },
+
+  "slow_brain": {
+    "baseline_profiling": {
+      "backend": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "temperature": 0.2,
+      "max_tokens": 2048,
+      "update_interval_hours": 24,
+      "max_baseline_age_days": 90
+    },
+    "temporal_anomaly": {
+      "backend": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "default_window_days": 30,
+      "slice_size_hours": 6
+    }
   }
 }

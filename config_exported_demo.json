@@ -1,0 +1,89 @@
+{
+  "backends": {
+    "openai": {
+      "model_name": "gpt-4o-mini",
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 60.0,
+      "max_retries": 3
+    },
+    "lmstudio": {
+      "model_name": "qwen3.5-9b",
+      "api_base": "http://localhost:1234/v1",
+      "api_key": "lm-studio",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 120.0,
+      "max_retries": 2,
+      "auto_load": true,
+      "load_config": {
+        "context_length": 16384,
+        "eval_batch_size": 512,
+        "flash_attention": true,
+        "num_experts": null,
+        "offload_kv_cache_to_gpu": true,
+        "echo_load_config": false
+      }
+    },
+    "deepseek": {
+      "model_name": "deepseek-v4-flash",
+      "api_base": "https://api.deepseek.com",
+      "api_key": "",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "timeout": 120.0,
+      "max_retries": 5,
+      "thinking_enabled": null,
+      "reasoning_effort": null,
+      "include_reasoning": false
+    }
+  },
+  "detection": {
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "system_prompt": "你是一个内部威胁检测专家，专门识别组织内部人员的隐蔽数据泄露行为。请根据提供的流量元数据，判断该流量是否存在内部泄密风险。\n\n## 核心检测维度\n1. **数据外传特征**：非标准端口的大流量TLS、异常DNS查询(TXT/MX记录过长)、ICMP隧道、非工作时段的数据传输\n2. **频率隐蔽性**：单次数据量刻意控制在正常范围内(<10MB)，但加密熵极高(>7.5)\n3. **协议异常**：非标准应用层协议、伪装成HTTP/HTTPS/DNS的隐蔽信道\n4. **数据敏感性**：访问非授权的高密级数据（如普通员工访问机密文件服务器）\n5. **时段异常**：非工作时段(22:00-06:00)或周末/节假日的异常访问\n6. **行为基线偏离**：当前行为与该用户/设备历史基线有显著偏差(Z-score > 2.0)\n\n## 判定标准\n- 若多个维度同时异常或涉及高密级数据外传 → malicious\n- 若仅有1-2个弱信号但可疑 → suspicious\n- 若完全符合正常行为模式 → safe\n\n回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", \"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", \"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"内部越权\"|\"正常\"|\"未知\", \"insider_threat_indicators\": [\"指标1\", \"指标2\"] }",
+    "temperature": 0.3,
+    "max_tokens": 1024,
+    "max_context_tokens": 4096,
+    "confidence_threshold_malicious": 0.85,
+    "confidence_threshold_suspect": 0.5
+  },
+  "correlation": {
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "system_prompt": "你是一个内部威胁关联分析专家。给定一组来自同一源IP或同类特征的流量记录，请判断它们之间是否存在关联的内部泄密行为模式。重点关注：（1）同一用户在短时间内的多维度越权行为组合（2）碎片化数据分片外传模式（3）短窗口内目标资产/数据密级的变化模式。\n\n回复格式：{ \"is_correlated\": true|false, \"correlation_type\": \"数据外传\"|\"横向移动\"|\"C2心跳\"|\"内部越权\"|\"分片外传\"|\"无关联\", \"confidence\": 0.0-1.0, \"reasoning\": \"分析逻辑\" }",
+    "temperature": 0.3,
+    "max_tokens": 2048,
+    "correlation_window_minutes": 30,
+    "min_records_to_correlate": 5
+  },
+  "judgment": {
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "system_prompt": "你是一个内部威胁综合研判专家，专门评估长周期、低频率、高隐蔽性的内部泄密行为。请综合单流检测结果、关联分析结果、行为基线偏离度、时序异常评分，给出最终的威胁判定和处置建议。\n\n## 研判核心原则\n1. **弱信号聚合**：单一维度可疑不足为据，但多个弱信号叠加可能构成明确威胁。例如：非工作时段(1分) + 高熵加密(1分) + 访问高密级数据(1分) + 频率Z-score>2(1分) → 综合研判升级\n2. **长周期视角**：短时间窗口看不出问题不代表安全，需结合7d/30d的基线偏离和时序异常。单次传输5MB可能是正常，连续30天每晚传输5MB就是明显的泄密\n3. **用户画像**：同一行为对开发人员正常，对财务人员异常。结合部门/角色/数据密级维度判定\n4. **误报宽容度**：内部威胁检测宁可多报不可漏报，但需合理标注置信度\n\n## 严重度判定标准\n- **critical**: 确认高密级(机密/绝密)数据外传，或累计外传>100MB，或持续>30天\n- **high**: 疑似数据外传+多个弱信号(4+)，或累计外传>50MB，或持续>7天\n- **medium**: 可疑行为+2-3个弱信号，或短期异常但无明显数据泄露证据\n- **low**: 仅有1个弱信号，或轻微偏离基线，需持续观察\n- **info**: 单次异常但无规律，降级观察\n\n回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\"|\"info\", \"confidence\": 0.0-1.0, \"recommended_action\": \"block\"|\"monitor\"|\"allow\"|\"quarantine\", \"reasoning\": \"综合研判逻辑（请逐一列出各维度评分和最终聚合逻辑）\", \"evidence_summary\": [\"证据1\", \"证据2\"], \"weak_signal_score\": 整数(0-10), \"rule_ttl_minutes\": 整数 }",
+    "temperature": 0.3,
+    "max_tokens": 2048
+  },
+  "feedback": {
+    "enabled": true,
+    "backend": "lmstudio",
+    "model_name": "qwen3.5-9b",
+    "system_prompt": "你是一个内部威胁检测系统的规则优化与自适应学习专家。根据管理员反馈和历史判定记录，提出规则调整建议，确保系统在内部泄密检测中持续降低误报、减少漏报。\n\n## 优化策略\n1. **误报分析**：分析误报特征，调整检测阈值（如提高可疑置信度门槛）或添加白名单规则（如特定部门的常规数据传输模式）\n2. **漏报分析**：逆向分析漏报案例，确定哪些弱信号组合被遗漏，建议降低相关维度阈值或增加新的检测模式\n3. **用户画像更新**：根据同类用户的实际行为，动态调整个人/部门基线容差（如财务部门的大文件传输可能是正常的月末报表）\n4. **TTL自适应**：根据反馈确认的威胁严重度和用户历史记录，自适应调整规则有效期\n5. **长周期模式学习**：记录管理员确认的长周期泄密案例，提取低慢外传的模式特征，反哺给检测和关联智能体\n\n回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|\"adjust_confidence\"|\"adjust_threshold\"|\"update_baseline\"|\"no_change\", \"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, \"ttl_minutes\": 整数, \"reasoning\": \"调整理由（含模式学习结论）\", \"learned_pattern\": \"从案例中学到的模式特征（可选）\" }",
+    "temperature": 0.2,
+    "max_tokens": 1024
+  },
+  "knowledge_base": {
+    "max_rules": 100000,
+    "blacklist_default_ttl_minutes": 1440,
+    "whitelist_default_ttl_minutes": 10080,
+    "cleanup_interval_seconds": 300,
+    "confidence_threshold_block": 0.85,
+    "confidence_threshold_suspect": 0.5
+  },
+  "max_queue_size": 10000
+}

@@ -66,6 +66,16 @@ class Orchestrator:
     def _init_backends(self) -> None:
         """根据配置创建 LLM 后端实例"""
         for backend_type, backend_cfg in self.config.default_backends.items():
+            # ── 云端后端需要 API Key，若为空则跳过 ──
+            if backend_type in (BackendType.OPENAI, BackendType.DEEPSEEK):  # type: ignore[attr-defined]
+                if not backend_cfg.api_key or not backend_cfg.api_key.strip():
+                    logger.warning(
+                        "后端 [%s] 缺少 API Key，跳过初始化。"
+                        "请在 config_user.json 的 backends.%s.api_key 中填入有效密钥。",
+                        backend_type.value, backend_type.value,
+                    )
+                    continue
+
             if backend_type == BackendType.OPENAI:
                 backend = OpenAIBackend(
                     api_base=backend_cfg.api_base,
