@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 冷表处理器：从 UDP 9999 接收原代码发送的冷/热表 JSON，
-遍历冷表解析第六位 P4 寄存器原始数据，与热表合并后写入共享内存。
+遍历冷表解析第六位 P4 寄存器原始数据，与热表合并后写入数据库。
+内置零拷贝写入：queue.Queue → DB背景攒批线程，无JSON序列化，无内存拷贝。
 独立于原代码运行，不修改任何原有文件。
 
 合并规则（冷表 hash_idx 在热表中存在）：
@@ -331,111 +332,22 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 
 
 # ============================================================
-# 5. 共享内存写入
+# 5. 数据库写入（零拷贝：queue.Queue + 后台攒批线程）
 # ============================================================
-SHM_NAME = "packet_queue"
-MAX_PACKETS = 1000
-PACKET_SIZE = 4096
-HEADER_SIZE = 12
+# 旧版的共享内存方案（SHM_NAME/MAX_PACKETS/PACKET_SIZE/HEADER_SIZE）
+# 已被移除，改为进程内 queue.Queue 直传 dict。
+# 数据流: ColdTableProcessor → queue.Queue → DB写入线程 → MySQL
+# dict 直接引用传递，无 JSON 序列化，无内存拷贝。
+# 详见 database/writer.py
 
-
-def _init_shared_memory():
-    """连接或创建共享内存，返回 SharedMemory 对象。"""
-    try:
-        from multiprocessing import shared_memory
-    except ImportError:
-        print("⚠️ multiprocessing.shared_memory 不可用")
-        return None
-
-    try:
-        shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
-        print(f"✅ 已连接到共享内存: {SHM_NAME}")
-    except FileNotFoundError:
-        total_size = HEADER_SIZE + MAX_PACKETS * PACKET_SIZE
-        shm = shared_memory.SharedMemory(name=SHM_NAME, create=True, size=total_size)
-        shm.buf[0:4] = (0).to_bytes(4, byteorder='little')
-        shm.buf[4:8] = (0).to_bytes(4, byteorder='little')
-        shm.buf[8:12] = (0).to_bytes(4, byteorder='little')
-        print(f"✅ 已创建共享内存: {SHM_NAME} ({total_size} 字节)")
-    except Exception as e:
-        print(f"❌ 共享内存初始化失败: {e}")
-        return None
-
-    return shm
-
-
-def write_to_shared_memory(result_table: dict):
-    """
-    将结果表写入共享内存。
-    每次写入前检测待处理包数，若为 0 则清空内存后再写。
-    """
-    if not result_table:
-        print("📭 结果表为空，跳过共享内存写入")
-        return
-
-    shm = _init_shared_memory()
-    if shm is None:
-        _fallback_save_json(result_table)
-        return
-
-    try:
-        count = int.from_bytes(shm.buf[8:12], byteorder='little')
-
-        if count == 0:
-            print("🧹 待处理包数为 0，清空内存后写入")
-        else:
-            print(f"⚠️ 共享内存中仍有 {count} 条未消费数据，将覆盖")
-
-        # 无论是否已消费，都重置读写指针从头写入
-        shm.buf[0:4] = (0).to_bytes(4, byteorder='little')
-        shm.buf[4:8] = (0).to_bytes(4, byteorder='little')
-
-        write_pos = 0
-        written = 0
-        for _, row in result_table.items():
-            if written >= MAX_PACKETS:
-                print(f"⚠️ 达到最大包数 {MAX_PACKETS}，截断")
-                break
-
-            data = json.dumps(row, ensure_ascii=False).encode('utf-8')
-            if len(data) > PACKET_SIZE - 4:
-                print(f"⚠️ 数据包过大 ({len(data)} 字节)，跳过")
-                continue
-
-            offset = HEADER_SIZE + write_pos * PACKET_SIZE
-            shm.buf[offset:offset + 4] = len(data).to_bytes(4, byteorder='little')
-            shm.buf[offset + 4:offset + 4 + len(data)] = data
-
-            write_pos = (write_pos + 1) % MAX_PACKETS
-            written += 1
-
-        shm.buf[0:4] = write_pos.to_bytes(4, byteorder='little')
-        shm.buf[8:12] = written.to_bytes(4, byteorder='little')
-
-        print(f"✅ 已写入共享内存，共 {written} 条")
-
-    except Exception as e:
-        print(f"❌ 共享内存写入异常: {e}")
-        _fallback_save_json(result_table)
-    finally:
-        shm.close()
-
-
-def _fallback_save_json(result_table: dict):
-    """共享内存不可用时本地 JSON 兜底。"""
-    import os
-    filepath = "fallback_result.json"
-    serializable = {str(k): v for k, v in result_table.items()}
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(serializable, f, ensure_ascii=False, indent=2)
-    print(f"💾 已保存至本地: {filepath}")
+from database.writer import start_db_writer, stop_db_writer
 
 
 # ============================================================
 # 6. UDP 接收与主循环
 # ============================================================
 class ColdTableProcessor:
-    """监听 UDP 端口，接收冷/热表，合并后写入共享内存。"""
+    """监听 UDP 端口，接收冷/热表，合并后写入数据库（零拷贝 queue.Queue）。"""
 
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -443,6 +355,9 @@ class ColdTableProcessor:
         self.running = True
         self.lock = threading.Lock()
         self._last_employee_refresh = 0
+
+        # 启动后台数据库写入线程（零拷贝 queue.Queue）
+        self.write_queue, self.stop_event = start_db_writer()
 
     def handle_payload(self, data: bytes):
         try:
@@ -459,7 +374,11 @@ class ColdTableProcessor:
         with self.lock:
             result = process_tables(unanalyzed, analyzed)
             if result:
-                write_to_shared_memory(result)
+                # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
+                for row in result.values():
+                    self.write_queue.put(row)
+                print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
+
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
             print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
 
@@ -476,7 +395,7 @@ class ColdTableProcessor:
         fetch_ip_dept_map()
 
         print(f"🚀 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
-        print(f"   共享内存: {SHM_NAME} (MAX_PACKETS={MAX_PACKETS}, PACKET_SIZE={PACKET_SIZE})")
+        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
         print(f"   员工库: {API_SERVER_URL}/api/ip_map")
 
         import time
@@ -496,6 +415,7 @@ class ColdTableProcessor:
                 print(f"⚠️ 异常: {e}")
 
         self.sock.close()
+        stop_db_writer(self.stop_event)
         print("🛑 已停止")
 
 

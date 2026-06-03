@@ -17,11 +17,10 @@ DB_CONFIG = {
     'charset': 'utf8mb4'
 }
 
-# ==================== 共享内存配置 ====================
-SHM_NAME = "packet_queue"
-MAX_PACKETS = 1000
-PACKET_SIZE = 4096
-HEADER_SIZE = 12
+# ==================== 数据库批量写入配置 ====================
+# 数据标注 → 数据库写入的攒批参数
+DB_WRITE_BATCH_SIZE = 100          # 每批最多累积多少条后写入
+DB_WRITE_FLUSH_INTERVAL = 5.0      # 最多等待多少秒后强制写入（秒）
 
 # ==================== 配置文件路径 ====================
 import os
