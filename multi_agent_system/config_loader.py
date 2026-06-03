@@ -28,7 +28,7 @@ from pathlib import Path
 from copy import deepcopy
 from typing import Any, Optional
 
-from multi_agent_system.config import (
+from .config import (
     BackendType,
     LLMBackendConfig,
     DetectionAgentConfig,
