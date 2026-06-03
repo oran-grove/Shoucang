@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>layui</title>
+    <meta name="renderer" content="webkit">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="../../lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="../../css/public.css" media="all">
+    <style>
+        body {
+            background-color: #ffffff;
+        }
+        .layui-form-label {
+            float: none;
+            display: block;
+            width: auto;
+            text-align: left;
+            padding: 9px 0 5px 0;
+        }
+        .layui-input-block {
+            margin-left: 0;
+        }
+    </style>
+</head>
+<body>
+<div class="layui-form layuimini-form">
+    <input type="hidden" name="original_number" id="original_number" value="">
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">id</label>
+        <div class="layui-input-block">
+            <input type="text" name="id" lay-verify="required"  value="" class="layui-input">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">ip_address</label>
+        <div class="layui-input-block">
+            <input type="text" name="ip_address" lay-verify="required" value="" class="layui-input">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">port</label>
+        <div class="layui-input-block">
+            <input type="text" name="port" lay-verify="required" value="" class="layui-input">
+        </div>
+    </div>
+    <div class="layui-form-item">
+    <label class="layui-form-label">单行选择框</label>
+    <div class="layui-input-block">
+      <select name="trust_level" lay-filter="aihao">
+        <option value=""></option>
+        <option value="0">低</option>
+        <option value="1" selected>中</option>
+        <option value="2">高</option>
+      </select>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">reason</label>
+        <div class="layui-input-block">
+            <input type="text" name="reason" lay-verify="required" value="" class="layui-input">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <div class="layui-input-block">
+            <button class="layui-btn layui-btn-normal" lay-submit lay-filter="saveBtn">确认保存</button>
+        </div>
+    </div>
+</div>
+</div>
+<script src="../../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+<script>
+        var apiUrl = 'http://127.0.0.1:5000/api/whitelist';
+
+        function formatDateTime(date) {
+            var y = date.getFullYear();
+            var m = ('0' + (date.getMonth() + 1)).slice(-2);
+            var d = ('0' + date.getDate()).slice(-2);
+            var h = ('0' + date.getHours()).slice(-2);
+            var min = ('0' + date.getMinutes()).slice(-2);
+            var s = ('0' + date.getSeconds()).slice(-2);
+            return y + '-' + m + '-' + d + ' ' + h + ':' + min + ':' + s;
+        }
+
+        layui.use(['form'], function () {
+            var form = layui.form,
+                layer = layui.layer;
+
+            form.on('submit(saveBtn)', function (data) {
+                data.field.created_at = formatDateTime(new Date());
+
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data.field)
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error('网络响应错误');
+                    return response.json();
+                })
+                .then(function() {
+                    layer.msg('保存成功', { icon: 1 }, function () {
+                        var iframeIndex = parent.layer.getFrameIndex(window.name);
+                        parent.layer.close(iframeIndex);
+                        parent.location.reload();
+                    });
+                })
+                .catch(function(error) {
+                    console.error('提交失败:', error);
+                    layer.msg('提交失败: ' + error.message, { icon: 2 });
+                });
+
+                return false;
+            });
+        });
+    </script>
+</body>
+</html>

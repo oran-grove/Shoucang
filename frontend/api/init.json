@@ -1,0 +1,100 @@
+{
+  "homeInfo": {
+    "title": "首页",
+    "href": "page/welcome-1.html"
+  },
+  "logoInfo": {
+    "title": "LAYUI MINI",
+    "image": "images/logo.png",
+    "href": ""
+  },
+  "menuInfo": [
+    {
+      "title": "",
+      "icon": "fa fa-address-book",
+      "href": "",
+      "target": "_self",
+      "child": [
+        {
+          "title": "首页",
+          "href": "page/welcome-1.html",
+          "icon": "fa fa-home",
+          "target": "_self"
+        },
+        {
+          "title": "智能体配置",
+          "href": "page/zntpz.html",
+          "icon": "fa fa-window-maximize",
+          "target": "_self"
+        },
+        {
+          "title": "员工管理",
+          "href": "page/management.html",
+          "icon": "fa fa-gears",
+          "target": "_self"
+        },
+        {
+          "title": "api管理",
+          "href": "page/table.html",
+          "icon": "fa fa-file-text",
+          "target": "_self"
+        },
+        {
+          "title": "IP管理",
+          "href": "",
+          "icon": "fa fa-shield",
+          "target": "_self",
+          "child": [
+            {
+              "title": "黑名单管理",
+              "href": "page/ip_blacklist.html",
+              "icon": "fa fa-ban",
+              "target": "_self"
+            },
+            {
+              "title": "白名单管理",
+              "href": "page/ip_whitelist.html",
+              "icon": "fa fa-check-circle",
+              "target": "_self"
+            }
+          ]
+        },
+
+        {
+          "title": "异常页面",
+          "href": "",
+          "icon": "fa fa-exclamation-circle",
+          "target": "_self",
+          "child": [
+            {
+              "title": "404页面",
+              "href": "page/404.html",
+              "icon": "fa fa-hourglass-end",
+              "target": "_self"
+            }
+          ]
+        },
+        {
+          "title": "其它界面",
+          "href": "",
+          "icon": "fa fa-snowflake-o",
+          "target": "",
+          "child": [
+            {
+              "title": "按钮示例",
+              "href": "page/button.html",
+              "icon": "fa fa-snowflake-o",
+              "target": "_self"
+            },
+            {
+              "title": "弹出层",
+              "href": "page/layer.html",
+              "icon": "fa fa-shield",
+              "target": "_self"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
