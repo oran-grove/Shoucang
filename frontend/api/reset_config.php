@@ -6,8 +6,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-$defaultFile = __DIR__ . '/config_default.json';
-$userFile = __DIR__ . '/config_user.json';
+$defaultFile = __DIR__ . '/../../config/config_default.json';
+$userFile = __DIR__ . '/../../config/config_user.json';
 
 if (!file_exists($defaultFile)) {
     echo json_encode(['code' => 500, 'msg' => '默认配置文件不存在'], JSON_UNESCAPED_UNICODE);

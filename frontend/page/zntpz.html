@@ -256,7 +256,7 @@
         var $ = layui.$;
 
         // 加载配置并填充表单
-        $.getJSON('../api/config_user.json', function (config) {
+        $.getJSON('../api/get_config.php', function (config) {
             ['detection', 'correlation', 'judgment', 'feedback'].forEach(function (section) {
                 var data = config[section];
                 if (data) {

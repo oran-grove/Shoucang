@@ -6,7 +6,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-$configFile = __DIR__ . '/config_user.json';
+$configFile = __DIR__ . '/../../config/config_user.json';
 
 if (!file_exists($configFile)) {
     echo json_encode(['code' => 500, 'msg' => '配置文件不存在'], JSON_UNESCAPED_UNICODE);

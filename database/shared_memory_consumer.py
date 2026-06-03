@@ -5,24 +5,26 @@
 """
 
 import json
+import sys
+from pathlib import Path
+
+# 确保项目根目录在 sys.path 中
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import pymysql
 from datetime import datetime
 from multiprocessing import shared_memory
 
-# ==================== 数据库配置 ====================
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '2005jjayyayyAX',  # ← 改成你的MySQL密码
-    'database': 'insider_threat_db',
-    'charset': 'utf8mb4'
-}
-
-# ==================== 共享内存配置 ====================
-SHM_NAME = "packet_queue"
-MAX_PACKETS = 1000
-PACKET_SIZE = 4096
-HEADER_SIZE = 12
+# ==================== 统一配置引用 ====================
+from config.shared_config import (
+    DB_CONFIG,
+    SHM_NAME,
+    MAX_PACKETS,
+    PACKET_SIZE,
+    HEADER_SIZE,
+)
 
 
 # ==================== 存储函数 ====================
