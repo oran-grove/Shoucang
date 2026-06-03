@@ -65,6 +65,7 @@ def store_packet(packet):
 def read_from_shared_memory():
     """读取共享内存中的数据"""
     # 连接共享内存
+    shm = None
     try:
         shm = shared_memory.SharedMemory(name=SHM_NAME, create=False)
         print(f"✅ 已连接到共享内存: {SHM_NAME}")
@@ -76,7 +77,7 @@ def read_from_shared_memory():
         print(f"❌ 连接失败: {e}")
         return None
 
-    # 获取数据包数量
+    # 到这里 shm 必然不为 None（否则已 return）
     try:
         count = int.from_bytes(shm.buf[8:12], byteorder='little')
         print(f"📊 待处理数据包数量: {count}")

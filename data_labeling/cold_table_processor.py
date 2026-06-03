@@ -23,6 +23,7 @@
 import socket
 import json
 import threading
+from typing import Any
 
 # ============================================================
 # 0. 可配置参数
@@ -72,7 +73,7 @@ def parse_raw_p4_hex(hex_str: str) -> dict:
 # ============================================================
 # 2. GeoIP 国家查询
 # ============================================================
-_geoip_reader = None
+_geoip_reader: Any = None
 
 
 def _init_geoip():
@@ -104,7 +105,8 @@ def lookup_country(ip: str) -> str:
         data = _geoip_reader.get(ip)
         if data is None:
             return ""
-        return data.get("country", {}).get("names", {}).get("en", "")
+        # maxminddb 返回 Record（dict-like），类型检查忽略即可
+        return data.get("country", {}).get("names", {}).get("en", "")  # type: ignore[union-attr,return-value]
     except Exception:
         return ""
 
@@ -131,10 +133,7 @@ def update_geoip_db():
     """
     import gzip
     import shutil
-    try:
-        from urllib.request import urlopen
-    except ImportError:
-        from urllib2 import urlopen
+    from urllib.request import urlopen
 
     print(f"⬇️ 正在下载 GeoIP 数据库: {GEOIP_DOWNLOAD_URL}")
     try:
@@ -173,7 +172,7 @@ def update_geoip_db():
 # ============================================================
 API_SERVER_URL = "http://127.0.0.1:5000"
 
-_employee_cache = {}  # ip → (name, department)
+_employee_cache: dict = {}  # ip → (name, department)
 
 
 def fetch_ip_dept_map() -> dict:
@@ -182,10 +181,7 @@ def fetch_ip_dept_map() -> dict:
     Returns: {ip: (name, department), ...}
     """
     global _employee_cache
-    try:
-        from urllib.request import urlopen
-    except ImportError:
-        from urllib2 import urlopen
+    from urllib.request import urlopen
 
     try:
         resp = urlopen(f"{API_SERVER_URL}/api/ip_map", timeout=10)
