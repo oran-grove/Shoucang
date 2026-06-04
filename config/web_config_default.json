@@ -128,5 +128,23 @@
     "confidence_threshold_suspect": 0.50
   },
 
+  "live_scan": {
+    "_comment": "第一类智能体：逐条评判队列扫描 — 实时从 DB 拉取未分析记录逐条研判",
+    "enabled": true,
+    "scan_interval_seconds": 5.0,
+    "batch_size": 50,
+    "max_concurrent_analyses": 3,
+    "start_from": "oldest"
+  },
+
+  "retrospective_scan": {
+    "_comment": "第二类智能体：长周期员工行为回溯检查 — 定时扫描长期历史数据",
+    "enabled": true,
+    "frequency_minutes": 60,
+    "lookback_days": 30,
+    "entities_per_cycle": 10,
+    "slice_hours": 6
+  },
+
   "max_queue_size": 10000
 }

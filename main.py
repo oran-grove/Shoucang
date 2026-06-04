@@ -12,6 +12,7 @@
 
   Layer 2 — 快脑智能体层 (multi_agent_system)
     - 多智能体编排器：检测/关联/研判/反馈全流程
+    - LiveScanOrchestrator：逐条评判队列扫描（从DB拉取逐一分析）
     - 本地 LLM (LM Studio) 或云端 API (OpenAI / DeepSeek) 后端
 
   Layer 3 — 慢脑智能体层 (multi_agent_system slow_brain)
@@ -30,6 +31,7 @@
   使用方式：
       python main.py                        # 全量启动
       python main.py --no-slow-brain        # 禁用慢脑层
+      python main.py --no-live-scan         # 禁用逐条评判扫描
       python main.py --no-llm               # 禁用 LLM 智能体（仅 P4 + 数据标注）
       python main.py --dry-run              # 仅打印启动信息，不实际运行
 
@@ -50,6 +52,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from multi_agent_system import MultiAgentSystem
+from multi_agent_system.orchestrators.live_scan_orchestrator import (
+    LiveScanOrchestrator,
+)
 
 # ============================================================
 # 日志配置
@@ -112,6 +119,7 @@ _global_state = {
     "db_stop_event": None,
     "p4_controller_ready": threading.Event(),
     "shutdown_requested": threading.Event(),
+    "live_scanner": None,
 }
 
 
@@ -125,7 +133,7 @@ def print_banner():
 |          P4 异构多智能体反泄密平台 -- 系统启动中...                          |
 |                                                                            |
 |  Layer 1  P4 硬件层        -> pynng 探针 + Flask API(:5000) + 100s 遥测    |
-|  Layer 2  快脑智能体层      -> 多智能体编排 (检测/关联/研判/反馈)             |
+|  Layer 2  快脑智能体层      -> 多智能体编排 + 逐条评判队列扫描              |
 |  Layer 3  慢脑智能体层      -> 基线画像 + 时序异常 + 长周期深度分析            |
 |  Layer 4  统一管理面        -> ColdTableProcessor UDP:9999 + MySQL 攒批写入  |
 |  跨层联动  策略反哺          -> 慢脑生成策略 -> 快脑阈值更新 / P4 流表下发     |
@@ -207,13 +215,19 @@ def _patch_control_timer():
 # ============================================================
 # Layer 2: 快脑智能体层启动
 # ============================================================
-async def start_fast_brain(enable_llm: bool = True) -> bool:
+async def start_fast_brain(
+    enable_llm: bool = True,
+    enable_live_scan: bool = True,
+) -> bool:
     """
-    启动多智能体编排器（快脑层）。
-    如果 enable_llm=False 则跳过，系统仍可运行 P4 + 数据标注。
+    启动多智能体编排器（快脑层）+ 逐条评判队列扫描器。
+
+    Args:
+        enable_llm: 是否启用 LLM 智能体
+        enable_live_scan: 是否启用逐条评判扫描（独立于 enable_llm）
 
     Returns:
-        bool: 是否成功启动
+        bool: 快脑编排器是否成功启动
     """
     if not enable_llm:
         _logger.info(_yellow("[Layer 2] 快脑智能体层已跳过 (--no-llm)"))
@@ -221,7 +235,6 @@ async def start_fast_brain(enable_llm: bool = True) -> bool:
 
     _logger.info(_cyan("[Layer 2] 启动快脑智能体层..."))
     try:
-        from multi_agent_system import MultiAgentSystem
         from config.loader import load_config
 
         # 加载配置（默认 + 用户覆盖）
@@ -248,6 +261,40 @@ async def start_fast_brain(enable_llm: bool = True) -> bool:
         _logger.info(
             f"[Layer 2]   研判: {config.judgment.backend.value}/{config.judgment.model_name}"
         )
+
+        # ---- 启动 LiveScanOrchestrator（逐条评判队列扫描） ----
+        if enable_live_scan and hasattr(config, "live_scan"):
+            live_scanner = LiveScanOrchestrator(
+                orchestrator=system._orchestrator,
+                config=config.live_scan,
+            )
+            _global_state["live_scanner"] = live_scanner
+
+            if config.live_scan.enabled:
+                await live_scanner.start()
+                _logger.info(
+                    _green(
+                        "[Layer 2]   逐条评判扫描已启动 "
+                        f"(起始ID={live_scanner.last_processed_id}, "
+                        f"间隔={config.live_scan.scan_interval_seconds}s)"
+                    )
+                )
+            else:
+                _logger.info(
+                    _yellow(
+                        "[Layer 2]   逐条评判扫描已就绪但未启动 "
+                        "(配置 enabled=false)"
+                    )
+                )
+        elif enable_live_scan:
+            _logger.info(
+                _yellow("[Layer 2]   逐条评判扫描: 配置中无 live_scan 段，跳过")
+            )
+        else:
+            _logger.info(
+                _yellow("[Layer 2]   逐条评判扫描已禁用 (--no-live-scan)")
+            )
+
         return True
 
     except Exception as e:
@@ -258,7 +305,17 @@ async def start_fast_brain(enable_llm: bool = True) -> bool:
 
 
 async def stop_fast_brain():
-    """优雅关闭快脑智能体层"""
+    """优雅关闭快脑智能体层（先停逐条扫描，再停编排器）"""
+    # 1. 先停止 LiveScanOrchestrator
+    live_scanner = _global_state.get("live_scanner")
+    if live_scanner is not None:
+        try:
+            await live_scanner.stop()
+            _logger.info(_green("[Layer 2] 逐条评判扫描已停止"))
+        except Exception as e:
+            _logger.warning(_yellow(f"[Layer 2] 停止逐条扫描时出错: {e}"))
+
+    # 2. 再停止快脑编排器
     system = _global_state.get("multi_agent_system")
     if system is not None:
         try:
@@ -492,6 +549,7 @@ def health_check_loop():
         status = {
             "p4_controller": _global_state["p4_controller_ready"].is_set(),
             "fast_brain": _global_state.get("multi_agent_system") is not None,
+            "live_scanner": _global_state.get("live_scanner") is not None,
             "slow_brain": _global_state.get("slow_brain") is not None,
             "data_labeling": _global_state.get("cold_processor") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
@@ -504,6 +562,7 @@ def health_check_loop():
             f"[HealthCheck] 系统状态: "
             f"P4={_ok(status['p4_controller'])} "
             f"快脑={_ok(status['fast_brain'])} "
+            f"逐条扫描={_ok(status['live_scanner'])} "
             f"慢脑={_ok(status['slow_brain'])} "
             f"数据标注={_ok(status['data_labeling'])} "
             f"| 运行 {status['uptime']:.0f}s"
@@ -551,8 +610,11 @@ async def async_main(args: argparse.Namespace):
     else:
         _logger.info(_yellow("[Layer 1] P4 控制器已跳过 (--no-p4)"))
 
-    # 3. Layer 2: 快脑智能体层
-    fast_brain_ready = await start_fast_brain(enable_llm=not args.no_llm)
+    # 3. Layer 2: 快脑智能体层（含逐条评判扫描）
+    fast_brain_ready = await start_fast_brain(
+        enable_llm=not args.no_llm,
+        enable_live_scan=not args.no_live_scan,
+    )
 
     # 4. Layer 3: 慢脑智能体层
     slow_brain_ready = await start_slow_brain(enable_llm=not args.no_llm)
@@ -573,6 +635,13 @@ async def async_main(args: argparse.Namespace):
     def _status(b: bool) -> str:
         return "已启动 [OK]" if b else "已跳过 [--]"
 
+    # 逐条扫描状态
+    live_scanner = _global_state.get("live_scanner")
+    live_scan_running = (
+        live_scanner is not None
+        and live_scanner.is_running
+    )
+
     print()
     print("=" * 76)
     print("*** 系统启动完成！***".center(76))
@@ -582,6 +651,9 @@ async def async_main(args: argparse.Namespace):
     )
     print(
         f"  快脑智能体       {_status(fast_brain_ready) : <40}"
+    )
+    print(
+        f"  逐条评判扫描     {_status(live_scan_running) : <40}"
     )
     print(
         f"  慢脑智能体       {_status(slow_brain_ready) : <40}"
@@ -622,7 +694,7 @@ async def async_main(args: argparse.Namespace):
             pass
         _logger.info(_green("[Layer 3] 慢脑后台上报循环已停止"))
 
-    # 2. 停止快脑智能体层
+    # 2. 停止快脑智能体层（含逐条扫描）
     await stop_fast_brain()
 
     # 3. 停止数据标注层
@@ -647,9 +719,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  python main.py                          # 全量启动 (所有4层)
+  python main.py                          # 全量启动 (所有4层 + 逐条扫描)
   python main.py --no-llm                 # 跳过 LLM 智能体 (仅 P4 + 数据标注)
   python main.py --no-slow-brain          # 跳过慢脑层
+  python main.py --no-live-scan           # 跳过逐条评判队列扫描
   python main.py --no-p4                  # 跳过 P4 控制器 (仅智能体 + 数据标注)
   python main.py --no-cold-table          # 跳过冷表处理器
   python main.py --no-p4 --no-cold-table  # 仅启动智能体层
@@ -665,6 +738,11 @@ def main():
         "--no-slow-brain",
         action="store_true",
         help="仅禁用慢脑智能体层",
+    )
+    parser.add_argument(
+        "--no-live-scan",
+        action="store_true",
+        help="禁用逐条评判队列扫描（LiveScanOrchestrator）",
     )
     parser.add_argument(
         "--no-p4",
@@ -689,13 +767,11 @@ def main():
         _logger.info(_yellow("DRY-RUN 模式 — 仅显示启动信息，不实际运行。"))
         print("\n将启动的组件:")
 
-        def _yn(b: bool, label: str = "") -> str:
-            if label:
-                return f"OK (--no-{label})" if b else "OK"
-            return "OK" if b else "--"
-
         print(f"  P4 控制器:        {'[OK]' if not args.no_p4 else '[--] (--no-p4)'}")
         print(f"  快脑智能体:       {'[OK]' if not args.no_llm else '[--] (--no-llm)'}")
+        print(
+            f"  逐条评判扫描:     {'[OK]' if not args.no_llm and not args.no_live_scan else '[--]'}"
+        )
         print(
             f"  慢脑智能体:       {'[OK]' if not args.no_llm and not args.no_slow_brain else '[--]'}"
         )

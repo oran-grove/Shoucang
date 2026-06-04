@@ -203,6 +203,26 @@ class SlowBrainConfig:
 
 
 @dataclass
+class LiveScanAgentConfig:
+    """第一类智能体：逐条评判队列扫描配置"""
+    enabled: bool = True                        # 管理员开关
+    scan_interval_seconds: float = 5.0          # 每条之间的扫描间隔（节流）
+    batch_size: int = 50                        # 每次从 DB 拉取的批量大小
+    max_concurrent_analyses: int = 3            # 最大并发分析数
+    start_from: str = "oldest"                  # "oldest" | "newest" | "last_id:N"
+
+
+@dataclass
+class RetrospectiveScanAgentConfig:
+    """第二类智能体：长周期回溯检查配置"""
+    enabled: bool = True                        # 管理员开关
+    frequency_minutes: int = 60                 # 运行频次（分钟），默认每小时
+    lookback_days: int = 30                     # 回溯天数
+    entities_per_cycle: int = 10                # 每次检查的员工数
+    slice_hours: int = 6                        # 时序切片粒度（小时）
+
+
+@dataclass
 class KnowledgeBaseConfig:
     """知识库配置"""
     max_rules: int = 100000
@@ -222,6 +242,8 @@ class OrchestratorConfig:
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
     slow_brain: SlowBrainConfig = field(default_factory=SlowBrainConfig)
     knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
+    live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
+    retrospective_scan: RetrospectiveScanAgentConfig = field(default_factory=RetrospectiveScanAgentConfig)
     # 全局后端连接池配置
     default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
     # 消息队列配置
