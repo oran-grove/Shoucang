@@ -54,9 +54,8 @@ import time
 from pathlib import Path
 
 from multi_agent_system import MultiAgentSystem
-from multi_agent_system.orchestrators.live_scan_orchestrator import (
-    LiveScanOrchestrator,
-)
+# LiveScanOrchestrator 在 start_fast_brain() 中延迟导入，
+# 避免 dry-run / --no-llm 场景引入不必要的数据库依赖
 
 # ============================================================
 # 日志配置
@@ -153,6 +152,8 @@ def start_p4_controller() -> threading.Thread:
       - 启动 pynng 子线程 (监听 P4 硬件探针报文)
       - 启动 Flask app.run() 阻塞主线程
     因此我们将其放入独立线程运行。
+
+    注意：定时器通过 _patch_control_timer() 补绑 telemetry_job 回调后启动。
     """
     _logger.info(_cyan("[Layer 1] 启动 P4 硬件控制器..."))
 
@@ -160,22 +161,18 @@ def start_p4_controller() -> threading.Thread:
         try:
             from p4_controller.control import (
                 app,
-                start_timer_thread,
                 p4_listener_thread,
             )
 
-            # 1. 启动 100 秒定时器 -> telemetry_job
-            start_timer_thread(100, None)
-
-            # 2. 启动 P4 pynng 监听子线程
+            # 1. 启动 P4 pynng 监听子线程
             threading.Thread(
                 target=p4_listener_thread, daemon=True, name="P4-Probe-Bus"
             ).start()
 
-            # 3. 通知主线程 P4 控制器已就绪
+            # 2. 通知主线程 P4 控制器已就绪
             _global_state["p4_controller_ready"].set()
 
-            # 4. Flask 阻塞运行
+            # 3. Flask 阻塞运行
             app.run(host="0.0.0.0", port=5000, use_reloader=False, debug=False)
         except Exception as e:
             _logger.error(_red(f"[Layer 1] P4 控制器启动失败: {e}"))
@@ -263,7 +260,10 @@ async def start_fast_brain(
         )
 
         # ---- 启动 LiveScanOrchestrator（逐条评判队列扫描） ----
-        if enable_live_scan and hasattr(config, "live_scan"):
+        if enable_live_scan:
+            from multi_agent_system.orchestrators.live_scan_orchestrator import (
+                LiveScanOrchestrator,
+            )
             live_scanner = LiveScanOrchestrator(
                 orchestrator=system._orchestrator,
                 config=config.live_scan,
@@ -275,7 +275,7 @@ async def start_fast_brain(
                 _logger.info(
                     _green(
                         "[Layer 2]   逐条评判扫描已启动 "
-                        f"(起始ID={live_scanner.last_processed_id}, "
+                        f"(起始ID={live_scanner._last_processed_id}, "
                         f"间隔={config.live_scan.scan_interval_seconds}s)"
                     )
                 )
@@ -286,10 +286,6 @@ async def start_fast_brain(
                         "(配置 enabled=false)"
                     )
                 )
-        elif enable_live_scan:
-            _logger.info(
-                _yellow("[Layer 2]   逐条评判扫描: 配置中无 live_scan 段，跳过")
-            )
         else:
             _logger.info(
                 _yellow("[Layer 2]   逐条评判扫描已禁用 (--no-live-scan)")
@@ -335,7 +331,7 @@ async def start_slow_brain(enable_llm: bool = True) -> bool:
     慢脑层持续在后台运行（每 analysis_interval_hours 执行一次分析）。
     """
     if not enable_llm:
-        _logger.info(_yellow("[Layer 3] 慢脑智能体层已跳过 (--no-llm)"))
+        _logger.info(_yellow("[Layer 3] 慢脑智能体层已跳过"))
         return False
 
     _logger.info(_cyan("[Layer 3] 启动慢脑智能体层..."))
@@ -617,7 +613,9 @@ async def async_main(args: argparse.Namespace):
     )
 
     # 4. Layer 3: 慢脑智能体层
-    slow_brain_ready = await start_slow_brain(enable_llm=not args.no_llm)
+    slow_brain_ready = await start_slow_brain(
+        enable_llm=not args.no_llm and not args.no_slow_brain
+    )
 
     # 5. 启动健康检查线程
     health_thread = threading.Thread(
@@ -639,7 +637,7 @@ async def async_main(args: argparse.Namespace):
     live_scanner = _global_state.get("live_scanner")
     live_scan_running = (
         live_scanner is not None
-        and live_scanner.is_running
+        and live_scanner._running
     )
 
     print()
