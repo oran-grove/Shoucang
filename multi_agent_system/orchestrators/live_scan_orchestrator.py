@@ -49,7 +49,7 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config.shared_config import DB_CONFIG  # noqa: E402
+from config.shared_config import DB_CONFIG, DbConfig  # noqa: E402
 
 _CHECKPOINT_FILE = _PROJECT_ROOT / ".live_scan_checkpoint.json"
 
@@ -70,11 +70,11 @@ class LiveScanOrchestrator:
         self,
         orchestrator,  # Orchestrator 实例
         config,  # LiveScanAgentConfig
-        db_config: Optional[dict] = None,
+        db_config: Optional[DbConfig] = None,
     ):
         self._orchestrator = orchestrator
         self._config = config
-        self._db_config = db_config or DB_CONFIG
+        self._db_config: DbConfig = db_config or DB_CONFIG
 
         self._running = False
         self._scan_task: Optional[asyncio.Task] = None
