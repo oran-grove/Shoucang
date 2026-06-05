@@ -15,10 +15,17 @@ import re
 import struct
 
 # 🔌 引入你的三大核心业务模块
-import data_packer  # 打包底座
-import analyzer  # 判官大脑
-import add_ip  # 完美对齐：户籍资产模块
-from .timer import start_timer_thread  # 独立计时器
+# 兼容两种执行模式：包内导入 (python -m p4_controller.control) / 独立运行
+try:
+    from . import data_packer  # 打包底座
+    from . import analyzer     # 判官大脑
+    from . import add_ip       # 完美对齐：户籍资产模块
+    from .timer import start_timer_thread  # 独立计时器
+except ImportError:
+    import data_packer         # type: ignore[no-redef]
+    import analyzer            # type: ignore[no-redef]
+    import add_ip              # type: ignore[no-redef]
+    from timer import start_timer_thread  # type: ignore[no-redef]
 
 app = Flask(__name__)
 
@@ -73,8 +80,6 @@ def handle_frontend_blacklist():
 # ==========================================
 # 🎬 剧情线 2：P4 探针接收 -> 打包 -> 判官 -> 拉黑 & 本地前端上报
 # ==========================================
-import traceback  # 💡 必须在 controller.py 顶部加上这一行！
-
 
 def p4_listener_thread():
     """【写文件绝杀版】彻底解决 PyCharm 缓存憋日志问题"""

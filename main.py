@@ -652,6 +652,14 @@ async def async_main(args: argparse.Namespace):
     _global_state["start_time"] = time.time()
     print_banner()
 
+    # ---- 初始化：从 MySQL 加载黑白名单/IP映射到常驻内存 ----
+    try:
+        from database import load_lists_from_db
+        load_lists_from_db()
+        _logger.info(_green("[数据库] 黑白名单 + IP-部门映射已加载到常驻内存"))
+    except Exception as e:
+        _logger.warning(_yellow(f"[数据库] 黑白名单初始化失败 (非致命): {e}"))
+
     # ---- 启动顺序 ----
 
     # 1. Layer 4: 数据标注层（独立，最先启动）

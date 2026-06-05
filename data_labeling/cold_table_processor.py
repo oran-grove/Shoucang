@@ -174,53 +174,21 @@ def update_geoip_db():
 
 
 # ============================================================
-# 3. 员工信息查询（源 IP → 员工名 + 部门，通过 API 服务器获取）
+# 3. 员工信息查询（源 IP → 员工名 + 部门）
+#    统一通过 database 模块获取（MySQL ip_dept_map 表）
+#    不再直接调用 Flask API，彻底解耦各模块间依赖
 # ============================================================
-API_SERVER_URL = "http://127.0.0.1:5000"
-
-_employee_cache: dict = {}  # ip → (name, department)
+from database import lookup_employee, get_ip_dept_map, reload_lists_after_change
 
 
-def fetch_ip_dept_map() -> dict:
+def refresh_employee_cache() -> dict:
     """
-    从 API 服务器 /api/ip_map 拉取全量 IP→员工映射。
-    Returns: {ip: (name, department), ...}
+    刷新 IP-部门映射：从 database 模块重新加载 MySQL ip_dept_map 表。
+    所有模块统一使用 database 模块提供的接口，不私自操作数据库。
+    返回最新的 {ip: (name, department), ...} 字典。
     """
-    global _employee_cache
-    from urllib.request import urlopen
-
-    try:
-        resp = urlopen(f"{API_SERVER_URL}/api/ip_map", timeout=10)
-        raw = resp.read().decode("utf-8")
-        resp.close()
-        payload = json.loads(raw)
-    except Exception as e:
-        print(f"⚠️ 获取 IP 部门映射失败: {e}")
-        return _employee_cache
-
-    if payload.get("code") != "0":
-        print(f"⚠️ API 返回异常: {payload.get('msg', '')}")
-        return _employee_cache
-
-    new_cache = {}
-    for item in payload.get("data", []):
-        ip = item.get("ip", "")
-        name = item.get("name", "")
-        dept = item.get("department", "")
-        if ip:
-            new_cache[ip] = (name, dept)
-
-    _employee_cache = new_cache
-    print(f"🔗 已从 API 加载 {len(_employee_cache)} 条 IP→员工映射")
-    return _employee_cache
-
-
-def lookup_employee(src_ip: str) -> tuple:
-    """
-    查询源 IP 对应的员工姓名和部门（从缓存中查找）。
-    Returns: (employee_name: str, department: str)
-    """
-    return _employee_cache.get(src_ip, ("", ""))
+    reload_lists_after_change()
+    return get_ip_dept_map()
 
 
 # ============================================================
@@ -393,12 +361,12 @@ class ColdTableProcessor:
 
         # 预加载 GeoIP
         _init_geoip()
-        # 预加载员工信息
-        fetch_ip_dept_map()
+        # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
+        refresh_employee_cache()
 
         print(f"🚀 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
         print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
-        print(f"   员工库: {API_SERVER_URL}/api/ip_map")
+        print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
 
         import time
         while self.running:
@@ -410,7 +378,7 @@ class ColdTableProcessor:
                 # 每 10 分钟刷新员工缓存
                 now = time.time()
                 if now - self._last_employee_refresh > 600:
-                    fetch_ip_dept_map()
+                    refresh_employee_cache()
                     self._last_employee_refresh = now
                 continue
             except Exception as e:

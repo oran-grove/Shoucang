@@ -7,13 +7,16 @@
 后台写入线程，实现 dict 直接引用传参，消除 JSON 序列化和
 共享内存拷贝的开销（三次拷贝 → 零拷贝）。
 
+注：黑白名单 / IP-部门映射管理已抽取至 database.lists_manager。
+    database 包级导入路径不变，不影响现有调用方。
+
 用法:
     from database.writer import start_db_writer, stop_db_writer
 
     # 在 ColdTableProcessor 中获取写入队列
-    write_queue = start_db_writer()
+    write_queue, stop_event = start_db_writer()
     write_queue.put(row_dict)  # dict 直接引用，零拷贝
-    stop_db_writer()
+    stop_db_writer(stop_event)
 """
 
 import sys
@@ -33,7 +36,18 @@ from config.shared_config import (
     DB_WRITE_FLUSH_INTERVAL,
 )
 
-# ==================== 单条写入（兼容旧接口） ====================
+
+# ============================================================================
+# 数据库连接（内部使用）
+# ============================================================================
+def _db_connect():
+    """建立数据库连接（调用方负责关闭）。"""
+    return pymysql.connect(**DB_CONFIG, connect_timeout=5)
+
+
+# ============================================================================
+# 单条写入（兼容旧接口）
+# ============================================================================
 def store_packet(packet):
     """存入数据库 - 按写入方字段接收"""
     conn = pymysql.connect(**DB_CONFIG)
@@ -67,7 +81,9 @@ def store_packet(packet):
         conn.close()
 
 
-# ==================== 批量写入 ====================
+# ============================================================================
+# 批量写入
+# ============================================================================
 def _store_batch(packets: list):
     """批量写入多条数据包到数据库，使用单连接 + executemany 提高性能。"""
     if not packets:
@@ -104,7 +120,9 @@ def _store_batch(packets: list):
         conn.close()
 
 
-# ==================== 后台写入线程 ====================
+# ============================================================================
+# 后台写入线程
+# ============================================================================
 def _batch_writer_worker(
     write_queue: queue.Queue,
     stop_event: threading.Event,
@@ -142,7 +160,9 @@ def _batch_writer_worker(
     print("🛑 DB 写入线程已停止")
 
 
-# ==================== 公开接口 ====================
+# ============================================================================
+# 公开接口
+# ============================================================================
 def start_db_writer(
     batch_size: int = DB_WRITE_BATCH_SIZE,
     flush_interval: float = DB_WRITE_FLUSH_INTERVAL,
