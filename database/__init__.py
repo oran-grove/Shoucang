@@ -1,10 +1,9 @@
 """
 数据库模块 - 内鬼筛查系统数据持久化层
 
-包含:
-- create_database.sql: 数据库DDL建表脚本
-- writer.py:          数据库批量写入器（queue.Queue + 后台线程，零拷贝）
-- shared_memory_consumer.py: [已废弃] 旧版共享内存消费者
+ 包含:
+ - create_database.sql: 数据库DDL建表脚本
+ - writer.py:          数据库批量写入器（queue.Queue + 后台线程，零拷贝）
 
 用法:
     from database.writer import start_db_writer, stop_db_writer, store_packet
