@@ -58,41 +58,6 @@
               "target": "_self"
             }
           ]
-        },
-
-        {
-          "title": "异常页面",
-          "href": "",
-          "icon": "fa fa-exclamation-circle",
-          "target": "_self",
-          "child": [
-            {
-              "title": "404页面",
-              "href": "page/404.html",
-              "icon": "fa fa-hourglass-end",
-              "target": "_self"
-            }
-          ]
-        },
-        {
-          "title": "其它界面",
-          "href": "",
-          "icon": "fa fa-snowflake-o",
-          "target": "",
-          "child": [
-            {
-              "title": "按钮示例",
-              "href": "page/button.html",
-              "icon": "fa fa-snowflake-o",
-              "target": "_self"
-            },
-            {
-              "title": "弹出层",
-              "href": "page/layer.html",
-              "icon": "fa fa-shield",
-              "target": "_self"
-            }
-          ]
         }
       ]
     }
