@@ -29,7 +29,7 @@ from multi_agent_system import (
     ModelInfo,
     LoadModelConfig,
 )
-from .config_loader import load_config, save_config, quick_all_local, quick_all_deepseek
+from config.loader import load_config, save_config, quick_all_local, quick_all_deepseek
 
 # 配置日志
 logging.basicConfig(

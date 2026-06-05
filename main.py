@@ -617,20 +617,15 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
     """启动 GeoIP 数据库定期自动更新线程"""
     interval_hours = args.geoip_update_interval
     if interval_hours is None:
-        # 从配置文件读取
+        # 从配置文件读取（通过统一 config 加载器）
         try:
-            import json
-            user_cfg_path = Path(__file__).parent / "config" / "config_user.json"
-            if user_cfg_path.exists():
-                with open(user_cfg_path, "r", encoding="utf-8") as f:
-                    user_cfg = json.load(f)
-                geoip_cfg = user_cfg.get("geoip", {})
-                if not geoip_cfg.get("enabled", True):
-                    _logger.info("[GeoIP] 配置文件中已禁用自动更新")
-                    return
-                interval_hours = geoip_cfg.get("update_interval_hours", 168)
-            else:
-                interval_hours = 168
+            from config.loader import load_config_dict
+            user_cfg = load_config_dict()
+            geoip_cfg = user_cfg.get("geoip", {})
+            if not geoip_cfg.get("enabled", True):
+                _logger.info("[GeoIP] 配置文件中已禁用自动更新")
+                return
+            interval_hours = geoip_cfg.get("update_interval_hours", 168)
         except Exception:
             interval_hours = 168
 

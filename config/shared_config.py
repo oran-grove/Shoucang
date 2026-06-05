@@ -70,8 +70,8 @@ USER_CONFIG_PATH = PROJECT_ROOT / "config" / "config_user.json"
 PYTHON_CONFIG_DIR = PROJECT_ROOT / "config"
 
 
-# ==================== 前端 PHP 配置路径（供 PHP 引用）====================
-# 相对于 frontend/api/ 目录的路径
-# PHP 中应使用: $configFile = __DIR__ . '/../../config/config_user.json';
+# ==================== 前端配置路径（供前端 API 跨模块引用）====================
+# 前端通过 Python API 后端获取配置，不再直接读取 JSON 文件
+# 这些路径供后端 API 提供配置服务时使用
 FRONTEND_CONFIG_RELATIVE_PATH = "../../config/config_user.json"
 FRONTEND_DEFAULT_CONFIG_RELATIVE_PATH = "../../config/config_default.json"

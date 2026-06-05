@@ -52,11 +52,17 @@ from pydantic import BaseModel
 # ---- 路径配置 ----
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
-_CONFIG_DIR = _PROJECT_ROOT / "config"
 
 # 确保项目根在 sys.path
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+# ---- 统一配置加载（通过 config 模块）----
+from config.loader import (
+    load_config_dict,
+    load_default_config_dict,
+    save_config_dict,
+)
 
 logger = logging.getLogger("UnifiedBackend")
 
@@ -203,27 +209,15 @@ class BlacklistItem(BaseModel):
 # 配置读写
 # ============================================================================
 def _read_config_user() -> dict:
-    config_file = _CONFIG_DIR / "config_user.json"
-    if not config_file.exists():
-        default_file = _CONFIG_DIR / "config_default.json"
-        if default_file.exists():
-            return json.loads(default_file.read_text(encoding="utf-8"))
-        return {}
-    return json.loads(config_file.read_text(encoding="utf-8"))
+    return load_config_dict()
 
 
 def _read_config_default() -> dict:
-    default_file = _CONFIG_DIR / "config_default.json"
-    if default_file.exists():
-        return json.loads(default_file.read_text(encoding="utf-8"))
-    return {}
+    return load_default_config_dict()
 
 
 def _save_config_user(config: dict):
-    config_file = _CONFIG_DIR / "config_user.json"
-    config_file.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    save_config_dict(config)
 
 
 # ============================================================================

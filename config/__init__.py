@@ -30,6 +30,9 @@ from .schema import (
 from .loader import (
     load_config,
     save_config,
+    load_config_dict,
+    load_default_config_dict,
+    save_config_dict,
     quick_all_local,
     quick_all_deepseek,
 )
@@ -50,6 +53,9 @@ __all__ = [
     # 加载器
     "load_config",
     "save_config",
+    "load_config_dict",
+    "load_default_config_dict",
+    "save_config_dict",
     "quick_all_local",
     "quick_all_deepseek",
 ]

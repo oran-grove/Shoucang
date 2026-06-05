@@ -510,6 +510,53 @@ def quick_all_deepseek(
 # 命令行工具
 # ============================================================
 
+# ============================================================
+# 原始字典级读写（供不需要类型化 OrchestratorConfig 的模块使用）
+# ============================================================
+
+from .shared_config import USER_CONFIG_PATH
+
+
+def load_config_dict() -> dict:
+    """
+    以原始字典形式返回合并后的配置（默认 + 用户覆盖）。
+    供 backend/api_server.py 等需要 JSON 级读写但不想依赖
+    OrchestratorConfig 类型体系的模块使用。
+
+    Returns:
+        dict: 完整的配置字典（默认配置深合并用户配置）
+        如果 config_default.json 不存在，返回空 dict
+    """
+    if not _DEFAULT_CONFIG_PATH.exists():
+        return {}
+    default = json.loads(_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    if USER_CONFIG_PATH.exists():
+        user = json.loads(USER_CONFIG_PATH.read_text(encoding="utf-8"))
+        return _deep_merge(default, user)
+    return default
+
+
+def load_default_config_dict() -> dict:
+    """
+    返回纯默认配置字典（不含用户覆盖）。
+    供重置配置等场景使用。
+    """
+    if not _DEFAULT_CONFIG_PATH.exists():
+        return {}
+    return json.loads(_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def save_config_dict(config: dict) -> None:
+    """
+    将配置字典写入 config_user.json。
+    供前端配置保存等场景使用。
+    """
+    USER_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 if __name__ == "__main__":
     import sys
 
