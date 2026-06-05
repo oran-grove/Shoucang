@@ -7,13 +7,15 @@
 import logging
 import traceback
 import sys
+import struct
 import threading
 import pynng
 import requests
-import subprocess  # 剧情线 3 需要用它来亲自动手重置硬件
 from flask import Flask, request, jsonify
-import re
-import struct
+
+# 🌟 剧情线 3：Thrift 直连 BMv2 交换机（替代 SSH）
+from thrift.transport import TSocket, TTransport
+from thrift.protocol import TBinaryProtocol, TMultiplexedProtocol
 
 # ── 日志 ──────────────────────────────────────────────
 _logger = logging.getLogger("P4Controller")
@@ -152,81 +154,90 @@ def p4_listener_thread():
 # 🎬 剧情线 3：定时器触发 -> 本地拉取 -> 硬件寄存器重置
 # ==========================================
 def telemetry_job():
-    """100秒时间到！利用 Paramiko SSH 真正穿透到 VirtualBox 虚拟机拉取流表并重置"""
-    import paramiko  # 🌟 引入远程连线模块
-    _logger.info("剧情线 3：达到 100 秒节拍，开始通过 SSH 连入 VirtualBox 榨取全网环境表...")
+    """100秒时间到！通过本地 Thrift 直连 BMv2 交换机（无需 SSH、无需文本解析）"""
+    # 动态导入从 VM 拷贝过来的 BMv2 Thrift stubs
+    try:
+        from bm_runtime.standard import Standard
+    except ImportError:
+        _logger.error("缺少 bm_runtime 模块！请从 VM 拷贝 BMv2 Thrift 绑定到项目目录")
+        return
 
-    # ============================================================
-    # ⚙️ 【关键配置】：请根据你的 VirtualBox 虚拟机的网络情况填写
-    # ============================================================
-    VM_IP = "192.168.56.101"  # 💡 填写你虚拟机的真实 IP（就是你上面 P4_SWITCH_IPC 里的那个 IP）
-    VM_PORT = 22  # 💡 虚拟机标准 SSH 端口
-    VM_USER = "p4"  # 💡 你的虚拟机用户名
-    VM_PASSWORD = "p4"  # 💡 你的虚拟机密码
+    _logger.info("剧情线 3：达到 100 秒节拍，Thrift 直连拉取寄存器...")
 
-    # 初始化 SSH 超级特工
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    transport = TTransport.TBufferedTransport(TSocket.TSocket('127.0.0.1', 9100))
+    # BMv2 simple_switch 使用 TMultiplexedProtocol，服务名固定为 "standard"
+    proto = TMultiplexedProtocol.TMultiplexedProtocol(
+        TBinaryProtocol.TBinaryProtocol(transport), "standard")
+    client = Standard.Client(proto)
 
     try:
-        # 1. 跨越时空物理破门
-        ssh.connect(VM_IP, port=VM_PORT, username=VM_USER, password=VM_PASSWORD, timeout=5)
+        transport.open()
 
-        # 2. 隔空喊话：在虚拟机内部利用管道将读取指令喂给它本地的 simple_switch_CLI
-        pull_cmd = 'echo -e "register_read MyIngress.reg_volume_score\nregister_read MyIngress.reg_entropy_stat" | simple_switch_CLI --thrift-port 9100'
-        stdin, stdout, stderr = ssh.exec_command(pull_cmd)
-        cli_output = stdout.read().decode('utf-8', errors='ignore')
+        # 🚀 bm_register_read_all 返回 list[int]（每个 int 是 64 位寄存器值），
+        #    需转换为 bytes（每 8 字节大端打包）才能喂给 process_pulled_registers
+        vol_list = client.bm_register_read_all(0, 'MyIngress.reg_volume_score')
+        ent_list = client.bm_register_read_all(0, 'MyIngress.reg_entropy_stat')
+        vol_data = b''.join(struct.pack('>Q', v) for v in vol_list)
+        ent_data = b''.join(struct.pack('>Q', v) for v in ent_list)
+        _logger.info("全量寄存器拉取成功！Vol: %dB, Ent: %dB", len(vol_data), len(ent_data))
 
-        # 3. 战术解析：将文本无损熔炼为 8 字节二进制串
-        vol_list = []
-        ent_list = []
-
-        for line in cli_output.splitlines():
-            if "reg_volume_score=" in line:
-                vol_list = [int(x) for x in re.findall(r'\d+', line.split('=')[1])]
-            elif "reg_entropy_stat=" in line:
-                ent_list = [int(x) for x in re.findall(r'\d+', line.split('=')[1])]
-
-        # 防御性全零阵兜底
-        if not vol_list: vol_list = [0] * 1048576
-        if not ent_list: ent_list = [0] * 1048576
-
-        vol_str = b"".join(struct.pack('>Q', val) for val in vol_list)
-        ent_str = b"".join(struct.pack('>Q', val) for val in ent_list)
-
-        _logger.info(
-            "SSH 成功跨系统剥离原始数据！Volume 表 %d 字节, Entropy 表 %d 字节",
-            len(vol_str), len(ent_str),
-        )
-
-        # 4. 跨进程解耦分发：安全上锁，扔给清洗中继器
+        # 安全上锁，扔给清洗中继器
         with table_lock:
-            data_packer.process_pulled_registers(vol_str, ent_str)
+            data_packer.process_pulled_registers(vol_data, ent_data)
 
-        # 5. 阅后即焚：发送重置指令给虚拟机内的交换机，备战下一个周期
-        reset_cmd = 'echo -e "register_reset MyIngress.reg_volume_score\nregister_reset MyIngress.reg_entropy_stat" | simple_switch_CLI --thrift-port 9100'
-        ssh.exec_command(reset_cmd)
-
-        _logger.info("剧情线 3：虚拟机内部物理寄存器重置成功，环境已清空。")
+        # 阅后即焚：重置寄存器，备战下一个 100 秒周期
+        client.bm_register_reset(0, 'MyIngress.reg_volume_score')
+        client.bm_register_reset(0, 'MyIngress.reg_entropy_stat')
+        _logger.info("剧情线 3：寄存器重置成功，环境已清空。")
 
     except Exception as e:
-        _logger.warning("剧情线 3 定时任务远程 SSH 执行失败: %s", e)
+        _logger.error("剧情线 3 Thrift 直连失败（端口转发配了吗？VM 开机了吗？）: %s", e)
     finally:
-        ssh.close()
+        transport.close()
+# ==========================================
+# 🧹 开机自启动：清空交换机哈希表
+# ==========================================
+def reset_switch_on_startup():
+    """控制器启动时自动清空交换机双寄存器，确保从干净状态开始巡逻"""
+    try:
+        from bm_runtime.standard import Standard
+    except ImportError:
+        print("⚠️ [开机自检] 缺少 bm_runtime，跳过寄存器清空", flush=True)
+        return
+
+    print("🧹 [开机自检] 正在清空交换机哈希表（双寄存器全量归零）...", flush=True)
+    transport = TTransport.TBufferedTransport(TSocket.TSocket('127.0.0.1', 9100))
+    proto = TMultiplexedProtocol.TMultiplexedProtocol(
+        TBinaryProtocol.TBinaryProtocol(transport), "standard")
+    client = Standard.Client(proto)
+
+    try:
+        transport.open()
+        client.bm_register_reset(0, 'MyIngress.reg_volume_score')
+        client.bm_register_reset(0, 'MyIngress.reg_entropy_stat')
+        print("✅ [开机自检] 交换机哈希表已归零，内存环境纯净。", flush=True)
+    except Exception as e:
+        print(f"❌ [开机自检] 清空失败（交换机是否已启动？）: {e}", flush=True)
+    finally:
+        transport.close()
 
 
 # ==========================================
-# 🚀 启动 (供 main.py 作为模块导入时调用)
+# 🚀 引擎点火启动
 # ==========================================
 if __name__ == '__main__':
-    # 【独立运行模式】：在父级目录用 python -m p4_controller.control 启动
-    _logger.info("=== P4 中央控制器 (独立模式) ===")
+    print("=" * 60)
+    print("🚀 [态势感知大脑] 中央调度总线控制器正在初始化...")
+    print("=" * 60)
 
-    # 启动 P4 监听
-    threading.Thread(target=p4_listener_thread, daemon=True, name="P4-Probe-Bus").start()
+    # 0. 开机自检：清空交换机哈希表，从零开始
+    reset_switch_on_startup()
 
-    # 启动 100 秒定时器
+    # 1. 启动独立定时器（传入 100 秒和本地清扫回调）
     start_timer_thread(100, telemetry_job)
 
-    # Flask REST API
-    app.run(host="0.0.0.0", port=5000, use_reloader=False, debug=False)
+    # 2. 异步启动 P4 硬件探针报文监听子线程
+    threading.Thread(target=p4_listener_thread, daemon=True, name="P4-Probe-Bus").start()
+
+    # 3. 启动 Flask 接收前端黑白名单控制（阻断运行）
+    app.run(host='0.0.0.0', port=5000, use_reloader=False)
