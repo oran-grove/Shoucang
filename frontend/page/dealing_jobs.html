@@ -76,6 +76,26 @@ layui.use(['layer'], function () {
     var levelClass = { 'serious': 'level-serious', 'high': 'level-high', 'medium': 'level-medium', 'low': 'level-low' };
     var levelText  = { 'serious': '严重', 'high': '高危', 'medium': '中危', 'low': '低危' };
 
+    var fieldNameMap = {
+        'id': 'ID',
+        'src_ip': '来源IP',
+        'dst_ip': '目的IP',
+        'src_port': '源端口',
+        'dst_port': '目的端口',
+        'protocol': '协议',
+        'packet_size': '数据包大小',
+        'packet_time': '时间',
+        'threat_level': '威胁等级',
+        'detection_score': '检测分数',
+        'correlation_score': '关联分数',
+        'judgment_result': '判定结果',
+        'reason': '原因',
+        'description': '描述',
+        'employee_id': '工号',
+        'department': '部门',
+        'action': '操作'
+    };
+
     function renderTable(data) {
         var rows = '';
         $.each(data, function (i, item) {
@@ -88,7 +108,7 @@ layui.use(['layer'], function () {
             $.each(item, function (k, v) {
                 if (shownFields.indexOf(k) !== -1) return;
                 kvHtml += '<div class="kv-item">' +
-                    '<span class="kv-key">' + k + '：</span>' +
+                    '<span class="kv-key">' + (fieldNameMap[k] || k) + '：</span>' +
                     '<span class="kv-val">' + (v != null ? v : '--') + '</span>' +
                     '</div>';
             });

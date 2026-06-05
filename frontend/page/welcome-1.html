@@ -79,7 +79,7 @@
                     <div class="status-item">
                         <div class="status-icon bg-orange"><i class="fa fa-arrow-up"></i></div>
                         <div class="status-info">
-                            <div class="status-title">上传速率 UP</div>
+                            <div class="status-title">上传速率（上行）</div>
                             <div class="status-value" id="upVal">--</div>
                             <div class="status-sub">上行带宽</div>
                         </div>
@@ -87,7 +87,7 @@
                     <div class="status-item">
                         <div class="status-icon bg-red"><i class="fa fa-arrow-down"></i></div>
                         <div class="status-info">
-                            <div class="status-title">下载速率 DOWN</div>
+                            <div class="status-title">下载速率（下行）</div>
                             <div class="status-value" id="downVal">--</div>
                             <div class="status-sub">下行带宽</div>
                         </div>
@@ -151,9 +151,9 @@ layui.use(['layer', 'miniTab'], function () {
     }
 
     function showStatusError(msg) {
-        $('#cpuVal').text('ERR').css('color', '#FF5722');
-        $('#ramVal').text('ERR').css('color', '#FF5722');
-        $('#upVal').text(msg || 'ERR').css('color', '#FF5722');
+        $('#cpuVal').text('错误').css('color', '#FF5722');
+        $('#ramVal').text('错误').css('color', '#FF5722');
+        $('#upVal').text(msg || '错误').css('color', '#FF5722');
         $('#downVal').text('--').css('color', '#FF5722');
     }
 

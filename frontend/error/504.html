@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>504 错误 - phpstudy</title>
+  <title>504 错误 - 系统管理终端</title>
   <meta name="keywords" content="">
   <meta name="description" content="">
   <meta name="renderer" content="webkit">
@@ -48,7 +48,7 @@
 <body>
   <div class="content">
       <div>
-           <h1>HTTP 504 - Gateway Timeout 网关超时</h1>
+           <h1>HTTP 504 — 网关超时</h1>
         <dl>
           <dt>错误说明：网关超时，服务器响应时间，达到超出设定的范围 </dt>
           <dt>原因1：后端电脑之间 IP 通讯缓慢而产生</dt>
@@ -61,7 +61,7 @@
 		  <dd>解决办法：</dd>
           <dd>更改php-fpm的几处配置： 把max_children由之前的10改为现在的30，这样就可以保证有充足的php-cgi进程可以被使用； 把request_terminate_timeout由之前的0s改为60s，这样php-cgi进程 处理脚本的超时时间就是60秒，可以防止进程都被挂起，提高利用效率。 接着再更改nginx的几个配置项，减少FastCGI的请求次数，尽量维持buffers不变： fastcgi_buffers由 4 64k 改为 2 256k； fastcgi_buffer_size 由 64k 改为 128K； fastcgi_busy_buffers_size 由 128K 改为 256K； fastcgi_temp_file_write_size 由 128K 改为 256K。 重新加载php-fpm和nginx的配置，再次测试，如果没有出现“504 Gateway Time-out”错误，问题解决。</dd>
         </dl>
-        <div>使用手册，视频教程，BUG反馈，官网地址： <a href="https://www.xp.cn"  target="_blank">www.xp.cn</a> </div>
+         <div>使用手册、视频教程、BUG反馈、官网地址： <a href="https://www.xp.cn" target="_blank">小皮面板官网</a> </div>
     
       </div>
     </div> 
