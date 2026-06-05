@@ -177,5 +177,13 @@
     "slice_hours": 6
   },
 
-  "max_queue_size": 10000
+  "max_queue_size": 10000,
+
+  "geoip": {
+    "_comment": "GeoIP 数据库自动更新配置",
+    "update_interval_hours": 168,
+    "enabled": true,
+    "download_url": "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
+    "db_path": "data_labeling/GeoLite2-City.mmdb"
+  }
 }

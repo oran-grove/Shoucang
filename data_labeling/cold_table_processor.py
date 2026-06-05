@@ -32,7 +32,16 @@ UDP_LISTEN_IP = "127.0.0.1"
 UDP_LISTEN_PORT = 9999
 
 # GeoIP 数据库路径（MaxMind GeoLite2-City.mmdb）
-GEOIP_DB_PATH = "GeoLite2-City.mmdb"
+# 优先使用 shared_config 中的常量，如果未设置则回退到本地硬编码默认值
+try:
+    from config.shared_config import GEOIP_DB_PATH, GEOIP_DOWNLOAD_URL
+except ImportError:
+    from pathlib import Path as _Path
+    GEOIP_DB_PATH = str(_Path(__file__).parent / "GeoLite2-City.mmdb")
+    GEOIP_DOWNLOAD_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
+
+# 下载临时文件名
+GEOIP_GZ_TEMP = GEOIP_DB_PATH + ".gz"
 
 
 # ============================================================
@@ -110,9 +119,6 @@ def lookup_country(ip: str) -> str:
     except Exception:
         return ""
 
-
-GEOIP_DOWNLOAD_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
-GEOIP_GZ_TEMP = GEOIP_DB_PATH + ".gz"
 
 
 def _close_geoip():

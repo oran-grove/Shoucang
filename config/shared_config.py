@@ -27,11 +27,27 @@ class DbConfig(TypedDict):
 DB_CONFIG: DbConfig = {
     'host': 'localhost',
     'user': 'root',
-    'password': '2005jjayyayyAX',
+    'password': '0918',
     'database': 'insider_threat_db',
     'port': 3306,
     'charset': 'utf8mb4',
 }
+
+
+# ==================== 项目根目录 ====================
+# config/ 的父目录，必须在其他路径常量之前定义
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+# ==================== GeoIP 数据库更新配置 ====================
+# MaxMind GeoLite2-City.mmdb 自动更新间隔（小时）
+# 设为 0 表示禁用自动更新
+GEOIP_UPDATE_INTERVAL_HOURS = 168  # 7 天
+
+# GeoIP 数据库文件绝对路径
+GEOIP_DB_PATH = str(PROJECT_ROOT / "data_labeling" / "GeoLite2-City.mmdb")
+
+# GeoIP 下载源
+GEOIP_DOWNLOAD_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
 
 
 # ==================== 数据库批量写入配置 ====================
@@ -41,8 +57,6 @@ DB_WRITE_FLUSH_INTERVAL = 5.0      # 最多等待多少秒后强制写入（秒�
 
 
 # ==================== 配置文件路径 ====================
-# 项目根目录（config/ 的父目录）
-PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 # 默认配置文件
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config_default.json"

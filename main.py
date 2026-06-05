@@ -533,6 +533,67 @@ def stop_data_labeling():
 
 
 # ============================================================
+# GeoIP 数据库自动更新
+# ============================================================
+def _start_geoip_auto_update_thread(args: argparse.Namespace):
+    """
+    根据命令行参数和配置文件，启动 GeoIP 数据库定期自动更新线程。
+    - 若 --geoip-update-interval 0 或配置文件 enabled=false → 禁用自动更新
+    - 否则按指定间隔（默认 168h = 7d）定时下载最新 GeoLite2-City.mmdb
+    """
+    # 确定更新间隔
+    interval_hours = args.geoip_update_interval
+    if interval_hours is None:
+        # 从配置文件读取
+        try:
+            import json
+            user_cfg_path = Path(__file__).parent / "config" / "config_user.json"
+            if user_cfg_path.exists():
+                with open(user_cfg_path, "r", encoding="utf-8") as f:
+                    user_cfg = json.load(f)
+                geoip_cfg = user_cfg.get("geoip", {})
+                if not geoip_cfg.get("enabled", True):
+                    _logger.info("[GeoIP] 配置文件中已禁用自动更新")
+                    return
+                interval_hours = geoip_cfg.get("update_interval_hours", 168)
+            else:
+                interval_hours = 168
+        except Exception:
+            interval_hours = 168  # 默认 7 天
+
+    if interval_hours <= 0:
+        _logger.info("[GeoIP] 自动更新已禁用 (interval=0)")
+        return
+
+    interval_seconds = interval_hours * 3600
+
+    def _geoip_updater():
+        _logger.info(
+            _cyan(f"[GeoIP] 自动更新线程已启动 (间隔 {interval_hours}h)")
+        )
+        # 等待系统启动完成再触发首次更新
+        _global_state["shutdown_requested"].wait(timeout=60)
+
+        while not _global_state["shutdown_requested"].is_set():
+            try:
+                _logger.info(_cyan("[GeoIP] 开始定期更新 GeoIP 数据库..."))
+                from data_labeling.cold_table_processor import update_geoip_db
+                success = update_geoip_db()
+                if success:
+                    _logger.info(_green("[GeoIP] 自动更新完成"))
+                else:
+                    _logger.warning(_yellow("[GeoIP] 自动更新失败，将在下一周期重试"))
+            except Exception as e:
+                _logger.error(_red(f"[GeoIP] 更新异常: {e}"))
+
+            # 等待下一个周期或收到关闭信号
+            _global_state["shutdown_requested"].wait(timeout=interval_seconds)
+
+    t = threading.Thread(target=_geoip_updater, daemon=True, name="GeoIP-Updater")
+    t.start()
+
+
+# ============================================================
 # 系统健康检查
 # ============================================================
 def health_check_loop():
@@ -622,6 +683,9 @@ async def async_main(args: argparse.Namespace):
         target=health_check_loop, daemon=True, name="HealthCheck"
     )
     health_thread.start()
+
+    # 5.5 GeoIP 自动更新定时线程
+    _start_geoip_auto_update_thread(args)
 
     # 6. 启动慢脑后台循环（如果就绪）
     slow_brain_task = None
@@ -757,7 +821,31 @@ def main():
         action="store_true",
         help="仅打印配置摘要，不实际启动",
     )
+    parser.add_argument(
+        "--update-geoip-now",
+        action="store_true",
+        help="启动时立即更新 GeoIP 数据库（GeoLite2-City.mmdb）",
+    )
+    parser.add_argument(
+        "--geoip-update-interval",
+        type=int,
+        default=None,
+        metavar="HOURS",
+        help="GeoIP 数据库自动更新间隔（小时），设为 0 禁用自动更新。"
+             "默认读取 config/config_user.json 中的 geoip.update_interval_hours",
+    )
     args = parser.parse_args()
+
+    # ---- GeoIP 自动更新引导 ----
+    if args.update_geoip_now:
+        _logger.info(_cyan("手动触发 GeoIP 数据库更新..."))
+        from data_labeling.cold_table_processor import update_geoip_db
+        success = update_geoip_db()
+        if success:
+            _logger.info(_green("GeoIP 数据库更新完成。"))
+        else:
+            _logger.warning(_yellow("GeoIP 数据库更新失败，将继续使用现有数据库。"))
+        print()
 
     # dry-run 模式
     if args.dry_run:
