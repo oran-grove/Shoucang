@@ -4,6 +4,7 @@
 @description: SDN 态势感知中央调度枢纽 (完美对齐接口版)
 """
 
+import logging
 import traceback
 import sys
 import threading
@@ -13,6 +14,9 @@ import subprocess  # 剧情线 3 需要用它来亲自动手重置硬件
 from flask import Flask, request, jsonify
 import re
 import struct
+
+# ── 日志 ──────────────────────────────────────────────
+_logger = logging.getLogger("P4Controller")
 
 # 🔌 引入你的三大核心业务模块
 # 兼容两种执行模式：包内导入 (python -m p4_controller.control) / 独立运行
@@ -44,12 +48,12 @@ table_lock = threading.Lock()
 # ==========================================
 def report_alert_to_frontend(ip_addr, label):
     """【执行器】直接向前端大屏推送高危内鬼告警"""
-    print(f"[前端上报] 🚨 发现高危外发！内鬼IP: {ip_addr} | 触发标签: {label}")
+    _logger.warning("🚨 发现高危外发！内鬼IP: %s | 触发标签: %s", ip_addr, label)
     try:
         payload = {"ip": ip_addr, "label": label}
         requests.post(FRONTEND_ALERT_API, json=payload, timeout=2)
-    except Exception as e:
-        print(f"[前端上报] ❌ 通知前端大屏失败 (大屏服务可能未启动): {e}")
+    except Exception:
+        _logger.debug("通知前端大屏失败 (大屏服务可能未启动)")
 
 
 # ==========================================
@@ -82,66 +86,75 @@ def handle_frontend_blacklist():
 # ==========================================
 
 def p4_listener_thread():
-    """【写文件绝杀版】彻底解决 PyCharm 缓存憋日志问题"""
-    print("👀 [中央控制器] 剧情线 2：P4 pynng 接收总线已就位...")
-
-    # 💡 强制刷新标准输出，让 PyCharm 别憋着上面这行字
-    sys.stdout.flush()
+    """
+    P4 硬件探针监听线程。
+    - 连接到 P4 交换机 pynng 发布端
+    - 接收实时行为特征报文 -> data_packer -> analyzer
+    - 连接不可达时降级运行（记录警告，不崩溃）
+    """
+    _logger.info("剧情线 2：P4 pynng 接收总线已就位...")
 
     try:
-        # 把之前的业务逻辑全部安全地包裹起来
+        # 尝试连接，若不可达则降级等待
+        _logger.info("正在连接 P4 交换机 %s ...", P4_SWITCH_IPC)
         with pynng.Sub0(dial=P4_SWITCH_IPC, recv_timeout=2000) as sub:
             sub.subscribe(b'')
-            print("🔗 [中央控制器] 📡 P4 硬件管道连接成功！开始巡逻...")
-            sys.stdout.flush()
+            _logger.info("P4 硬件管道连接成功！开始监听...")
 
             while True:
                 try:
                     msg = sub.recv()
-                    print(len(msg))
                     # 护住内部的数据处理
                     try:
                         with table_lock:
                             high_risk_flows = data_packer.process_p4_report(msg)
                         if not high_risk_flows:
-                            print("首包建立成功")
                             continue
 
                         for vector in high_risk_flows:
                             is_malicious, label = analyzer.evaluate(vector)
-                            print(f"🔍 [DEBUG] 判官已收到哈希槽位  的 21 维特征！当前评估结果: is_malicious ={is_malicious}")
+                            _logger.debug(
+                                "判官已收到哈希槽位的21维特征！"
+                                "is_malicious=%s, label=%s",
+                                is_malicious, label,
+                            )
                             if is_malicious:
                                 src_ip = vector[0]
                                 add_ip.add_to_blacklist(src_ip, source="controller")
                                 report_alert_to_frontend(src_ip, label)
 
                     except Exception as proc_err:
-                        # 内部报错也强制写文件
-                        with open("crash.txt", "a", encoding="utf-8") as f:
-                            f.write(f"❌ 数据解析层内爆: {proc_err}\n")
-                            traceback.print_exc(file=f)
+                        _logger.error(
+                            "数据解析层异常: %s\n%s",
+                            proc_err,
+                            traceback.format_exc(),
+                        )
                         continue
 
                 except pynng.Timeout:
                     continue
 
+    except pynng.exceptions.ConnectionRefused:
+        _logger.warning(
+            "P4 交换机 %s 连接被拒绝 — P4 硬件层降级运行 "
+            "(不影响其他功能，待交换机上线后重启)",
+            P4_SWITCH_IPC,
+        )
     except Exception as global_err:
-        # 💥 这里的代码是专门针对 Exception in thread P4-Probe-Bus 的！
-        # 只要线程要死，临死前一定会把最精准的死因写进当前目录下的 crash.txt
-        with open("crash.txt", "w", encoding="utf-8") as f:
-            f.write(f"💥 警告！巡逻线程彻底崩溃！全局错误原因: {global_err}\n")
-            f.write("====== 以下为导致线程死亡的真正代码行数 ======\n")
-            traceback.print_exc(file=f)
+        _logger.error(
+            "P4 监听线程异常终止: %s\n%s",
+            global_err,
+            traceback.format_exc(),
+        )
 
-        print("🚨 [中央控制器] 后台线程遭遇致命内爆！已将尸体和死因写入本地 crash.txt 文件！")
-        sys.stdout.flush()
+
 # ==========================================
 # 🎬 剧情线 3：定时器触发 -> 本地拉取 -> 硬件寄存器重置
 # ==========================================
 def telemetry_job():
     """100秒时间到！利用 Paramiko SSH 真正穿透到 VirtualBox 虚拟机拉取流表并重置"""
     import paramiko  # 🌟 引入远程连线模块
-    print("⏱️ [中央控制器] 剧情线 3：达到 100 秒节拍，开始通过 SSH 连入 VirtualBox 榨取全网环境表...", flush=True)
+    _logger.info("剧情线 3：达到 100 秒节拍，开始通过 SSH 连入 VirtualBox 榨取全网环境表...")
 
     # ============================================================
     # ⚙️ 【关键配置】：请根据你的 VirtualBox 虚拟机的网络情况填写
@@ -181,9 +194,10 @@ def telemetry_job():
         vol_str = b"".join(struct.pack('>Q', val) for val in vol_list)
         ent_str = b"".join(struct.pack('>Q', val) for val in ent_list)
 
-        print(
-            f"📊 [中央控制器] SSH 成功跨系统剥离原始数据！体积: Volume表 {len(vol_str)} 字节, Entropy表 {len(ent_str)} 字节",
-            flush=True)
+        _logger.info(
+            "SSH 成功跨系统剥离原始数据！Volume 表 %d 字节, Entropy 表 %d 字节",
+            len(vol_str), len(ent_str),
+        )
 
         # 4. 跨进程解耦分发：安全上锁，扔给清洗中继器
         with table_lock:
@@ -193,26 +207,26 @@ def telemetry_job():
         reset_cmd = 'echo -e "register_reset MyIngress.reg_volume_score\nregister_reset MyIngress.reg_entropy_stat" | simple_switch_CLI --thrift-port 9100'
         ssh.exec_command(reset_cmd)
 
-        print("🧹 [中央控制器] 剧情线 3：虚拟机内部物理寄存器重置成功，环境已清空。", flush=True)
+        _logger.info("剧情线 3：虚拟机内部物理寄存器重置成功，环境已清空。")
 
     except Exception as e:
-        print(f"❌ [中央控制器] 剧情线 3 定时任务远程 SSH 执行失败: {e}", flush=True)
+        _logger.warning("剧情线 3 定时任务远程 SSH 执行失败: %s", e)
     finally:
-        # 优雅关闭管道
         ssh.close()
+
+
 # ==========================================
-# 🚀 引擎点火启动
+# 🚀 启动 (供 main.py 作为模块导入时调用)
 # ==========================================
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 [态势感知大脑] 中央调度总线控制器正在初始化...")
-    print("=" * 60)
+    # 【独立运行模式】：在父级目录用 python -m p4_controller.control 启动
+    _logger.info("=== P4 中央控制器 (独立模式) ===")
 
-    # 1. 启动独立定时器（传入 100 秒和本地清扫回调）
-    start_timer_thread(100, telemetry_job)
-
-    # 2. 异步启动 P4 硬件探针报文监听子线程
+    # 启动 P4 监听
     threading.Thread(target=p4_listener_thread, daemon=True, name="P4-Probe-Bus").start()
 
-    # 3. 启动 Flask 接收前端黑白名单控制（阻断运行）
-    app.run(host='0.0.0.0', port=5000, use_reloader=False)
+    # 启动 100 秒定时器
+    start_timer_thread(100, telemetry_job)
+
+    # Flask REST API
+    app.run(host="0.0.0.0", port=5000, use_reloader=False, debug=False)

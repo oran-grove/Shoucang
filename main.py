@@ -45,9 +45,12 @@
 
 import argparse
 import asyncio
+import http.server
 import logging
+import mimetypes
 import os
 import signal
+import socketserver
 import sys
 import threading
 import time
@@ -119,6 +122,9 @@ _global_state = {
     "p4_controller_ready": threading.Event(),
     "shutdown_requested": threading.Event(),
     "live_scanner": None,
+    "frontend_server": None,
+    "frontend_port": 8080,
+    "frontend_thread": None,
 }
 
 
@@ -135,10 +141,137 @@ def print_banner():
 |  Layer 2  快脑智能体层      -> 多智能体编排 + 逐条评判队列扫描              |
 |  Layer 3  慢脑智能体层      -> 基线画像 + 时序异常 + 长周期深度分析            |
 |  Layer 4  统一管理面        -> ColdTableProcessor UDP:9999 + MySQL 攒批写入  |
+|  WebUI  前端可视化          -> HTTP(:8080) 仪表盘 / 告警 / 策略管理         |
 |  跨层联动  策略反哺          -> 慢脑生成策略 -> 快脑阈值更新 / P4 流表下发     |
 +============================================================================+
 """
     print(banner)
+
+
+# ============================================================
+# WebUI: 前端静态文件服务
+# ============================================================
+
+# ── MIME 类型补充（Python 内置不完整） ──
+mimetypes.init()
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
+mimetypes.add_type("font/ttf", ".ttf")
+
+
+class _FrontendHandler(http.server.SimpleHTTPRequestHandler):
+    """
+    前端静态文件请求处理器。
+    - 所有非文件路由 fallback 到 index.html（SPA 支持）
+    - 自动附加 CORS 头
+    - 禁止目录列表
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(Path(__file__).parent / "frontend"), **kwargs)
+
+    def do_GET(self):
+        # 路由到前端文件
+        path = self.translate_path(self.path)
+        if os.path.isfile(path):
+            super().do_GET()
+        else:
+            # SPA fallback -> index.html
+            self.path = "/index.html"
+            super().do_GET()
+
+    def do_HEAD(self):
+        path = self.translate_path(self.path)
+        if os.path.isfile(path):
+            super().do_HEAD()
+        else:
+            self.path = "/index.html"
+            super().do_HEAD()
+
+    def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def list_directory(self, path):
+        """禁止目录列表"""
+        self.send_error(403, "Directory listing not allowed")
+        return None
+
+    def log_message(self, format, *args):
+        """将访问日志降级为 DEBUG，避免刷屏"""
+        _logger.debug("Frontend: %s", format % args)
+
+
+class _FrontendServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """多线程前端 HTTP 服务器"""
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def start_frontend(port: int = 8080) -> threading.Thread:
+    """
+    启动前端 Web 静态服务器，托管 frontend/ 目录。
+
+    Args:
+        port: 监听端口，默认 8080
+
+    Returns:
+        threading.Thread: 前端服务线程
+    """
+    _logger.info(_cyan("[WebUI] 启动前端可视化服务器..."))
+
+    _global_state["frontend_port"] = port
+
+    def _run_frontend():
+        try:
+            server = _FrontendServer(("0.0.0.0", port), _FrontendHandler)
+            _global_state["frontend_server"] = server
+            _logger.info(
+                _green(f"[WebUI] 前端可视化服务已启动 [OK] -> http://0.0.0.0:{port}")
+            )
+            server.serve_forever()
+        except OSError as e:
+            if e.errno == 10048:  # Address already in use
+                _logger.warning(
+                    _yellow(
+                        f"[WebUI] 端口 {port} 已被占用，"
+                        f"使用 --frontend-port 指定其他端口"
+                    )
+                )
+            else:
+                _logger.error(
+                    _red(f"[WebUI] 前端服务启动失败: {e}")
+                )
+        except Exception as e:
+            _logger.error(_red(f"[WebUI] 前端服务启动失败: {e}"))
+
+    thread = threading.Thread(
+        target=_run_frontend, daemon=True, name="Frontend-HTTP"
+    )
+    thread.start()
+    _global_state["frontend_thread"] = thread
+    return thread
+
+
+def stop_frontend():
+    """优雅关闭前端 HTTP 服务器"""
+    server = _global_state.get("frontend_server")
+    if server is not None:
+        try:
+            server.shutdown()
+            _logger.info(_green("[WebUI] 前端可视化服务已停止"))
+        except Exception as e:
+            _logger.warning(_yellow(f"[WebUI] 停止前端时出错: {e}"))
 
 
 # ============================================================
@@ -388,26 +521,65 @@ async def start_slow_brain(enable_llm: bool = True) -> bool:
             max_tokens=_jcfg.max_tokens,
         )
 
-        # 注入后端（尝试使用配置中指定的后端）
+        # 注入后端（根据配置动态选择：deepseek / openai / lmstudio）
+        _BACKEND_CLASS_MAP = {
+            BackendType.DEEPSEEK: DeepSeekBackend,
+            BackendType.OPENAI: OpenAIBackend,
+            BackendType.LMSTUDIO: LMStudioBackend,
+        }
+
+        def _build_backend(backend_type: BackendType):
+            """根据 BackendType 构建对应的后端实例"""
+            _be_cfg = _slow_cfg.default_backends[backend_type]
+            _cls = _BACKEND_CLASS_MAP[backend_type]
+            _kwargs = dict(
+                api_base=_be_cfg.api_base,
+                api_key=_be_cfg.api_key,
+                timeout=_be_cfg.timeout,
+                max_retries=_be_cfg.max_retries,
+                default_model=_be_cfg.model_name,
+            )
+            if backend_type == BackendType.LMSTUDIO:
+                _kwargs["auto_load"] = _be_cfg.auto_load
+            if backend_type == BackendType.DEEPSEEK:
+                if _be_cfg.thinking_enabled is not None:
+                    _kwargs["default_thinking_enabled"] = _be_cfg.thinking_enabled
+                if _be_cfg.reasoning_effort is not None:
+                    _kwargs["default_reasoning_effort"] = _be_cfg.reasoning_effort
+                _kwargs["include_reasoning"] = _be_cfg.include_reasoning
+            return _cls(**_kwargs)
+
         try:
             _bt = _bcfg.backend
-            _lm_cfg = _slow_cfg.default_backends[BackendType.LMSTUDIO]
-            lm_backend = LMStudioBackend(
-                api_base=_lm_cfg.api_base,
-                api_key=_lm_cfg.api_key,
-                timeout=_lm_cfg.timeout,
-                max_retries=_lm_cfg.max_retries,
-                default_model=_lm_cfg.model_name,
-                auto_load=_lm_cfg.auto_load,
-            )
-            baseline_agent.set_backend(lm_backend)
-            baseline_agent.model_name = _lm_cfg.model_name
-            _logger.info(f"[Layer 3]   基线画像后端: LMStudio/{_lm_cfg.model_name}")
+            if _bt not in _BACKEND_CLASS_MAP:
+                raise ValueError(f"不支持的后端类型: {_bt}")
 
-            temporal_agent.set_backend(lm_backend)
-            temporal_agent.model_name = _lm_cfg.model_name
-            judgment_agent.set_backend(lm_backend)
-            judgment_agent.model_name = _lm_cfg.model_name
+            slow_backend = _build_backend(_bt)
+            baseline_agent.set_backend(slow_backend)
+            baseline_agent.model_name = _bcfg.model_name
+            _logger.info(
+                f"[Layer 3]   基线画像后端: {_bt.value}/{_bcfg.model_name}"
+            )
+
+            _tt = _tcfg.backend
+            _temporal_backend = (
+                slow_backend if _tt == _bt else _build_backend(_tt)
+            )
+            temporal_agent.set_backend(_temporal_backend)
+            temporal_agent.model_name = _tcfg.model_name
+            _logger.info(
+                f"[Layer 3]   时序异常后端: {_tt.value}/{_tcfg.model_name}"
+            )
+
+            _jt = _jcfg.backend
+            _judgment_backend = (
+                slow_backend if _jt == _bt else _build_backend(_jt)
+            )
+            judgment_agent.set_backend(_judgment_backend)
+            judgment_agent.model_name = _jcfg.model_name
+            _logger.info(
+                f"[Layer 3]   研判后端: {_jt.value}/{_jcfg.model_name}"
+            )
         except Exception as e:
             _logger.warning(_yellow(f"[Layer 3]   后端连接失败 (将降级运行): {e}"))
 
@@ -609,6 +781,7 @@ def health_check_loop():
             "live_scanner": _global_state.get("live_scanner") is not None,
             "slow_brain": _global_state.get("slow_brain") is not None,
             "data_labeling": _global_state.get("cold_processor") is not None,
+            "frontend": _global_state.get("frontend_server") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
         }
 
@@ -622,6 +795,7 @@ def health_check_loop():
             f"逐条扫描={_ok(status['live_scanner'])} "
             f"慢脑={_ok(status['slow_brain'])} "
             f"数据标注={_ok(status['data_labeling'])} "
+            f"前端={_ok(status['frontend'])} "
             f"| 运行 {status['uptime']:.0f}s"
         )
         _global_state["shutdown_requested"].wait(timeout=30)
@@ -650,6 +824,7 @@ def _setup_signal_handlers(loop: asyncio.AbstractEventLoop):
 async def async_main(args: argparse.Namespace):
     """异步主逻辑"""
     _global_state["start_time"] = time.time()
+    _global_state["frontend_port"] = args.frontend_port
     print_banner()
 
     # ---- 初始化：从 MySQL 加载黑白名单/IP映射到常驻内存 ----
@@ -662,40 +837,46 @@ async def async_main(args: argparse.Namespace):
 
     # ---- 启动顺序 ----
 
-    # 1. Layer 4: 数据标注层（独立，最先启动）
+    # 1. 前端 Web 服务器（最先启动，其他层可能向前端推送告警）
+    if not args.no_frontend:
+        start_frontend(port=args.frontend_port)
+    else:
+        _logger.info(_yellow("[WebUI] 前端服务器已跳过 (--no-frontend)"))
+
+    # 2. Layer 4: 数据标注层（独立，最先启动）
     if not args.no_cold_table:
         start_data_labeling()
     else:
         _logger.info(_yellow("[Layer 4] 冷表处理器已跳过 (--no-cold-table)"))
 
-    # 2. Layer 1: P4 硬件控制层
+    # 3. Layer 1: P4 硬件控制层
     if not args.no_p4:
         flask_thread = start_p4_controller()
         _patch_control_timer()
     else:
         _logger.info(_yellow("[Layer 1] P4 控制器已跳过 (--no-p4)"))
 
-    # 3. Layer 2: 快脑智能体层（含逐条评判扫描）
+    # 4. Layer 2: 快脑智能体层（含逐条评判扫描）
     fast_brain_ready = await start_fast_brain(
         enable_llm=not args.no_llm,
         enable_live_scan=not args.no_live_scan,
     )
 
-    # 4. Layer 3: 慢脑智能体层
+    # 5. Layer 3: 慢脑智能体层
     slow_brain_ready = await start_slow_brain(
         enable_llm=not args.no_llm and not args.no_slow_brain
     )
 
-    # 5. 启动健康检查线程
+    # 6. 启动健康检查线程
     health_thread = threading.Thread(
         target=health_check_loop, daemon=True, name="HealthCheck"
     )
     health_thread.start()
 
-    # 5.5 GeoIP 自动更新定时线程
+    # 7. GeoIP 自动更新定时线程
     _start_geoip_auto_update_thread(args)
 
-    # 6. 启动慢脑后台循环（如果就绪）
+    # 8. 启动慢脑后台循环（如果就绪）
     slow_brain_task = None
     if slow_brain_ready:
         slow_brain_task = asyncio.create_task(slow_brain_background_loop())
@@ -703,7 +884,7 @@ async def async_main(args: argparse.Namespace):
 
     # ---- 打印最终启动报告 ----
     def _status(b: bool) -> str:
-        return "已启动 [OK]" if b else "已跳过 [--]"
+        return _green("已启动 [OK]") if b else _yellow("已跳过 [--]")
 
     # 逐条扫描状态
     live_scanner = _global_state.get("live_scanner")
@@ -714,10 +895,13 @@ async def async_main(args: argparse.Namespace):
 
     print()
     print("=" * 76)
-    print("*** 系统启动完成！***".center(76))
+    print(_bold("*** 系统启动完成！ ***".center(76)))
     print("=" * 76)
     print(
-        f"  P4 控制器        {_status(not args.no_p4) : <40}"
+        f"  前端可视化    {_status(not args.no_frontend) : <40}"
+    )
+    print(
+        f"  P4 控制器       {_status(not args.no_p4) : <40}"
     )
     print(
         f"  快脑智能体       {_status(fast_brain_ready) : <40}"
@@ -733,9 +917,11 @@ async def async_main(args: argparse.Namespace):
     )
     print("  健康检查         [OK] 每 30s")
     print()
-    print("  API 端点:")
-    print("    P4 控制面 (Flask)    -> http://0.0.0.0:5000")
-    print("    冷表处理器 (UDP)      -> 0.0.0.0:9999")
+    print("  服务端点:")
+    if not args.no_frontend:
+        print(f"    前端可视化 (HTTP)   -> http://0.0.0.0:{args.frontend_port}")
+    print("    P4 控制面 (Flask)   -> http://0.0.0.0:5000")
+    print("    冷表处理器 (UDP)     -> 0.0.0.0:9999")
     print()
     print("  按 Ctrl+C 优雅关闭系统")
     print("=" * 76)
@@ -770,7 +956,10 @@ async def async_main(args: argparse.Namespace):
     # 3. 停止数据标注层
     stop_data_labeling()
 
-    # 4. 等待各线程自然退出
+    # 4. 停止前端服务器
+    stop_frontend()
+
+    # 5. 等待各线程自然退出
     _logger.info("等待后台线程退出...")
     await asyncio.sleep(2)
 
@@ -784,17 +973,31 @@ async def async_main(args: argparse.Namespace):
 
 def main():
     """主函数：解析参数，构建异步上下文，启动系统"""
+    # ---- 强制 stdout 使用 UTF-8 (Python 3.7+, 解决 Windows CMD 中文乱码) ----
+    if sys.stdout.encoding != "utf-8":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    if sys.stderr.encoding != "utf-8":
+        try:
+            sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(
         description="P4 异构多智能体反泄密平台 — 系统启动器",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  python main.py                          # 全量启动 (所有4层 + 逐条扫描)
-  python main.py --no-llm                 # 跳过 LLM 智能体 (仅 P4 + 数据标注)
+  python main.py                          # 全量启动 (所有4层 + 逐条扫描 + 前端)
+  python main.py --no-llm                 # 跳过 LLM 智能体 (仅 P4 + 数据标注 + 前端)
   python main.py --no-slow-brain          # 跳过慢脑层
   python main.py --no-live-scan           # 跳过逐条评判队列扫描
-  python main.py --no-p4                  # 跳过 P4 控制器 (仅智能体 + 数据标注)
+  python main.py --no-p4                  # 跳过 P4 控制器 (仅智能体 + 数据标注 + 前端)
   python main.py --no-cold-table          # 跳过冷表处理器
+  python main.py --no-frontend            # 跳过前端服务器
+  python main.py --frontend-port 3000     # 前端使用端口 3000
   python main.py --no-p4 --no-cold-table  # 仅启动智能体层
   python main.py --dry-run                # 仅打印启动信息，不实际运行
         """,
@@ -823,6 +1026,18 @@ def main():
         "--no-cold-table",
         action="store_true",
         help="禁用冷表处理器 (UDP :9999 + MySQL 写入)",
+    )
+    parser.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="禁用前端 Web 可视化服务器",
+    )
+    parser.add_argument(
+        "--frontend-port",
+        type=int,
+        default=8080,
+        metavar="PORT",
+        help="前端 Web 服务器端口 (默认 8080)",
     )
     parser.add_argument(
         "--dry-run",
@@ -861,6 +1076,9 @@ def main():
         _logger.info(_yellow("DRY-RUN 模式 — 仅显示启动信息，不实际运行。"))
         print("\n将启动的组件:")
 
+        print(f"  前端可视化:       {'[OK]' if not args.no_frontend else '[--] (--no-frontend)'}")
+        if not args.no_frontend:
+            print(f"    端口:           {args.frontend_port}")
         print(f"  P4 控制器:        {'[OK]' if not args.no_p4 else '[--] (--no-p4)'}")
         print(f"  快脑智能体:       {'[OK]' if not args.no_llm else '[--] (--no-llm)'}")
         print(
