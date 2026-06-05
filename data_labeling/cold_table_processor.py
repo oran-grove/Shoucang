@@ -151,25 +151,47 @@ def update_geoip_db():
         print(f"❌ 下载失败: {e}")
         return False
 
+    # 先释放当前 GeoIP reader 的文件句柄（Windows 上 mmdb 文件被 mmap 锁定）
+    _close_geoip()
+
     print("📦 正在解压...")
+    new_path = GEOIP_DB_PATH + ".new"
     try:
-        with gzip.open(GEOIP_GZ_TEMP, "rb") as f_in, \
-             open(GEOIP_DB_PATH, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
+        # 将下载内容读入内存
+        with open(GEOIP_GZ_TEMP, "rb") as f:
+            raw = f.read()
+
+        # 检测是否为 gzip 格式（magic: 0x1f 0x8b）
+        # urllib 可能已透明解压 Content-Encoding，导致存下来的是裸 mmdb
+        if raw[:2] == b'\x1f\x8b':
+            print("   检测到 gzip 格式，正在解压...")
+            raw = gzip.decompress(raw)
+        else:
+            print("   数据已解压，直接写入...")
+
+        # 先写入临时文件，再 os.replace 原子替换，避免 Windows mmap 残留锁
+        with open(new_path, "wb") as f_out:
+            f_out.write(raw)
+        import os as _os
+        _os.replace(new_path, GEOIP_DB_PATH)
         print(f"✅ GeoIP 数据库已更新: {GEOIP_DB_PATH}")
     except Exception as e:
         print(f"❌ 解压失败: {e}")
-        return False
-    finally:
+        # 清理失败的临时文件
         try:
-            import os as _os
-            _os.remove(GEOIP_GZ_TEMP)
+            import os as _os2
+            _os2.remove(new_path)
         except Exception:
             pass
-
-    # 替换 reader
-    _close_geoip()
-    _init_geoip()
+        return False
+    finally:
+        # 重新加载 reader
+        _init_geoip()
+        try:
+            import os as _os3
+            _os3.remove(GEOIP_GZ_TEMP)
+        except Exception:
+            pass
     return True
 
 
