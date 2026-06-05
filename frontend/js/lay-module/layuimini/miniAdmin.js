@@ -12,11 +12,6 @@ layui.define(["jquery", "miniMenu", "element","miniTab", "miniTheme"], function 
         element = layui.element ,
         miniTab = layui.miniTab;
 
-    if (!/http(s*):\/\//.test(location.href)) {
-        var tips = "请先将项目部署至web容器（Apache/Tomcat/Nginx/IIS/等），否则部分数据将无法显示";
-        return layer.alert(tips);
-    }
-
     var miniAdmin = {
 
         /**
@@ -254,14 +249,14 @@ layui.define(["jquery", "miniMenu", "element","miniTab", "miniTheme"], function 
                 // 判断是否清理服务端
                 var clearUrl = $(this).attr('data-href');
                 if (clearUrl != undefined && clearUrl != '' && clearUrl != null) {
-                    $.getJSON(clearUrl, function (data, status) {
+                    $.post(clearUrl, function (data, status) {
                         layer.close(loading);
                         if (data.code != 1) {
                             return miniAdmin.error(data.msg);
                         } else {
                             return miniAdmin.success(data.msg);
                         }
-                    }).fail(function () {
+                    }, 'json').fail(function () {
                         layer.close(loading);
                         return miniAdmin.error('清理缓存接口有误');
                     });

@@ -256,7 +256,8 @@
         var $ = layui.$;
 
         // 加载配置并填充表单
-        $.getJSON('../api/get_config.php', function (config) {
+        $.getJSON('/api/config', function (resp) {
+            var config = resp.data || resp;
             ['detection', 'correlation', 'judgment', 'feedback'].forEach(function (section) {
                 var data = config[section];
                 if (data) {
@@ -279,7 +280,7 @@
                 maxmin: true,
                 shadeClose: true,
                 area: ['100%', '100%'],
-                content: '../page/table/edit_deepseek.html'
+                content: '/page/table/edit_deepseek.html'
             });
         });
 
@@ -291,7 +292,7 @@
                 maxmin: true,
                 shadeClose: true,
                 area: ['100%', '100%'],
-                content: '../page/table/edit_lmstudio.html'
+                content: '/page/table/edit_lmstudio.html'
             });
         });
 
@@ -303,7 +304,7 @@
                 maxmin: true,
                 shadeClose: true,
                 area: ['100%', '100%'],
-                content: '../page/table/edit_gpt.html'
+                content: '/page/table/edit_gpt.html'
             });
         });
 
@@ -316,14 +317,21 @@
 
         // 配置表单提交
         form.on('submit(submitConfig)', function (data) {
-            $.post('../api/save_config.php', data.field, function (res) {
-                if (res.code === 0) {
-                    layer.msg('保存成功', { icon: 1 });
-                } else {
-                    layer.msg(res.msg || '保存失败', { icon: 2 });
+            $.ajax({
+                url: '/api/config',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(data.field),
+                success: function (res) {
+                    if (res.code === 0) {
+                        layer.msg('保存成功', { icon: 1 });
+                    } else {
+                        layer.msg(res.msg || '保存失败', { icon: 2 });
+                    }
+                },
+                error: function () {
+                    layer.msg('请求失败', { icon: 2 });
                 }
-            }, 'json').fail(function () {
-                layer.msg('请求失败', { icon: 2 });
             });
             return false;
         });
@@ -332,7 +340,7 @@
         $('#btnResetConfig').on('click', function () {
             layer.confirm('确认恢复默认配置？当前配置将被覆盖。', function (index) {
                 layer.close(index);
-                $.post('../api/reset_config.php', function (res) {
+                $.post('/api/config/reset', function (res) {
                     if (res.code === 0) {
                         layer.msg('已恢复默认配置', { icon: 1 });
                         setTimeout(function () { location.reload(); }, 800);

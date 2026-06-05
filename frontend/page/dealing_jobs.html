@@ -150,7 +150,7 @@ layui.use(['layer'], function () {
 
     function loadTrafficData() {
         $.ajax({
-            url: 'http://127.0.0.1:5000/api/traffic',
+            url: '/api/traffic',
             type: 'GET',
             dataType: 'json',
             timeout: 10000,
@@ -213,7 +213,7 @@ layui.use(['layer'], function () {
                         return;
                     }
                     $.ajax({
-                        url: 'http://127.0.0.1:5000/api/traffic',
+                        url: '/api/traffic',
                         type: 'POST',
                         contentType: 'application/json',
                         data: JSON.stringify({

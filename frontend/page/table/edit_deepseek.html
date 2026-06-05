@@ -45,7 +45,8 @@
             $ = layui.$;
 
         // 加载当前 DeepSeek 配置并回填表单
-        $.getJSON('../../api/get_config.php', function (config) {
+        $.getJSON('/api/config', function (resp) {
+            var config = resp.data || resp;
             if (config.backends && config.backends.deepseek) {
                 $('input[name="api_key"]').val(config.backends.deepseek.api_key || '');
                 $('input[name="model_name"]').val(config.backends.deepseek.model_name || '');
@@ -56,19 +57,30 @@
 
         // 监听提交
         form.on('submit(saveBtn)', function (data) {
-            data.field.backend = 'deepseek';
-            $.post('../../api/save_backend.php', data.field, function (res) {
-                if (res.code === 0) {
-                    layer.msg('保存成功', { icon: 1 }, function () {
-                        var iframeIndex = parent.layer.getFrameIndex(window.name);
-                        parent.layer.close(iframeIndex);
-                        parent.location.reload();
-                    });
-                } else {
-                    layer.msg(res.msg || '保存失败', { icon: 2 });
+            var payload = {
+                backend: 'deepseek',
+                api_key: data.field.api_key,
+                model_name: data.field.model_name
+            };
+            $.ajax({
+                url: '/api/config/backend',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(payload),
+                success: function (res) {
+                    if (res.code === 0) {
+                        layer.msg('保存成功', { icon: 1 }, function () {
+                            var iframeIndex = parent.layer.getFrameIndex(window.name);
+                            parent.layer.close(iframeIndex);
+                            parent.location.reload();
+                        });
+                    } else {
+                        layer.msg(res.msg || '保存失败', { icon: 2 });
+                    }
+                },
+                error: function () {
+                    layer.msg('请求失败', { icon: 2 });
                 }
-            }, 'json').fail(function () {
-                layer.msg('请求失败', { icon: 2 });
             });
             return false;
         });

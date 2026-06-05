@@ -229,3 +229,318 @@ def add_to_db_whitelist(ip: str,
             except Exception:
                 pass
         return False
+
+
+# ============================================================================
+# 明细查询（前端列表展示用 — 返回完整字段）
+# ============================================================================
+def get_blacklist_detailed() -> list:
+    """
+    查询黑名单完整明细列表。
+    返回: [{"id": int, "ip_address": str, "threat_level": str,
+            "reason": str, "port": int|None, "attack_type": str|None}, ...]
+    """
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, ip_address, threat_level, reason, port, attack_type "
+                "FROM blacklist ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"❌ [数据库] 查询黑名单明细失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
+
+
+def get_whitelist_detailed() -> list:
+    """
+    查询白名单完整明细列表。
+    返回: [{"id": int, "ip_address": str, "reason": str,
+            "port": int|None, "trust_level": str|None}, ...]
+    """
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, ip_address, reason, port, trust_level "
+                "FROM whitelist ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"❌ [数据库] 查询白名单明细失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
+
+
+# ============================================================================
+# 删除操作
+# ============================================================================
+def remove_from_blacklist(item_id: int) -> bool:
+    """从黑名单删除指定记录（按 id），成功后刷新常驻内存。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM blacklist WHERE id = %s", (item_id,))
+            conn.commit()
+        conn.close()
+        conn = None
+        reload_lists_after_change()
+        print(f"🗑️  [数据库] 黑名单记录 id={item_id} 已删除")
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 黑名单删除失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+def remove_from_whitelist(item_id: int) -> bool:
+    """从白名单删除指定记录（按 id），成功后刷新常驻内存。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM whitelist WHERE id = %s", (item_id,))
+            conn.commit()
+        conn.close()
+        conn = None
+        reload_lists_after_change()
+        print(f"🗑️  [数据库] 白名单记录 id={item_id} 已删除")
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 白名单删除失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+# ============================================================================
+# 员工 (ip_dept_map) CRUD
+# ============================================================================
+def get_employees(filters: dict = None,
+                  page: int = 1,
+                  limit: int = 15) -> tuple:
+    """
+    查询员工列表（支持过滤 + 分页）。
+    返回: (total_count: int, rows: list[dict])
+    """
+    filters = filters or {}
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            conditions = []
+            params = []
+            for field in ("number", "ip", "department", "name"):
+                if filters.get(field):
+                    conditions.append(f"{field} = %s")
+                    params.append(filters[field])
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+            cur.execute(f"SELECT COUNT(*) AS cnt FROM ip_dept_map{where}", params)
+            total = cur.fetchone()["cnt"]
+
+            start = (page - 1) * limit
+            cur.execute(
+                f"SELECT id, number, ip, department, name FROM ip_dept_map{where} "
+                "ORDER BY id DESC LIMIT %s OFFSET %s",
+                params + [limit, start],
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return total, rows
+    except Exception as e:
+        print(f"❌ [数据库] 查询员工列表失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return 0, []
+
+
+def add_employee(number: str, ip: str, department: str, name: str) -> bool:
+    """新增员工记录，成功后刷新常驻内存。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ip_dept_map (number, ip, department, name) "
+                "VALUES (%s, %s, %s, %s)",
+                (number, ip, department, name),
+            )
+            conn.commit()
+        conn.close()
+        conn = None
+        reload_lists_after_change()
+        print(f"👤 [数据库] 员工已新增: {name} ({number}) — {ip}")
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 新增员工失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+def update_employee(emp_id: int, **fields) -> bool:
+    """更新员工记录（按 id），成功后刷新常驻内存。"""
+    if not fields:
+        return False
+    conn = None
+    try:
+        conn = _db_connect()
+        set_clause = ", ".join(f"{k} = %s" for k in fields.keys())
+        values = list(fields.values()) + [emp_id]
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE ip_dept_map SET {set_clause} WHERE id = %s", values)
+            conn.commit()
+        conn.close()
+        conn = None
+        reload_lists_after_change()
+        print(f"✏️  [数据库] 员工 id={emp_id} 已更新")
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 更新员工失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+def delete_employee(emp_id: int) -> bool:
+    """删除员工记录（按 id），成功后刷新常驻内存。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ip_dept_map WHERE id = %s", (emp_id,))
+            conn.commit()
+        conn.close()
+        conn = None
+        reload_lists_after_change()
+        print(f"🗑️  [数据库] 员工 id={emp_id} 已删除")
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 删除员工失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+# ============================================================================
+# 流量日志查询
+# ============================================================================
+def get_traffic_logs(limit: int = 200,
+                     offset: int = 0,
+                     filters: dict = None) -> list:
+    """
+    查询流量日志表（traffic_log）。
+    返回: list[dict]
+    """
+    filters = filters or {}
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            conditions = []
+            params = []
+            for field, value in filters.items():
+                if value is not None and field in (
+                    "src_ip", "dst_ip", "department", "protocol"
+                ):
+                    conditions.append(f"{field} = %s")
+                    params.append(value)
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+
+            cur.execute(
+                f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
+                "protocol, packet_time, traffic_size, is_blocked, entropy "
+                f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
+                params + [limit, offset],
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"❌ [数据库] 查询流量日志失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
+
+
+def update_traffic_action(traffic_id: int, action: str) -> bool:
+    """更新流量记录的拦截状态。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE traffic_log SET is_blocked = %s WHERE id = %s",
+                (1 if action in ("拉黑", "block") else 0, traffic_id),
+            )
+            conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"❌ [数据库] 更新流量动作失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return False
+
+
+def get_employee_count() -> int:
+    """获取员工总数。"""
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM ip_dept_map")
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        print(f"❌ [数据库] 查询员工总数失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return 0

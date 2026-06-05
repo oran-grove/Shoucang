@@ -157,15 +157,20 @@ layui.use(['layer', 'miniTab'], function () {
         $('#downVal').text('--').css('color', '#FF5722');
     }
 
-    // ==================== 模块一：系统状态（localhost:5000） ====================
+    // ==================== 模块一：系统状态（统一后端 API） ====================
     function loadServerStatus() {
         $.ajax({
-            url: 'http://127.0.0.1:5000/api/status',
+            url: '/api/status',
             type: 'GET',
             dataType: 'json',
             timeout: 8000,
             success: function (res) {
-                if (res.code === 200 && res.data) {
+                if (res.cpu !== undefined) {
+                    $('#cpuVal').text(res.cpu + '%').css('color', '#333');
+                    $('#ramVal').text(res.ram + '%').css('color', '#333');
+                    $('#upVal').text(res.up || '--').css('color', '#333');
+                    $('#downVal').text(res.down || '--').css('color', '#333');
+                } else if (res.code === 200 && res.data) {
                     var d = res.data;
                     $('#cpuVal').text((d.cpu != null ? d.cpu : '--') + '%').css('color', '#333');
                     $('#ramVal').text(formatBytes(d.ram || 0)).css('color', '#333');
@@ -176,29 +181,29 @@ layui.use(['layer', 'miniTab'], function () {
                 }
             },
             error: function (xhr, status) {
-                showStatusError(status === 'timeout' ? '请求超时' : '无法连接');
+                showStatusError(status === 'timeout' ? '请求超时' : (xhr.responseJSON ? (xhr.responseJSON.detail || '服务异常') : '无法连接'));
             }
         });
     }
 
-    // ==================== 模块二：高危险警告（127.0.0.1:5000） ====================
-    function renderWarnings(data) {
+    // ==================== 模块二：高危险警告（统一后端 API） ====================
+    function renderWarnings(items) {
         var $tbody = $('#warningTbody');
-        $('#warningCount').text(data.count + ' 条');
-        if (!data.count) {
+        $('#warningCount').text(items.length + ' 条');
+        if (!items.length) {
             $tbody.html('<tr><td colspan="3" style="text-align:center;color:#999;">暂无高危险警告</td></tr>');
             return;
         }
         var levelClass = { 'high': 'level-high', 'medium': 'level-mid', 'low': 'level-low' };
         var levelText  = { 'high': '高危', 'medium': '中危', 'low': '低危' };
         var rows = '';
-        $.each(data.data, function (i, item) {
+        $.each(items, function (i, item) {
             var lcls = levelClass[item.threat_level] || 'level-mid';
             var ltxt = levelText[item.threat_level]  || item.threat_level;
             rows += '<tr data-id="' + (item.id || '') + '" style="cursor:pointer;">' +
-                '<td><span class="ip-segment">' + (item.src_ip || '--') + '</span></td>' +
+                '<td><span class="ip-segment">' + (item.ip || item.src_ip || '--') + '</span></td>' +
                 '<td><span class="' + lcls + '">' + ltxt + '</span></td>' +
-                '<td>' + (item.reason || '--') + '</td>' +
+                '<td>' + (item.reason || item.label || '--') + '</td>' +
                 '</tr>';
         });
         $tbody.html(rows);
@@ -211,15 +216,28 @@ layui.use(['layer', 'miniTab'], function () {
 
     function loadDangerWarnings() {
         $.ajax({
-            url: 'http://127.0.0.1:5000/api/traffic',
+            url: '/api/alerts',
             type: 'GET',
             dataType: 'json',
             timeout: 10000,
             success: function (res) {
-                if (res.code === '0' || res.code === 0) {
-                    renderWarnings(res.data || []);
+                var items = res.data || [];
+                if (items.length === 0) {
+                    // fallback: try blacklist
+                    $.ajax({
+                        url: '/api/blacklist',
+                        type: 'GET',
+                        dataType: 'json',
+                        timeout: 10000,
+                        success: function(res2) {
+                            renderWarnings(res2.data || []);
+                        },
+                        error: function() {
+                            renderWarnings([]);
+                        }
+                    });
                 } else {
-                    $('#warningTbody').html('<tr><td colspan="3" style="text-align:center;color:#FF5722;">加载失败: ' + (res.msg || '未知错误') + '</td></tr>');
+                    renderWarnings(items);
                 }
             },
             error: function (xhr, status) {

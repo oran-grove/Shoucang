@@ -16,7 +16,7 @@
 </head>
 <body>
 <div class="layui-form layuimini-form">
-    <input type="hidden" name="original_number" id="original_number" value="">
+    <input type="hidden" name="id" id="record_id" value="">
 
     <div class="layui-form-item">
         <label class="layui-form-label required">工号</label>
@@ -76,7 +76,7 @@
 
         // 回填表单
         if (originalData.number) {
-            $('#original_number').val(originalData.number);
+            $('#record_id').val(originalData.id || '');
             $('input[name="number"]').val(originalData.number || '');
             $('input[name="name"]').val(originalData.name || '');
             $('input[name="department"]').val(originalData.department || '');
@@ -85,27 +85,25 @@
 
         //监听提交
         form.on('submit(saveBtn)', function (data) {
-            var payload = {
-                original: { number: $('#original_number').val() },
-                updated: data.field
-            };
-            // 清理掉隐藏字段，不写入数据
-            delete payload.updated.original_number;
+            var payload = data.field;
+            delete payload.id;
 
-            fetch('update.php', {
-                method: 'POST',
+            var recordId = $('#record_id').val();
+            fetch(recordId ? '/api/employees/' + recordId : '/api/employees', {
+                method: recordId ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
             .then(function (res) { return res.json(); })
             .then(function (result) {
                 if (result.code === 0) {
-                    layer.msg('更新成功', { icon: 1 }, function () {
+                    layer.msg('保存成功', { icon: 1 }, function () {
                         var iframeIndex = parent.layer.getFrameIndex(window.name);
                         parent.layer.close(iframeIndex);
                         parent.location.reload(); // 刷新父页面表格
                     });
                 } else {
-                    layer.msg(result.msg || '更新失败', { icon: 2 });
+                    layer.msg(result.msg || '保存失败', { icon: 2 });
                 }
             })
             .catch(function (err) {

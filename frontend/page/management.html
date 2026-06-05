@@ -76,7 +76,7 @@
 
         table.render({
             elem: '#currentTableId',
-            url: '../api/table_search.php',
+            url: '/api/employees',
             toolbar: '#toolbarDemo',
             defaultToolbar: ['filter', 'exports', 'print', {
                 title: '提示',
@@ -129,7 +129,7 @@
                     maxmin:true,
                     shadeClose: true,
                     area: ['100%', '100%'],
-                    content: '../page/table/add.html',
+                    content: '/page/table/add.html',
                 });
                 $(window).on("resize", function () {
                     layer.full(index);
@@ -143,21 +143,22 @@
                 }
                 layer.confirm('确定删除选中的 ' + data.length + ' 行吗？', function (index) {
                     layer.close(index);
-                    fetch('../page/table/delete.php', {
-                        method: 'POST',
-                        body: JSON.stringify(data)
-                    })
-                    .then(function (res) { return res.json(); })
-                    .then(function (result) {
-                        console.log('delete result:', result);
-                        if (result.code === 0) {
-                            layer.msg('删除成功，移除了 ' + result.deleted + ' 条', { icon: 1 });
-                            table.reload('currentTableId');
-                        } else {
-                            layer.msg((result.msg || '删除失败') + ' [debug: ' + JSON.stringify(result) + ']', { icon: 2, time: 5000 });
-                        }
-                    })
-                    .catch(function (err) {
+                    // 批量删除
+                    var deletePromises = [];
+                    var deletedCount = 0;
+                    data.forEach(function(item) {
+                        var p = fetch('/api/employees/' + item.id, { method: 'DELETE' })
+                            .then(function(res) { return res.json(); })
+                            .then(function(result) {
+                                if (result.code === 0) deletedCount++;
+                            });
+                        deletePromises.push(p);
+                    });
+                    Promise.all(deletePromises).then(function() {
+                        var msg = '删除完成，成功 ' + deletedCount + ' / ' + data.length + ' 条';
+                        layer.msg(msg, { icon: deletedCount > 0 ? 1 : 2 });
+                        table.reload('currentTableId');
+                    }).catch(function(err) {
                         console.error('delete error:', err);
                         layer.msg('请求失败: ' + err.message, { icon: 2 });
                     });
@@ -181,7 +182,7 @@
                     maxmin:true,
                     shadeClose: true,
                     area: ['100%', '100%'],
-                    content: '../page/table/edit.html?' + params,
+                    content: '/page/table/edit.html?' + params,
                 });
                 $(window).on("resize", function () {
                     layer.full(index);

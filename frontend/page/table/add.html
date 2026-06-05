@@ -54,7 +54,7 @@
 
         //监听提交
         form.on('submit(saveBtn)', function (data) {
-            fetch('save.php', {
+            fetch('/api/employees', {
                 method: 'POST',
                  headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data.field)

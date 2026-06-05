@@ -47,6 +47,21 @@ from .lists_manager import (
     lookup_employee,
     add_to_db_blacklist,
     add_to_db_whitelist,
+    # 明细查询
+    get_blacklist_detailed,
+    get_whitelist_detailed,
+    # 删除
+    remove_from_blacklist,
+    remove_from_whitelist,
+    # 员工 CRUD
+    get_employees,
+    add_employee,
+    update_employee,
+    delete_employee,
+    get_employee_count,
+    # 流量日志
+    get_traffic_logs,
+    update_traffic_action,
 )
 
 from config.shared_config import (
@@ -72,4 +87,19 @@ __all__ = [
     "lookup_employee",
     "add_to_db_blacklist",
     "add_to_db_whitelist",
+    # 明细查询
+    "get_blacklist_detailed",
+    "get_whitelist_detailed",
+    # 删除
+    "remove_from_blacklist",
+    "remove_from_whitelist",
+    # 员工 CRUD
+    "get_employees",
+    "add_employee",
+    "update_employee",
+    "delete_employee",
+    "get_employee_count",
+    # 流量日志
+    "get_traffic_logs",
+    "update_traffic_action",
 ]
