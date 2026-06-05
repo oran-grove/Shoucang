@@ -60,6 +60,70 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 logger = logging.getLogger("UnifiedBackend")
 
+# ---- 系统性能采样（后台线程，避免阻塞异步事件循环）----
+_perf_lock = threading.Lock()
+_perf_cache = {
+    "cpu": 0.0,
+    "ram": 0.0,
+    "up_bytes": 0,   # 真实吞吐率 (bytes/s)
+    "down_bytes": 0,
+}
+_last_net = None     # (bytes_sent, bytes_recv, timestamp)
+_perf_running = True
+
+
+def _perf_sampler(interval: float = 2.0):
+    """后台线程：周期性采样 CPU / RAM / 网络吞吐率"""
+    import time as _time
+    global _last_net, _perf_running
+
+    # 预热 psutil CPU 采样（第一次调用总是 0）
+    try:
+        import psutil
+        psutil.cpu_percent(interval=0.1)
+    except Exception:
+        pass
+
+    while _perf_running:
+        try:
+            import psutil
+
+            # CPU / RAM — 瞬时快照
+            cpu = round(psutil.cpu_percent(interval=0.0), 1)
+            mem = psutil.virtual_memory()
+            ram = round(mem.percent, 1)
+
+            # 网络吞吐率 — 差分计算
+            net = psutil.net_io_counters()
+            now = _time.monotonic()
+            if _last_net is not None:
+                prev_sent, prev_recv, prev_time = _last_net
+                delta = now - prev_time
+                if delta > 1e-6:
+                    up_bytes = int((net.bytes_sent - prev_sent) / delta)
+                    down_bytes = int((net.bytes_recv - prev_recv) / delta)
+                else:
+                    up_bytes = 0
+                    down_bytes = 0
+            else:
+                up_bytes = 0
+                down_bytes = 0
+            _last_net = (net.bytes_sent, net.bytes_recv, now)
+
+            with _perf_lock:
+                _perf_cache["cpu"] = cpu
+                _perf_cache["ram"] = ram
+                _perf_cache["up_bytes"] = up_bytes
+                _perf_cache["down_bytes"] = down_bytes
+        except Exception:
+            pass
+
+        _time.sleep(interval)
+
+
+_perf_thread = threading.Thread(target=_perf_sampler, daemon=True, name="PerfSampler")
+_perf_thread.start()
+
 # ---- FastAPI 应用 ----
 app = FastAPI(title="守藏系统API", version="3.0.0", docs_url=None, redoc_url=None)
 
@@ -764,59 +828,52 @@ async def api_health():
 # ============================================================================
 @app.get("/api/status")
 async def api_status():
-    """返回系统资源使用情况，供 welcome-1.html 仪表盘使用"""
+    """返回系统资源使用情况（非阻塞），供 welcome-1.html 仪表盘使用"""
+    with _perf_lock:
+        cpu = _perf_cache["cpu"]
+        ram = _perf_cache["ram"]
+        up_bytes = _perf_cache["up_bytes"]
+        down_bytes = _perf_cache["down_bytes"]
+
+    # 检查 psutil 是否可用（_perf_sampler 静默失败时 cache 全为 0）
     try:
         import psutil
+        _psutil_ok = True
+    except ImportError:
+        _psutil_ok = False
 
-        cpu = round(psutil.cpu_percent(interval=0.3), 1)
-        mem = psutil.virtual_memory()
-        ram = round(mem.percent, 1)
-
-        net = psutil.net_io_counters()
-        up_bytes = net.bytes_sent
-        down_bytes = net.bytes_recv
-
-        def fmt_bytes(b):
-            if b >= 1073741824:
-                return f"{b / 1073741824:.2f} GB/s"
-            if b >= 1048576:
-                return f"{b / 1048576:.2f} MB/s"
-            if b >= 1024:
-                return f"{b / 1024:.1f} KB/s"
-            return f"{b} B/s"
-
+    if not _psutil_ok:
         return JSONResponse(
             {
                 "cpu": cpu,
                 "ram": ram,
-                "up": fmt_bytes(up_bytes),
-                "down": fmt_bytes(down_bytes),
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
-    except ImportError:
-        return JSONResponse(
-            {
-                "cpu": 0,
-                "ram": 0,
                 "up": "不可用",
                 "down": "不可用",
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "note": "psutil 未安装，系统状态不可用",
             }
         )
-    except Exception as e:
-        logger.error(f"获取系统状态失败: {e}")
-        return JSONResponse(
-            {
-                "cpu": 0,
-                "ram": 0,
-                "up": "错误",
-                "down": "错误",
-                "error": str(e),
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        )
+
+    def fmt_bytes(b: float) -> str:
+        if b >= 1073741824:
+            return f"{b / 1073741824:.2f} GB/s"
+        if b >= 1048576:
+            return f"{b / 1048576:.2f} MB/s"
+        if b >= 1024:
+            return f"{b / 1024:.1f} KB/s"
+        return f"{int(b)} B/s"
+
+    return JSONResponse(
+        {
+            "cpu": cpu,
+            "ram": ram,
+            "up": fmt_bytes(up_bytes),
+            "down": fmt_bytes(down_bytes),
+            "up_bytes": up_bytes,
+            "down_bytes": down_bytes,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
 
 
 # ============================================================================

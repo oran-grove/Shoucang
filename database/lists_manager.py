@@ -248,7 +248,7 @@ def get_blacklist_detailed() -> list:
                 "SELECT id, ip_address, threat_level, reason, port, attack_type "
                 "FROM blacklist ORDER BY id DESC"
             )
-            rows = cur.fetchall()
+            rows = list(cur.fetchall())
         conn.close()
         return rows
     except Exception as e:
@@ -275,7 +275,7 @@ def get_whitelist_detailed() -> list:
                 "SELECT id, ip_address, reason, port, trust_level "
                 "FROM whitelist ORDER BY id DESC"
             )
-            rows = cur.fetchall()
+            rows = list(cur.fetchall())
         conn.close()
         return rows
     except Exception as e:
@@ -340,7 +340,7 @@ def remove_from_whitelist(item_id: int) -> bool:
 # ============================================================================
 # 员工 (ip_dept_map) CRUD
 # ============================================================================
-def get_employees(filters: dict = None,
+def get_employees(filters: Optional[dict] = None,
                   page: int = 1,
                   limit: int = 15) -> tuple:
     """
@@ -361,7 +361,8 @@ def get_employees(filters: dict = None,
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
 
             cur.execute(f"SELECT COUNT(*) AS cnt FROM ip_dept_map{where}", params)
-            total = cur.fetchone()["cnt"]
+            row = cur.fetchone()
+            total = row["cnt"] if row else 0
 
             start = (page - 1) * limit
             cur.execute(
@@ -464,7 +465,7 @@ def delete_employee(emp_id: int) -> bool:
 # ============================================================================
 def get_traffic_logs(limit: int = 200,
                      offset: int = 0,
-                     filters: dict = None) -> list:
+                     filters: Optional[dict] = None) -> list:
     """
     查询流量日志表（traffic_log）。
     返回: list[dict]
@@ -490,7 +491,7 @@ def get_traffic_logs(limit: int = 200,
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
                 params + [limit, offset],
             )
-            rows = cur.fetchall()
+            rows = list(cur.fetchall())
         conn.close()
         return rows
     except Exception as e:

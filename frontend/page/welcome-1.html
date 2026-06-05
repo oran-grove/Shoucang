@@ -55,7 +55,7 @@
 <div class="layuimini-container">
     <div class="layuimini-main">
 
-        <!-- ==================== 系统状态（CPU / RAM / UP / DOWN） ==================== -->
+        <!-- ==================== 系统状态（CPU / RAM / 上行 / 下行） ==================== -->
         <div class="layui-card">
             <div class="layui-card-header"><i class="fa fa-server icon" style="color:#1E9FFF;"></i>系统状态</div>
             <div class="layui-card-body">
@@ -95,8 +95,6 @@
                 </div>
             </div>
         </div>
-
-    
 
         <!-- ==================== 高危险警告表格 ==================== -->
         <div class="layui-row layui-col-space15" style="margin-top:15px;">
@@ -142,14 +140,6 @@ layui.use(['layer', 'miniTab'], function () {
 
     miniTab.listen();
 
-
-    function formatBytes(bytes) {
-        if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB/s';
-        if (bytes >= 1048576)    return (bytes / 1048576).toFixed(2) + ' MB/s';
-        if (bytes >= 1024)       return (bytes / 1024).toFixed(1) + ' KB/s';
-        return bytes + ' B/s';
-    }
-
     function showStatusError(msg) {
         $('#cpuVal').text('错误').css('color', '#FF5722');
         $('#ramVal').text('错误').css('color', '#FF5722');
@@ -166,16 +156,11 @@ layui.use(['layer', 'miniTab'], function () {
             timeout: 8000,
             success: function (res) {
                 if (res.cpu !== undefined) {
+                    // 后端已返回预格式化的字符串（如 "3.5%", "45.2%", "1.2 MB/s" 等）
                     $('#cpuVal').text(res.cpu + '%').css('color', '#333');
                     $('#ramVal').text(res.ram + '%').css('color', '#333');
                     $('#upVal').text(res.up || '--').css('color', '#333');
                     $('#downVal').text(res.down || '--').css('color', '#333');
-                } else if (res.code === 200 && res.data) {
-                    var d = res.data;
-                    $('#cpuVal').text((d.cpu != null ? d.cpu : '--') + '%').css('color', '#333');
-                    $('#ramVal').text(formatBytes(d.ram || 0)).css('color', '#333');
-                    $('#upVal').text(formatBytes(d.up || 0)).css('color', '#333');
-                    $('#downVal').text(formatBytes(d.down || 0)).css('color', '#333');
                 } else {
                     showStatusError(res.message || '数据异常');
                 }
@@ -251,8 +236,8 @@ layui.use(['layer', 'miniTab'], function () {
     loadServerStatus();
     loadDangerWarnings();
 
-    // 每 30 秒自动刷新
-    setInterval(loadServerStatus, 30000);
+    // 性能监测每秒刷新，警告列表每 30 秒刷新
+    setInterval(loadServerStatus, 1000);
     setInterval(loadDangerWarnings, 30000);
 });
 </script>
