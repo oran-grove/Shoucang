@@ -304,6 +304,40 @@ async def start_multi_agent_system(
             f"[Layer 2]   研判: {config.judgment.backend.value}/{config.judgment.model_name}"
         )
 
+        # ---- 注入告警回调：慢脑高危判定 → 前端告警缓冲区 ----
+        def _slowbrain_alert_callback(verdict, flow):
+            """将慢脑分析产生的高危/可疑判定推送到前端告警缓冲"""
+            try:
+                from backend.api_server import push_alert
+
+                src_ip = flow.src_ip if flow else ""
+                push_alert(
+                    ip=src_ip,
+                    label=(
+                        f"[慢脑] {verdict.threat_type} "
+                        f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%})"
+                    ),
+                    details={
+                        "verdict": verdict.verdict.value,
+                        "severity": verdict.severity.value,
+                        "confidence": verdict.confidence,
+                        "reasoning": verdict.reasoning[:300],
+                        "threat_type": verdict.threat_type,
+                        "src_ip": src_ip,
+                        "dst_ip": flow.dst_ip if flow else "",
+                        "recommended_action": verdict.recommended_action,
+                    },
+                )
+                _logger.debug(
+                    "[Layer 2] 告警已推送前端: %s → %s",
+                    src_ip, verdict.threat_type,
+                )
+            except Exception as e:
+                _logger.warning(_yellow(f"[Layer 2] 告警推送前端失败: {e}"))
+
+        system._orchestrator.alert_callback = _slowbrain_alert_callback
+        _logger.info(_green("[Layer 2]   告警回调已注入 (慢脑 → 前端)"))
+
         # ---- 启动 LiveScanOrchestrator（逐条分析队列扫描） ----
         if enable_live_scan:
             from multi_agent_system.orchestrators.live_scan_orchestrator import (
@@ -511,10 +545,169 @@ async def start_deep_analysis(enable_llm: bool = True) -> bool:
         return False
 
 
+# ============================================================
+# 深度分析辅助函数
+# ============================================================
+def _fetch_traffic_for_deep_analysis(lookback_days: int = 30) -> list:
+    """
+    从 traffic_log 拉取指定天数内的流量数据，用于深度分析。
+    返回 list[dict]，每个 dict 为一行数据。
+    """
+    import pymysql
+    from config.shared_config import DB_CONFIG
+
+    conn = None
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
+                "protocol, packet_time, traffic_size, is_blocked, entropy "
+                "FROM traffic_log "
+                "WHERE packet_time >= DATE_SUB(NOW(), INTERVAL %s DAY) "
+                "ORDER BY src_ip, packet_time ASC",
+                (lookback_days,),
+            )
+            return list(cur.fetchall())
+    except Exception as e:
+        _logger.error(_red(f"[Layer 3] 拉取历史流量数据失败: {e}"))
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def _row_to_flow_event(row: dict):
+    """将 traffic_log 行转换为 FlowEvent"""
+    from multi_agent_system.core.message import FlowEvent as _FE
+
+    return _FE(
+        src_ip=row.get("src_ip", "0.0.0.0"),
+        dst_ip=row.get("dst_ip", "0.0.0.0"),
+        src_port=row.get("src_port") or 0,
+        dst_port=row.get("dst_port") or 0,
+        protocol=row.get("protocol", "TCP"),
+        department=row.get("department", ""),
+        byte_count=row.get("traffic_size") or 0,
+        entropy_score=float(row.get("entropy") or 0.0),
+        extra={
+            "row_id": row.get("id"),
+            "packet_time": str(row.get("packet_time", "")),
+            "is_blocked": bool(row.get("is_blocked", 0)),
+        },
+    )
+
+
+def _group_flows_for_deep_analysis(
+    rows: list, recent_hours: int = 24,
+) -> tuple:
+    """
+    按 src_ip 分组，拆分为历史流(>recent_hours)和近期流(≤recent_hours)。
+
+    Returns:
+        (entity_flows, entity_recent)
+        entity_flows:  {src_ip: (entity_type, [FlowEvent, ...])}  ← 历史基线
+        entity_recent: {src_ip: [FlowEvent, ...]}                  ← 近期待评估
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=recent_hours)
+
+    # 按 src_ip 分组
+    grouped: dict[str, list] = {}
+    for row in rows:
+        src_ip = row.get("src_ip", "")
+        if not src_ip:
+            continue
+        grouped.setdefault(src_ip, []).append(row)
+
+    entity_flows: dict[str, tuple[str, list]] = {}
+    entity_recent: dict[str, list] = {}
+
+    for src_ip, ip_rows in grouped.items():
+        hist_flows = []
+        recent_flows = []
+        entity_type = "user"
+
+        for row in ip_rows:
+            flow = _row_to_flow_event(row)
+            pkt_time = row.get("packet_time")
+
+            is_recent = False
+            if pkt_time is not None:
+                if isinstance(pkt_time, datetime):
+                    is_recent = pkt_time >= cutoff
+                else:
+                    # 字符串格式尝试解析
+                    try:
+                        from datetime import datetime as _dt
+                        ts = _dt.strptime(str(pkt_time), "%Y-%m-%d %H:%M:%S")
+                        is_recent = ts >= cutoff
+                    except (ValueError, TypeError):
+                        pass
+
+            if is_recent:
+                recent_flows.append(flow)
+            else:
+                hist_flows.append(flow)
+
+            # 使用 department 作为 entity_type
+            dept = row.get("department", "")
+            if dept:
+                entity_type = dept
+
+        if hist_flows:
+            entity_flows[src_ip] = (entity_type, hist_flows)
+        if recent_flows:
+            entity_recent[src_ip] = recent_flows
+
+    return entity_flows, entity_recent
+
+
+def _push_alerts_to_frontend(alerts: list):
+    """将深度分析告警推送到前端告警缓冲区"""
+    if not alerts:
+        return
+    try:
+        from backend.api_server import push_alert
+
+        for alert in alerts:
+            if alert.severity.value in ("high", "critical"):
+                src_ip = alert.extra.get("src_ip", "") if alert.extra else ""
+                push_alert(
+                    ip=src_ip,
+                    label=f"[慢脑] {alert.threat_type} (置信度:{alert.confidence:.0%})",
+                    details={
+                        "verdict": alert.verdict.value,
+                        "severity": alert.severity.value,
+                        "confidence": alert.confidence,
+                        "reasoning": alert.reasoning[:300],
+                        "threat_type": alert.threat_type,
+                        "flow_ids": alert.flow_ids[:5],
+                    },
+                )
+        _logger.info(
+            _green(
+                "[Layer 3] 已推送 %d 条高危告警到前端"
+                % sum(1 for a in alerts if a.severity.value in ("high", "critical"))
+            )
+        )
+    except Exception as e:
+        _logger.warning(_yellow(f"[Layer 3] 推送告警到前端失败: {e}"))
+
+
 async def deep_analysis_background_loop():
     """
     深度分析后台循环：每 analysis_interval_hours 小时执行一次深度分析。
-    分析结果通过策略反馈到 P4 层和检测阈值。
+
+    工作流程：
+      1. 从 traffic_log 拉取长周期历史数据（默认 30 天）
+      2. 按 src_ip 分组，切分为历史基线流 + 近期流（24h）
+      3. 选择最活跃的 N 个实体送入 DeepAnalysisOrchestrator.batch_analyze()
+      4. 基线画像 → 时序异常检测 → 综合研判
+      5. 高危告警自动推送到前端告警缓冲区，等待管理员审批
+      6. 管理员审批后（拉黑/忽略）→ add_ip.py → P4 流表 + MySQL 黑名单 + 记忆存储
     """
     deep_analysis = _global_state.get("deep_analysis")
     if deep_analysis is None:
@@ -531,17 +724,94 @@ async def deep_analysis_background_loop():
     while not _global_state["shutdown_requested"].is_set():
         try:
             _logger.info(_cyan("[Layer 3] 开始执行长周期深度分析..."))
-            stats = deep_analysis.get_statistics() if deep_analysis else {}
-            _logger.info(f"[Layer 3] 深度分析当前统计: {stats}")
 
-            alerts = deep_analysis.get_recent_alerts(severity_min=3) if deep_analysis else []
-            if alerts:
-                _logger.info(
-                    _yellow(f"[Layer 3] 发现 {len(alerts)} 条高严重度告警，待反哺...")
+            # ---- 1. 读取回溯配置 ----
+            try:
+                from config.loader import load_config
+                cfg = load_config()
+                retro_cfg = cfg.retrospective_scan
+                lookback_days = retro_cfg.lookback_days
+                entities_per_cycle = retro_cfg.entities_per_cycle
+            except Exception:
+                lookback_days = 30
+                entities_per_cycle = 10
+
+            # ---- 2. 从数据库拉取历史流量 ----
+            rows = await asyncio.to_thread(
+                _fetch_traffic_for_deep_analysis, lookback_days
+            )
+            if not rows:
+                _logger.info("[Layer 3] 无历史流量数据，跳过本轮深度分析")
+                await asyncio.wait_for(
+                    _global_state["shutdown_requested"].wait(),
+                    timeout=interval_seconds,
                 )
+                continue
+
+            _logger.info(
+                "[Layer 3] 拉取 %d 条历史流量记录 (回溯 %d 天)",
+                len(rows), lookback_days,
+            )
+
+            # ---- 3. 按实体分组，切分历史/近期 ----
+            entity_flows, entity_recent = await asyncio.to_thread(
+                _group_flows_for_deep_analysis, rows
+            )
+            if not entity_flows:
+                _logger.info("[Layer 3] 无可分析的实体分组，跳过本轮")
+                await asyncio.wait_for(
+                    _global_state["shutdown_requested"].wait(),
+                    timeout=interval_seconds,
+                )
+                continue
+
+            # ---- 4. 按活跃度排序，选取 Top-N 实体 ----
+            ranked = sorted(
+                entity_flows.items(),
+                key=lambda kv: sum(
+                    f.byte_count for f in kv[1][1]
+                ),  # kv[1] = (entity_type, flows)
+                reverse=True,
+            )
+            selected = dict(ranked[:entities_per_cycle])
+            selected_recent = {
+                k: v for k, v in entity_recent.items() if k in selected
+            }
+
+            _logger.info(
+                "[Layer 3] 选中 %d/%d 个实体进行深度分析",
+                len(selected), len(entity_flows),
+            )
+
+            # ---- 5. 执行批量深度分析 ----
+            alerts = await deep_analysis.batch_analyze(
+                entity_flows=selected,
+                recent_flows=selected_recent,
+            )
+            _logger.info(
+                _green(
+                    "[Layer 3] 深度分析完成，生成 %d 条告警 "
+                    "(高危=%d, 严重=%d)"
+                    % (
+                        len(alerts),
+                        sum(1 for a in alerts if a.severity.value == "high"),
+                        sum(1 for a in alerts if a.severity.value == "critical"),
+                    )
+                )
+            )
+
+            # ---- 6. 推送高危告警到前端 (管理员审批链路的起点) ----
+            if alerts:
+                await asyncio.to_thread(_push_alerts_to_frontend, alerts)
+
+            # ---- 7. 打印当前统计 ----
+            stats = deep_analysis.get_statistics()
+            _logger.info(f"[Layer 3] 深度分析当前统计: {stats}")
 
         except Exception as e:
             _logger.error(_red(f"[Layer 3] 深度分析循环异常: {e}"))
+            import traceback
+            traceback.print_exc()
 
         try:
             await asyncio.wait_for(

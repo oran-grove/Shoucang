@@ -9,7 +9,7 @@ Orchestrator 是整个系统的入口。
 """
 
 import logging
-from typing import Optional, cast
+from typing import Callable, Optional, cast
 from uuid import uuid4
 
 from .config import (
@@ -52,7 +52,11 @@ class Orchestrator:
         await orchestrator.stop()
     """
 
-    def __init__(self, config: Optional[OrchestratorConfig] = None):
+    def __init__(
+        self,
+        config: Optional[OrchestratorConfig] = None,
+        alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = None,
+    ):
         self.config = config or OrchestratorConfig()
         self._backends: dict[BackendType, BaseLLMBackend] = {}
         self._knowledge_base: Optional[KnowledgeBase] = None
@@ -60,6 +64,8 @@ class Orchestrator:
         self._agents: dict[str, object] = {}
         self._running = False
         self._correlation_id_counter = 0
+        # 告警回调：当产生高危判定时调用，用于推送前端
+        self.alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = alert_callback
 
     # ========== 初始化 ==========
 
@@ -347,6 +353,15 @@ class Orchestrator:
         feedback_agent = cast(FeedbackAgent, self._agents.get("feedback"))
         if feedback_agent and self.config.feedback.enabled:
             await feedback_agent.process(verdict=final_verdict)
+
+        # ---- 阶段5.5: 推送高危告警到前端 (管理员审批链路入口) ----
+        if self.alert_callback and final_verdict.verdict in (
+            TrafficVerdict.MALICIOUS, TrafficVerdict.SUSPICIOUS,
+        ):
+            try:
+                self.alert_callback(final_verdict, flow)
+            except Exception:
+                logger.exception("[%s] 告警回调异常", correlation_id)
 
         # ---- 阶段6: 写入记忆系统 (自适应) ----
         self._record_to_memory(final_verdict, flow)

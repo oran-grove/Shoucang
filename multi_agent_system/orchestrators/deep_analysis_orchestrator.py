@@ -26,6 +26,15 @@ from ..core.message import (
     FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel,
 )
 
+# 严重度排序映射（数值越大越严重，用于可靠比较）
+_SEVERITY_RANK = {
+    SeverityLevel.INFO: 0,
+    SeverityLevel.LOW: 1,
+    SeverityLevel.MEDIUM: 2,
+    SeverityLevel.HIGH: 3,
+    SeverityLevel.CRITICAL: 4,
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -180,11 +189,11 @@ class DeepAnalysisOrchestrator:
         return all_alerts
 
     def get_recent_alerts(self, severity_min: SeverityLevel = SeverityLevel.MEDIUM) -> list[ThreatVerdict]:
-        """获取最近的告警"""
+        """获取最近的分析告警（严重度 >= severity_min）"""
+        min_rank = _SEVERITY_RANK.get(severity_min, 2)  # 默认 MEDIUM
         return [
             a for a in self._recent_alerts
-            if a.severity.value >= severity_min.value
-            # SeverityLevel order: INFO < LOW < MEDIUM < HIGH < CRITICAL
+            if _SEVERITY_RANK.get(a.severity, 0) >= min_rank
         ]
 
     def get_statistics(self) -> dict:
