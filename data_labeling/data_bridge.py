@@ -328,7 +328,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 # ============================================================
 # 旧版的共享内存方案（SHM_NAME/MAX_PACKETS/PACKET_SIZE/HEADER_SIZE）
 # 已被移除，改为进程内 queue.Queue 直传 dict。
-# 数据流: ColdTableProcessor → queue.Queue → DB写入线程 → MySQL
+# 数据流: DataBridge → queue.Queue → DB写入线程 → MySQL
 # dict 直接引用传递，无 JSON 序列化，无内存拷贝。
 # 详见 database/writer.py
 
@@ -338,8 +338,8 @@ from database.writer import start_db_writer, stop_db_writer
 # ============================================================
 # 6. UDP 接收与主循环
 # ============================================================
-class ColdTableProcessor:
-    """监听 UDP 端口，接收冷/热表，合并后写入数据库（零拷贝 queue.Queue）。"""
+class DataBridge:
+    """UDP 数据桥：接收 P4 冷/热表，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
 
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -412,9 +412,9 @@ class ColdTableProcessor:
 
 
 if __name__ == "__main__":
-    processor = ColdTableProcessor()
+    bridge = DataBridge()
     try:
-        processor.run()
+        bridge.run()
     except KeyboardInterrupt:
-        processor.running = False
+        bridge.running = False
         print("\n🛑 收到中断信号，退出...")

@@ -13,7 +13,7 @@
 用法:
     from database.writer import start_db_writer, stop_db_writer
 
-    # 在 ColdTableProcessor 中获取写入队列
+    # 在 DataBridge 中获取写入队列
     write_queue, stop_event = start_db_writer()
     write_queue.put(row_dict)  # dict 直接引用，零拷贝
     stop_db_writer(stop_event)

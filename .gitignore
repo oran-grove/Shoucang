@@ -1,10 +1,32 @@
+# ============================================================
 # Python
+# ============================================================
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
 .venv/
+*.log
 
-# Memory module — generated data (runtime artifacts)
+# ============================================================
+# Testing & coverage
+# ============================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ============================================================
+# GeoIP — auto-downloaded binary, do not commit
+# ============================================================
+data_labeling/GeoLite2-City.mmdb
+data_labeling/GeoLite2-City.mmdb.gz
+
+# ============================================================
+# Memory module — runtime artifacts
+# ============================================================
 multi_agent_system/memory/data/feedback.db
 multi_agent_system/memory/data/patterns/active/*.json
 multi_agent_system/memory/data/patterns/shadow/*.json
@@ -13,16 +35,24 @@ multi_agent_system/memory/data/principles_candidate.json
 multi_agent_system/memory/data/changelog.jsonl
 multi_agent_system/memory/data/snapshots/*.json
 
-# Config — user config contains API keys, must not be committed
+# ============================================================
+# Config — contains API keys, must NOT be committed
+# ============================================================
 config/config_user.json
 
+# ============================================================
 # Live scan checkpoint
+# ============================================================
 .live_scan_checkpoint.json
 
+# ============================================================
 # IDE
+# ============================================================
 .vscode/
 .idea/
 
+# ============================================================
 # OS
+# ============================================================
 .DS_Store
 Thumbs.db

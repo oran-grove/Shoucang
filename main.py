@@ -17,7 +17,7 @@
     - 本地 LLM (LM Studio) 或云端 API (OpenAI / DeepSeek) 后端
 
   Layer 3 — 数据标注与持久化 (data_labeling)
-    - ColdTableProcessor：UDP 9999 接收冷热表，GeoIP 丰富，MySQL 入库
+    - DataBridge：UDP 9999 接收冷热表，GeoIP 丰富，MySQL 入库
     - 后台攒批写入线程：queue.Queue -> MySQL 零拷贝
 
   统一后端 (FastAPI)
@@ -105,8 +105,8 @@ def _bold(s: str) -> str:
 # 全局组件引用（用于优雅关闭）
 # ============================================================
 _global_state = {
-    "cold_processor": None,
-    "cold_thread": None,
+    "data_bridge": None,
+    "bridge_thread": None,
     "multi_agent_system": None,
     "slow_brain": None,
     "slow_brain_task": None,
@@ -131,7 +131,7 @@ def print_banner():
 |                                                                            |
 |  Layer 1  P4 硬件层        -> pynng 探针 + Flask API(:5000) + 100s 遥测    |
 |  Layer 2  多智能体系统(慢脑) -> 检测/关联/研判/反馈管线 + 基线画像 + 时序异常   |
-|  Layer 3  数据标注层         -> ColdTableProcessor UDP:9999 + MySQL 攒批写入  |
+|  Layer 3  数据标注层         -> DataBridge UDP:9999 + MySQL 攒批写入            |
 |  WebUI    前端可视化         -> FastAPI(:8080) 仪表盘 / REST API / 静态资源    |
 |  跨层联动 策略反哺           -> 慢脑生成策略 -> P4 流表下发 / 检测阈值更新      |
 +============================================================================+
@@ -638,17 +638,17 @@ def start_data_labeling() -> bool:
     """启动冷表处理器"""
     _logger.info(_cyan("[Layer 4] 启动数据标注与持久化层..."))
     try:
-        from data_labeling.cold_table_processor import ColdTableProcessor
+        from data_labeling.data_bridge import DataBridge
 
-        processor = ColdTableProcessor()
-        _global_state["cold_processor"] = processor
+        bridge = DataBridge()
+        _global_state["data_bridge"] = bridge
 
         # 后台线程运行 UDP 监听循环
         thread = threading.Thread(
-            target=processor.run, daemon=True, name="ColdTable-UDP"
+            target=bridge.run, daemon=True, name="DataBridge-UDP"
         )
         thread.start()
-        _global_state["cold_thread"] = thread
+        _global_state["bridge_thread"] = thread
 
         _logger.info(
             _green(
@@ -666,10 +666,10 @@ def start_data_labeling() -> bool:
 
 def stop_data_labeling():
     """优雅关闭数据标注层"""
-    processor = _global_state.get("cold_processor")
-    if processor is not None:
+    bridge = _global_state.get("data_bridge")
+    if bridge is not None:
         try:
-            processor.running = False
+            bridge.running = False
             _logger.info("[Layer 4] 冷表处理器已请求停止")
         except Exception as e:
             _logger.warning(_yellow(f"[Layer 4] 停止冷表处理器时出错: {e}"))
@@ -720,7 +720,7 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
         while not _global_state["shutdown_requested"].is_set():
             try:
                 _logger.info(_cyan("[GeoIP] 开始定期更新 GeoIP 数据库..."))
-                from data_labeling.cold_table_processor import update_geoip_db
+                from data_labeling.data_bridge import update_geoip_db
                 success = update_geoip_db()
                 if success:
                     _logger.info(_green("[GeoIP] 自动更新完成"))
@@ -748,7 +748,7 @@ def health_check_loop():
             "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
             "slow_brain": _global_state.get("slow_brain") is not None,
-            "data_labeling": _global_state.get("cold_processor") is not None,
+            "data_labeling": _global_state.get("data_bridge") is not None,
             "backend": _global_state.get("backend_thread") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
         }
@@ -815,7 +815,7 @@ async def async_main(args: argparse.Namespace):
     if not args.no_cold_table:
         start_data_labeling()
     else:
-        _logger.info(_yellow("[Layer 4] 冷表处理器已跳过 (--no-cold-table)"))
+        _logger.info(_yellow("[Layer 4] 数据桥已跳过 (--no-cold-table)"))
 
     # 3. Layer 1: P4 硬件控制层
     if not args.no_p4:
@@ -884,7 +884,7 @@ async def async_main(args: argparse.Namespace):
         f"  深度分析子模块   {_status(slow_brain_ready) : <40}"
     )
     print(
-        f"  冷表处理器       {_status(not args.no_cold_table) : <40}"
+        f"  数据桥           {_status(not args.no_cold_table) : <40}"
     )
     print("  健康检查         [OK] 每 30s")
     print()
@@ -973,7 +973,7 @@ def main():
   python main.py --no-slow-brain          # 跳过深度分析子模块（基线画像+时序异常）
   python main.py --no-live-scan           # 跳过逐条评判队列扫描
   python main.py --no-p4                  # 跳过 P4 控制器
-  python main.py --no-cold-table          # 跳过冷表处理器
+  python main.py --no-cold-table          # 跳过数据桥
   python main.py --no-frontend            # 跳过前端服务器
   python main.py --frontend-port 3000     # 前端使用端口 3000
   python main.py --no-p4 --no-cold-table  # 仅启动智能体系统
@@ -1003,7 +1003,7 @@ def main():
     parser.add_argument(
         "--no-cold-table",
         action="store_true",
-        help="禁用冷表处理器 (UDP :9999 + MySQL 写入)",
+        help="禁用数据桥 (UDP :9999 + MySQL 写入)",
     )
     parser.add_argument(
         "--no-frontend",
@@ -1040,7 +1040,7 @@ def main():
     # ---- GeoIP 自动更新引导 ----
     if args.update_geoip_now:
         _logger.info(_cyan("手动触发 GeoIP 数据库更新..."))
-        from data_labeling.cold_table_processor import update_geoip_db
+        from data_labeling.data_bridge import update_geoip_db
         success = update_geoip_db()
         if success:
             _logger.info(_green("GeoIP 数据库更新完成。"))
@@ -1067,7 +1067,7 @@ def main():
             f"  深度分析子模块:   {'[OK]' if not args.no_llm and not args.no_slow_brain else '[--]'}"
         )
         print(
-            f"  冷表处理器:       {'[OK]' if not args.no_cold_table else '[--] (--no-cold-table)'}"
+            f"  数据桥:           {'[OK]' if not args.no_cold_table else '[--] (--no-cold-table)'}"
         )
         print("\n实际启动请移除 --dry-run 参数。")
         return
