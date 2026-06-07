@@ -504,6 +504,39 @@ def get_traffic_logs(limit: int = 200,
         return []
 
 
+def get_traffic_for_deep_analysis(lookback_days: int = 30) -> list:
+    """
+    拉取指定天数内的流量数据，用于深度分析（基线画像 + 时序异常）。
+    返回 list[dict]，每个 dict 为 traffic_log 一行。
+
+    Args:
+        lookback_days: 回溯天数，默认 30 天
+    """
+    conn = None
+    try:
+        conn = _db_connect()
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            cur.execute(
+                "SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
+                "protocol, packet_time, traffic_size, is_blocked, entropy "
+                "FROM traffic_log "
+                "WHERE packet_time >= DATE_SUB(NOW(), INTERVAL %s DAY) "
+                "ORDER BY src_ip, packet_time ASC",
+                (lookback_days,),
+            )
+            rows = list(cur.fetchall())
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"❌ [数据库] 深度分析流量拉取失败: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return []
+
+
 def update_traffic_action(traffic_id: int, action: str) -> bool:
     """更新流量记录的拦截状态。"""
     conn = None

@@ -11,10 +11,12 @@
 - 生成长周期威胁报告
 - 反馈给检测管线（策略/基线更新）
 - 推送告警到WebUI
+- 提供 from_config() 工厂方法和 run_background_loop() 后台循环
 """
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -25,6 +27,7 @@ from ..agents.judgment_agent import JudgmentAgent
 from ..core.message import (
     FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel,
 )
+from . import row_to_flow_event  # 共享的 DB row → FlowEvent 转换
 
 # 严重度排序映射（数值越大越严重，用于可靠比较）
 _SEVERITY_RANK = {
@@ -205,6 +208,348 @@ class DeepAnalysisOrchestrator:
                                         if a.severity in (SeverityLevel.HIGH, SeverityLevel.CRITICAL)]),
             "baselines_tracked": len(self.baseline_agent._baselines),
         }
+
+    # ================================================================
+    # 工厂方法
+    # ================================================================
+
+    @classmethod
+    def from_config(cls, config):
+        """
+        从 OrchestratorConfig 构建 DeepAnalysisOrchestrator 及其内部智能体。
+
+        封装了 agent 创建、backend 注入等组装逻辑，使 main.py 只需一行调用。
+        """
+        from ..backends import LMStudioBackend, OpenAIBackend, DeepSeekBackend
+        from ..config import BackendType
+
+        deep_cfg = config.deep_analysis
+
+        # -- 构建智能体 --
+        bcfg = deep_cfg.baseline_profiling
+        baseline_agent = BaselineProfilingAgent(
+            name="BaselineProfilingAgent",
+            system_prompt=bcfg.system_prompt,
+            model_name=bcfg.model_name,
+            temperature=bcfg.temperature,
+            max_tokens=bcfg.max_tokens,
+        )
+
+        tcfg = deep_cfg.temporal_anomaly
+        temporal_agent = TemporalAnomalyAgent(
+            name="TemporalAnomalyAgent",
+            system_prompt=tcfg.system_prompt,
+            model_name=tcfg.model_name,
+            temperature=tcfg.temperature,
+            max_tokens=tcfg.max_tokens,
+        )
+
+        jcfg = config.judgment
+        judgment_agent = JudgmentAgent(
+            name="SlowJudgmentAgent",
+            system_prompt=jcfg.system_prompt,
+            model_name=jcfg.model_name,
+            temperature=jcfg.temperature,
+            max_tokens=jcfg.max_tokens,
+        )
+
+        # -- 后端类型 → 类映射 --
+        _BACKEND_CLASS_MAP = {
+            BackendType.DEEPSEEK: DeepSeekBackend,
+            BackendType.OPENAI: OpenAIBackend,
+            BackendType.LMSTUDIO: LMStudioBackend,
+        }
+
+        def _build_backend(backend_type: BackendType):
+            be_cfg = config.default_backends[backend_type]
+            cls_be = _BACKEND_CLASS_MAP[backend_type]
+            kwargs = dict(
+                api_base=be_cfg.api_base,
+                api_key=be_cfg.api_key,
+                timeout=be_cfg.timeout,
+                max_retries=be_cfg.max_retries,
+                default_model=be_cfg.model_name,
+            )
+            if backend_type == BackendType.LMSTUDIO:
+                kwargs["auto_load"] = be_cfg.auto_load
+            if backend_type == BackendType.DEEPSEEK:
+                if be_cfg.thinking_enabled is not None:
+                    kwargs["default_thinking_enabled"] = be_cfg.thinking_enabled
+                if be_cfg.reasoning_effort is not None:
+                    kwargs["default_reasoning_effort"] = be_cfg.reasoning_effort
+                kwargs["include_reasoning"] = be_cfg.include_reasoning
+            return cls_be(**kwargs)
+
+        # -- 注入后端 --
+        bt = bcfg.backend
+        if bt not in _BACKEND_CLASS_MAP:
+            raise ValueError(f"不支持的后端类型: {bt}")
+        slow_backend = _build_backend(bt)
+        baseline_agent.set_backend(slow_backend)
+        baseline_agent.model_name = bcfg.model_name
+        logger.info("[DeepAnalysis] 基线画像后端: %s/%s", bt.value, bcfg.model_name)
+
+        tt = tcfg.backend
+        temporal_backend = slow_backend if tt == bt else _build_backend(tt)
+        temporal_agent.set_backend(temporal_backend)
+        temporal_agent.model_name = tcfg.model_name
+        logger.info("[DeepAnalysis] 时序异常后端: %s/%s", tt.value, tcfg.model_name)
+
+        jt = jcfg.backend
+        judgment_backend = slow_backend if jt == bt else _build_backend(jt)
+        judgment_agent.set_backend(judgment_backend)
+        judgment_agent.model_name = jcfg.model_name
+        logger.info("[DeepAnalysis] 研判后端: %s/%s", jt.value, jcfg.model_name)
+
+        return cls(
+            baseline_agent=baseline_agent,
+            temporal_agent=temporal_agent,
+            judgment_agent=judgment_agent,
+            analysis_interval_hours=deep_cfg.analysis_interval_hours,
+        )
+
+    # ================================================================
+    # 数据预处理
+    # ================================================================
+
+    @staticmethod
+    def _group_flows_for_analysis(
+        rows: list, recent_hours: int = 24,
+    ) -> tuple:
+        """
+        按 src_ip 分组，拆分为历史流(>recent_hours)和近期流(≤recent_hours)。
+
+        Returns:
+            (entity_flows, entity_recent)
+            entity_flows:  {src_ip: (entity_type, [FlowEvent, ...])}  ← 历史基线
+            entity_recent: {src_ip: [FlowEvent, ...]}                  ← 近期待评估
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=recent_hours)
+
+        # 按 src_ip 分组
+        grouped: dict[str, list] = {}
+        for row in rows:
+            src_ip = row.get("src_ip", "")
+            if not src_ip:
+                continue
+            grouped.setdefault(src_ip, []).append(row)
+
+        entity_flows: dict[str, tuple[str, list]] = {}
+        entity_recent: dict[str, list] = {}
+
+        for src_ip, ip_rows in grouped.items():
+            hist_flows = []
+            recent_flows = []
+            entity_type = "user"
+
+            for row in ip_rows:
+                flow = row_to_flow_event(row)
+                pkt_time = row.get("packet_time")
+
+                is_recent = False
+                if pkt_time is not None:
+                    if isinstance(pkt_time, datetime):
+                        is_recent = pkt_time >= cutoff
+                    else:
+                        try:
+                            ts = datetime.strptime(
+                                str(pkt_time), "%Y-%m-%d %H:%M:%S"
+                            )
+                            is_recent = ts >= cutoff
+                        except (ValueError, TypeError):
+                            pass
+
+                if is_recent:
+                    recent_flows.append(flow)
+                else:
+                    hist_flows.append(flow)
+
+                dept = row.get("department", "")
+                if dept:
+                    entity_type = dept
+
+            if hist_flows:
+                entity_flows[src_ip] = (entity_type, hist_flows)
+            if recent_flows:
+                entity_recent[src_ip] = recent_flows
+
+        return entity_flows, entity_recent
+
+    # ================================================================
+    # 告警推送
+    # ================================================================
+
+    @staticmethod
+    def _push_alerts_to_frontend(alerts: list):
+        """将深度分析告警推送到前端告警缓冲区"""
+        if not alerts:
+            return
+        try:
+            from backend.api_server import push_alert
+
+            pushed = 0
+            for alert in alerts:
+                if _SEVERITY_RANK.get(alert.severity, 0) >= _SEVERITY_RANK[SeverityLevel.HIGH]:
+                    src_ip = alert.extra.get("src_ip", "") if alert.extra else ""
+                    push_alert(
+                        ip=src_ip,
+                        label=(
+                            f"[慢脑] {alert.threat_type} "
+                            f"(置信度:{alert.confidence:.0%})"
+                        ),
+                        details={
+                            "verdict": alert.verdict.value,
+                            "severity": alert.severity.value,
+                            "confidence": alert.confidence,
+                            "reasoning": alert.reasoning[:300],
+                            "threat_type": alert.threat_type,
+                            "flow_ids": alert.flow_ids[:5],
+                        },
+                    )
+                    pushed += 1
+
+            if pushed:
+                logger.info(
+                    "[DeepAnalysis] 已推送 %d 条高危告警到前端", pushed,
+                )
+        except Exception as e:
+            logger.warning("[DeepAnalysis] 推送告警到前端失败: %s", e)
+
+    # ================================================================
+    # 后台循环
+    # ================================================================
+
+    @staticmethod
+    async def _sleep_or_shutdown(
+        shutdown_event: threading.Event, seconds: float,
+    ) -> bool:
+        """Async-safe sleep that returns True if shutdown was requested."""
+        for _ in range(int(seconds)):
+            if shutdown_event.is_set():
+                return True
+            await asyncio.sleep(1)
+        return False
+
+    async def run_background_loop(
+        self, shutdown_event: threading.Event,
+    ):
+        """
+        深度分析后台循环：每 analysis_interval_hours 小时执行一次。
+
+        工作流程：
+          1. 从 traffic_log 拉取长周期历史数据
+          2. 按 src_ip 分组，切分为历史基线流 + 近期流
+          3. 选择最活跃的 N 个实体送入 batch_analyze()
+          4. 基线画像 → 时序异常检测 → 综合研判
+          5. 高危告警推送到前端，等待管理员审批
+        """
+        interval_seconds = self.analysis_interval_hours * 3600
+        logger.info(
+            "[DeepAnalysis] 后台循环已启动 (间隔 %ds)", interval_seconds,
+        )
+
+        # 首次延迟 60s，给系统留出预热时间
+        await asyncio.sleep(60)
+
+        while not shutdown_event.is_set():
+            try:
+                logger.info("[DeepAnalysis] 开始执行长周期深度分析...")
+
+                # ---- 读取回溯配置 ----
+                try:
+                    from config.loader import load_config
+                    cfg = load_config()
+                    retro_cfg = cfg.retrospective_scan
+                    lookback_days = retro_cfg.lookback_days
+                    entities_per_cycle = retro_cfg.entities_per_cycle
+                except Exception:
+                    lookback_days = 30
+                    entities_per_cycle = 10
+
+                # ---- 从数据库拉取历史流量 ----
+                from database import get_traffic_for_deep_analysis
+
+                rows = await asyncio.to_thread(
+                    get_traffic_for_deep_analysis, lookback_days,
+                )
+                if not rows:
+                    logger.info("[DeepAnalysis] 无历史流量数据，跳过本轮")
+                    if await self._sleep_or_shutdown(
+                        shutdown_event, interval_seconds,
+                    ):
+                        break
+                    continue
+
+                logger.info(
+                    "[DeepAnalysis] 拉取 %d 条历史流量记录 (回溯 %d 天)",
+                    len(rows), lookback_days,
+                )
+
+                # ---- 按实体分组，切分历史/近期 ----
+                entity_flows, entity_recent = await asyncio.to_thread(
+                    self._group_flows_for_analysis, rows,
+                )
+                if not entity_flows:
+                    logger.info("[DeepAnalysis] 无可分析的实体分组，跳过本轮")
+                    if await self._sleep_or_shutdown(
+                        shutdown_event, interval_seconds,
+                    ):
+                        break
+                    continue
+
+                # ---- 按活跃度排序，选取 Top-N 实体 ----
+                ranked = sorted(
+                    entity_flows.items(),
+                    key=lambda kv: sum(
+                        f.byte_count for f in kv[1][1]
+                    ),
+                    reverse=True,
+                )
+                selected = dict(ranked[:entities_per_cycle])
+                selected_recent = {
+                    k: v for k, v in entity_recent.items() if k in selected
+                }
+
+                logger.info(
+                    "[DeepAnalysis] 选中 %d/%d 个实体进行深度分析",
+                    len(selected), len(entity_flows),
+                )
+
+                # ---- 执行批量深度分析 ----
+                alerts = await self.batch_analyze(
+                    entity_flows=selected,
+                    recent_flows=selected_recent,
+                )
+                logger.info(
+                    "[DeepAnalysis] 完成，生成 %d 条告警 "
+                    "(高危=%d, 严重=%d)",
+                    len(alerts),
+                    sum(1 for a in alerts
+                        if a.severity == SeverityLevel.HIGH),
+                    sum(1 for a in alerts
+                        if a.severity == SeverityLevel.CRITICAL),
+                )
+
+                # ---- 推送高危告警到前端 ----
+                if alerts:
+                    await asyncio.to_thread(
+                        self._push_alerts_to_frontend, alerts,
+                    )
+
+                # ---- 打印统计 ----
+                stats = self.get_statistics()
+                logger.info("[DeepAnalysis] 当前统计: %s", stats)
+
+            except Exception as e:
+                logger.error(
+                    "[DeepAnalysis] 后台循环异常: %s", e, exc_info=True,
+                )
+
+            if await self._sleep_or_shutdown(
+                shutdown_event, interval_seconds,
+            ):
+                break
 
 
 __all__ = ["DeepAnalysisOrchestrator"]

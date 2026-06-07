@@ -74,6 +74,10 @@ from .weekly_extract import (
     apply_principles_to_context,
 )
 
+from .evolution import (
+    run_evolution_loop,
+)
+
 __all__ = [
     # Tier 0 — SQLite 存储
     "MemoryStore",
@@ -89,6 +93,7 @@ __all__ = [
     # 自适应循环
     "run_hourly_clustering",    # Loop 2
     "run_weekly_extraction",    # Loop 3
+    "run_evolution_loop",       # 后台调度入口
 
     # 战略原则
     "load_approved_principles",

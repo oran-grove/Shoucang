@@ -43,7 +43,6 @@
 import argparse
 import asyncio
 import logging
-import os
 import signal
 import sys
 import threading
@@ -409,23 +408,10 @@ async def start_deep_analysis(enable_llm: bool = True) -> bool:
 
     _logger.info(_cyan("[Layer 3] 启动深度分析子模块..."))
     try:
-        from multi_agent_system.agents.baseline_profiling_agent import (
-            BaselineProfilingAgent,
-        )
-        from multi_agent_system.agents.temporal_anomaly_agent import (
-            TemporalAnomalyAgent,
-        )
-        from multi_agent_system.agents.judgment_agent import JudgmentAgent
+        from config.loader import load_config
         from multi_agent_system.orchestrators.deep_analysis_orchestrator import (
             DeepAnalysisOrchestrator,
         )
-        from multi_agent_system.backends import (
-            LMStudioBackend,
-            OpenAIBackend,
-            DeepSeekBackend,
-        )
-        from config.loader import load_config
-        from multi_agent_system.config import BackendType
 
         _deep_cfg = load_config(
             str(Path(__file__).parent / "config" / "config_user.json")
@@ -433,108 +419,14 @@ async def start_deep_analysis(enable_llm: bool = True) -> bool:
             else None
         )
 
-        # 构建各智能体
-        _bcfg = _deep_cfg.deep_analysis.baseline_profiling
-        baseline_agent = BaselineProfilingAgent(
-            name="BaselineProfilingAgent",
-            system_prompt=_bcfg.system_prompt,
-            model_name=_bcfg.model_name,
-            temperature=_bcfg.temperature,
-            max_tokens=_bcfg.max_tokens,
-        )
-
-        _tcfg = _deep_cfg.deep_analysis.temporal_anomaly
-        temporal_agent = TemporalAnomalyAgent(
-            name="TemporalAnomalyAgent",
-            system_prompt=_tcfg.system_prompt,
-            model_name=_tcfg.model_name,
-            temperature=_tcfg.temperature,
-            max_tokens=_tcfg.max_tokens,
-        )
-
-        _jcfg = _deep_cfg.judgment
-        judgment_agent = JudgmentAgent(
-            name="SlowJudgmentAgent",
-            system_prompt=_jcfg.system_prompt,
-            model_name=_jcfg.model_name,
-            temperature=_jcfg.temperature,
-            max_tokens=_jcfg.max_tokens,
-        )
-
-        # 注入后端（根据配置动态选择：deepseek / openai / lmstudio）
-        _BACKEND_CLASS_MAP = {
-            BackendType.DEEPSEEK: DeepSeekBackend,
-            BackendType.OPENAI: OpenAIBackend,
-            BackendType.LMSTUDIO: LMStudioBackend,
-        }
-
-        def _build_backend(backend_type: BackendType):
-            """根据 BackendType 构建对应的后端实例"""
-            _be_cfg = _deep_cfg.default_backends[backend_type]
-            _cls = _BACKEND_CLASS_MAP[backend_type]
-            _kwargs = dict(
-                api_base=_be_cfg.api_base,
-                api_key=_be_cfg.api_key,
-                timeout=_be_cfg.timeout,
-                max_retries=_be_cfg.max_retries,
-                default_model=_be_cfg.model_name,
-            )
-            if backend_type == BackendType.LMSTUDIO:
-                _kwargs["auto_load"] = _be_cfg.auto_load
-            if backend_type == BackendType.DEEPSEEK:
-                if _be_cfg.thinking_enabled is not None:
-                    _kwargs["default_thinking_enabled"] = _be_cfg.thinking_enabled
-                if _be_cfg.reasoning_effort is not None:
-                    _kwargs["default_reasoning_effort"] = _be_cfg.reasoning_effort
-                _kwargs["include_reasoning"] = _be_cfg.include_reasoning
-            return _cls(**_kwargs)
-
-        try:
-            _bt = _bcfg.backend
-            if _bt not in _BACKEND_CLASS_MAP:
-                raise ValueError(f"不支持的后端类型: {_bt}")
-
-            slow_backend = _build_backend(_bt)
-            baseline_agent.set_backend(slow_backend)
-            baseline_agent.model_name = _bcfg.model_name
-            _logger.info(
-                f"[Layer 3]   基线画像后端: {_bt.value}/{_bcfg.model_name}"
-            )
-
-            _tt = _tcfg.backend
-            _temporal_backend = (
-                slow_backend if _tt == _bt else _build_backend(_tt)
-            )
-            temporal_agent.set_backend(_temporal_backend)
-            temporal_agent.model_name = _tcfg.model_name
-            _logger.info(
-                f"[Layer 3]   时序异常后端: {_tt.value}/{_tcfg.model_name}"
-            )
-
-            _jt = _jcfg.backend
-            _judgment_backend = (
-                slow_backend if _jt == _bt else _build_backend(_jt)
-            )
-            judgment_agent.set_backend(_judgment_backend)
-            judgment_agent.model_name = _jcfg.model_name
-            _logger.info(
-                f"[Layer 3]   研判后端: {_jt.value}/{_jcfg.model_name}"
-            )
-        except Exception as e:
-            _logger.warning(_yellow(f"[Layer 3]   后端连接失败 (将降级运行): {e}"))
-
-        # 创建深度分析编排器
-        deep_analysis = DeepAnalysisOrchestrator(
-            baseline_agent=baseline_agent,
-            temporal_agent=temporal_agent,
-            judgment_agent=judgment_agent,
-            analysis_interval_hours=_deep_cfg.deep_analysis.analysis_interval_hours,
-        )
+        # 工厂方法封装了所有 agent/backend 组装逻辑
+        deep_analysis = DeepAnalysisOrchestrator.from_config(_deep_cfg)
 
         _global_state["deep_analysis"] = deep_analysis
         _logger.info(_green("[Layer 3] 深度分析子模块已就绪 [OK]"))
         _logger.info(
-            f"[Layer 3]   分析周期: {_deep_cfg.deep_analysis.analysis_interval_hours}h"
+            "[Layer 3]   分析周期: %dh",
+            _deep_cfg.deep_analysis.analysis_interval_hours,
         )
         return True
 
@@ -545,360 +437,7 @@ async def start_deep_analysis(enable_llm: bool = True) -> bool:
         return False
 
 
-# ============================================================
-# 深度分析辅助函数
-# ============================================================
-def _fetch_traffic_for_deep_analysis(lookback_days: int = 30) -> list:
-    """
-    从 traffic_log 拉取指定天数内的流量数据，用于深度分析。
-    返回 list[dict]，每个 dict 为一行数据。
-    """
-    import pymysql
-    from config.shared_config import DB_CONFIG
-
-    conn = None
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        with conn.cursor(pymysql.cursors.DictCursor) as cur:
-            cur.execute(
-                "SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy "
-                "FROM traffic_log "
-                "WHERE packet_time >= DATE_SUB(NOW(), INTERVAL %s DAY) "
-                "ORDER BY src_ip, packet_time ASC",
-                (lookback_days,),
-            )
-            return list(cur.fetchall())
-    except Exception as e:
-        _logger.error(_red(f"[Layer 3] 拉取历史流量数据失败: {e}"))
-        return []
-    finally:
-        if conn:
-            conn.close()
-
-
-def _row_to_flow_event(row: dict):
-    """将 traffic_log 行转换为 FlowEvent"""
-    from multi_agent_system.core.message import FlowEvent as _FE
-
-    return _FE(
-        src_ip=row.get("src_ip", "0.0.0.0"),
-        dst_ip=row.get("dst_ip", "0.0.0.0"),
-        src_port=row.get("src_port") or 0,
-        dst_port=row.get("dst_port") or 0,
-        protocol=row.get("protocol", "TCP"),
-        department=row.get("department", ""),
-        byte_count=row.get("traffic_size") or 0,
-        entropy_score=float(row.get("entropy") or 0.0),
-        extra={
-            "row_id": row.get("id"),
-            "packet_time": str(row.get("packet_time", "")),
-            "is_blocked": bool(row.get("is_blocked", 0)),
-        },
-    )
-
-
-def _group_flows_for_deep_analysis(
-    rows: list, recent_hours: int = 24,
-) -> tuple:
-    """
-    按 src_ip 分组，拆分为历史流(>recent_hours)和近期流(≤recent_hours)。
-
-    Returns:
-        (entity_flows, entity_recent)
-        entity_flows:  {src_ip: (entity_type, [FlowEvent, ...])}  ← 历史基线
-        entity_recent: {src_ip: [FlowEvent, ...]}                  ← 近期待评估
-    """
-    from datetime import datetime, timezone, timedelta
-
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=recent_hours)
-
-    # 按 src_ip 分组
-    grouped: dict[str, list] = {}
-    for row in rows:
-        src_ip = row.get("src_ip", "")
-        if not src_ip:
-            continue
-        grouped.setdefault(src_ip, []).append(row)
-
-    entity_flows: dict[str, tuple[str, list]] = {}
-    entity_recent: dict[str, list] = {}
-
-    for src_ip, ip_rows in grouped.items():
-        hist_flows = []
-        recent_flows = []
-        entity_type = "user"
-
-        for row in ip_rows:
-            flow = _row_to_flow_event(row)
-            pkt_time = row.get("packet_time")
-
-            is_recent = False
-            if pkt_time is not None:
-                if isinstance(pkt_time, datetime):
-                    is_recent = pkt_time >= cutoff
-                else:
-                    # 字符串格式尝试解析
-                    try:
-                        from datetime import datetime as _dt
-                        ts = _dt.strptime(str(pkt_time), "%Y-%m-%d %H:%M:%S")
-                        is_recent = ts >= cutoff
-                    except (ValueError, TypeError):
-                        pass
-
-            if is_recent:
-                recent_flows.append(flow)
-            else:
-                hist_flows.append(flow)
-
-            # 使用 department 作为 entity_type
-            dept = row.get("department", "")
-            if dept:
-                entity_type = dept
-
-        if hist_flows:
-            entity_flows[src_ip] = (entity_type, hist_flows)
-        if recent_flows:
-            entity_recent[src_ip] = recent_flows
-
-    return entity_flows, entity_recent
-
-
-def _push_alerts_to_frontend(alerts: list):
-    """将深度分析告警推送到前端告警缓冲区"""
-    if not alerts:
-        return
-    try:
-        from backend.api_server import push_alert
-
-        for alert in alerts:
-            if alert.severity.value in ("high", "critical"):
-                src_ip = alert.extra.get("src_ip", "") if alert.extra else ""
-                push_alert(
-                    ip=src_ip,
-                    label=f"[慢脑] {alert.threat_type} (置信度:{alert.confidence:.0%})",
-                    details={
-                        "verdict": alert.verdict.value,
-                        "severity": alert.severity.value,
-                        "confidence": alert.confidence,
-                        "reasoning": alert.reasoning[:300],
-                        "threat_type": alert.threat_type,
-                        "flow_ids": alert.flow_ids[:5],
-                    },
-                )
-        _logger.info(
-            _green(
-                "[Layer 3] 已推送 %d 条高危告警到前端"
-                % sum(1 for a in alerts if a.severity.value in ("high", "critical"))
-            )
-        )
-    except Exception as e:
-        _logger.warning(_yellow(f"[Layer 3] 推送告警到前端失败: {e}"))
-
-
-async def deep_analysis_background_loop():
-    """
-    深度分析后台循环：每 analysis_interval_hours 小时执行一次深度分析。
-
-    工作流程：
-      1. 从 traffic_log 拉取长周期历史数据（默认 30 天）
-      2. 按 src_ip 分组，切分为历史基线流 + 近期流（24h）
-      3. 选择最活跃的 N 个实体送入 DeepAnalysisOrchestrator.batch_analyze()
-      4. 基线画像 → 时序异常检测 → 综合研判
-      5. 高危告警自动推送到前端告警缓冲区，等待管理员审批
-      6. 管理员审批后（拉黑/忽略）→ add_ip.py → P4 流表 + MySQL 黑名单 + 记忆存储
-    """
-    deep_analysis = _global_state.get("deep_analysis")
-    if deep_analysis is None:
-        return
-
-    interval_seconds = deep_analysis.analysis_interval_hours * 3600
-    _logger.info(
-        _cyan(f"[Layer 3] 深度分析后台上报循环已启动 (间隔 {interval_seconds}s)")
-    )
-
-    # 首次延迟 60s，给系统留出预热时间
-    await asyncio.sleep(60)
-
-    while not _global_state["shutdown_requested"].is_set():
-        try:
-            _logger.info(_cyan("[Layer 3] 开始执行长周期深度分析..."))
-
-            # ---- 1. 读取回溯配置 ----
-            try:
-                from config.loader import load_config
-                cfg = load_config()
-                retro_cfg = cfg.retrospective_scan
-                lookback_days = retro_cfg.lookback_days
-                entities_per_cycle = retro_cfg.entities_per_cycle
-            except Exception:
-                lookback_days = 30
-                entities_per_cycle = 10
-
-            # ---- 2. 从数据库拉取历史流量 ----
-            rows = await asyncio.to_thread(
-                _fetch_traffic_for_deep_analysis, lookback_days
-            )
-            if not rows:
-                _logger.info("[Layer 3] 无历史流量数据，跳过本轮深度分析")
-                await asyncio.wait_for(
-                    _global_state["shutdown_requested"].wait(),
-                    timeout=interval_seconds,
-                )
-                continue
-
-            _logger.info(
-                "[Layer 3] 拉取 %d 条历史流量记录 (回溯 %d 天)",
-                len(rows), lookback_days,
-            )
-
-            # ---- 3. 按实体分组，切分历史/近期 ----
-            entity_flows, entity_recent = await asyncio.to_thread(
-                _group_flows_for_deep_analysis, rows
-            )
-            if not entity_flows:
-                _logger.info("[Layer 3] 无可分析的实体分组，跳过本轮")
-                await asyncio.wait_for(
-                    _global_state["shutdown_requested"].wait(),
-                    timeout=interval_seconds,
-                )
-                continue
-
-            # ---- 4. 按活跃度排序，选取 Top-N 实体 ----
-            ranked = sorted(
-                entity_flows.items(),
-                key=lambda kv: sum(
-                    f.byte_count for f in kv[1][1]
-                ),  # kv[1] = (entity_type, flows)
-                reverse=True,
-            )
-            selected = dict(ranked[:entities_per_cycle])
-            selected_recent = {
-                k: v for k, v in entity_recent.items() if k in selected
-            }
-
-            _logger.info(
-                "[Layer 3] 选中 %d/%d 个实体进行深度分析",
-                len(selected), len(entity_flows),
-            )
-
-            # ---- 5. 执行批量深度分析 ----
-            alerts = await deep_analysis.batch_analyze(
-                entity_flows=selected,
-                recent_flows=selected_recent,
-            )
-            _logger.info(
-                _green(
-                    "[Layer 3] 深度分析完成，生成 %d 条告警 "
-                    "(高危=%d, 严重=%d)"
-                    % (
-                        len(alerts),
-                        sum(1 for a in alerts if a.severity.value == "high"),
-                        sum(1 for a in alerts if a.severity.value == "critical"),
-                    )
-                )
-            )
-
-            # ---- 6. 推送高危告警到前端 (管理员审批链路的起点) ----
-            if alerts:
-                await asyncio.to_thread(_push_alerts_to_frontend, alerts)
-
-            # ---- 7. 打印当前统计 ----
-            stats = deep_analysis.get_statistics()
-            _logger.info(f"[Layer 3] 深度分析当前统计: {stats}")
-
-        except Exception as e:
-            _logger.error(_red(f"[Layer 3] 深度分析循环异常: {e}"))
-            import traceback
-            traceback.print_exc()
-
-        try:
-            await asyncio.wait_for(
-                _global_state["shutdown_requested"].wait(), timeout=interval_seconds
-            )
-        except asyncio.TimeoutError:
-            continue
-
-
-# ============================================================
-# 自适应后台循环 (Loop 2 小时聚类 + Loop 3 周度 LLM 提取)
-# ============================================================
-async def _evolution_background_loop():
-    """
-    自适应系统后台循环:
-    - Loop 2: 每小时运行模式聚类 (零 LLM 成本)
-    - Loop 3: 每周日 3:00 运行 LLM 模式提取
-    """
-    from multi_agent_system.memory.clustering import run_hourly_clustering
-    from multi_agent_system.memory.weekly_extract import run_weekly_extraction
-    from datetime import datetime as _dt
-    import time as _time
-
-    _logger.info(_cyan("[Evolution] 自适应系统后台任务就绪"))
-
-    # 首次延迟 120s，给系统启动留时间
-    await asyncio.sleep(120)
-
-    last_hourly = None
-    last_weekly_check = None
-
-    while not _global_state["shutdown_requested"].is_set():
-        try:
-            now = _time.time()
-
-            # Loop 2: 每小时聚类
-            if last_hourly is None or (now - last_hourly) >= 3600:
-                _logger.info(_cyan("[Evolution:Loop2] 执行小时聚类..."))
-                result = await asyncio.to_thread(run_hourly_clustering)
-                _logger.info(
-                    "[Evolution:Loop2] 完成: 新卡片=%d 退役=%d",
-                    result.get("generated", 0),
-                    result.get("skipped_groups", 0),
-                )
-                last_hourly = now
-
-            # Loop 3: 每周日 3:00
-            if last_weekly_check is None or (now - last_weekly_check) >= 3600:
-                dt = _dt.now()
-                if dt.weekday() == 6 and dt.hour == 3:
-                    _logger.info(_cyan("[Evolution:Loop3] 执行周度 LLM 模式提取..."))
-                    try:
-                        from config.loader import load_config
-                        from multi_agent_system.config import BackendType
-                        cfg = load_config()
-                        ds_cfg = cfg.default_backends.get(BackendType.DEEPSEEK)
-                        if ds_cfg and ds_cfg.api_key:
-                            from multi_agent_system.backends.deepseek_backend import DeepSeekBackend
-                            llm = DeepSeekBackend(
-                                api_base=ds_cfg.api_base,
-                                api_key=ds_cfg.api_key,
-                                timeout=ds_cfg.timeout,
-                                max_retries=ds_cfg.max_retries,
-                                default_model=ds_cfg.model_name,
-                            )
-                            result3 = await run_weekly_extraction(llm)
-                            _logger.info(
-                                "[Evolution:Loop3] 完成: 候选原则=%d",
-                                result3.get("candidates_generated", 0),
-                            )
-                        else:
-                            _logger.info("[Evolution:Loop3] DeepSeek API Key 未配置, 跳过")
-                    except Exception as e:
-                        _logger.warning(f"[Evolution:Loop3] 执行失败: {e}")
-                    last_weekly_check = now
-
-        except Exception as e:
-            _logger.error(_red(f"[Evolution] 后台循环异常: {e}"))
-
-        try:
-            await asyncio.wait_for(
-                _global_state["shutdown_requested"].wait(), timeout=60,
-            )
-        except asyncio.TimeoutError:
-            continue
-
-    _logger.info(_green("[Evolution] 自适应后台任务已停止"))
+# (后台循环已内迁至各模块，由 async_main 直接调用)
 
 
 # ============================================================
@@ -1117,11 +656,18 @@ async def async_main(args: argparse.Namespace):
     # 8. 启动慢脑后台循环
     deep_analysis_task = None
     if deep_analysis_ready:
-        deep_analysis_task = asyncio.create_task(deep_analysis_background_loop())
-        _global_state["deep_analysis_task"] = deep_analysis_task
+        _da = _global_state.get("deep_analysis")
+        if _da is not None:
+            deep_analysis_task = asyncio.create_task(
+                _da.run_background_loop(_global_state["shutdown_requested"])
+            )
+            _global_state["deep_analysis_task"] = deep_analysis_task
 
     # 9. 启动自适应定时任务 (Loop 2: 小时聚类, Loop 3: 周度LLM提取)
-    evolution_task = asyncio.create_task(_evolution_background_loop())
+    from multi_agent_system.memory.evolution import run_evolution_loop
+    evolution_task = asyncio.create_task(
+        run_evolution_loop(_global_state["shutdown_requested"])
+    )
 
     # ---- 打印最终启动报告 ----
     def _status(b: bool) -> str:

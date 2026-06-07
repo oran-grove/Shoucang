@@ -61,6 +61,7 @@ from .lists_manager import (
     get_employee_count,
     # 流量日志
     get_traffic_logs,
+    get_traffic_for_deep_analysis,
     update_traffic_action,
 )
 
@@ -101,5 +102,6 @@ __all__ = [
     "get_employee_count",
     # 流量日志
     "get_traffic_logs",
+    "get_traffic_for_deep_analysis",
     "update_traffic_action",
 ]

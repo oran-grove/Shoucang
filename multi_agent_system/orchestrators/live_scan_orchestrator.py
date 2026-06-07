@@ -41,6 +41,7 @@ from typing import Optional
 import pymysql
 
 from ..core.message import FlowEvent
+from . import row_to_flow_event  # 共享的 DB row → FlowEvent 转换
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +205,8 @@ class LiveScanOrchestrator:
         """对单条流量日志执行检测→关联→研判管线"""
         row_id = row.get("id", 0)
         try:
-            # 构造 FlowEvent
-            flow_event = self._row_to_flow_event(row)
+            # 构造 FlowEvent（使用共享转换函数）
+            flow_event = row_to_flow_event(row)
 
             # 调用 Orchestrator 的完整分析管线
             result = await self._orchestrator.analyze_flow(flow_event)
@@ -237,42 +238,6 @@ class LiveScanOrchestrator:
             if row_id > self._last_processed_id:
                 self._last_processed_id = row_id
             self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
-
-    # ==================== 数据转换 ====================
-
-    @staticmethod
-    def _row_to_flow_event(row: dict) -> FlowEvent:
-        """
-        将 traffic_log 数据库行转换为 FlowEvent。
-
-        traffic_log 表字段:
-            id, src_ip, dst_ip, department, protocol, packet_time,
-            traffic_size, is_blocked, created_at, entropy, src_port,
-            dst_port, src_tag, sp_tag, dp_tag, accumulated_pkts,
-            accumulated_bytes, global_pps, global_bps, avg_entropy, ...
-        """
-        return FlowEvent(
-            src_ip=row.get("src_ip", "0.0.0.0"),
-            dst_ip=row.get("dst_ip", "0.0.0.0"),
-            src_port=row.get("src_port") or 0,
-            dst_port=row.get("dst_port") or 0,
-            protocol=row.get("protocol", "TCP"),
-            department=row.get("department", ""),
-            byte_count=row.get("traffic_size") or 0,
-            entropy_score=row.get("entropy") or 0.0,
-            extra={
-                "row_id": row.get("id"),
-                "src_tag": row.get("src_tag"),
-                "sp_tag": row.get("sp_tag"),
-                "dp_tag": row.get("dp_tag"),
-                "accumulated_pkts": row.get("accumulated_pkts"),
-                "accumulated_bytes": row.get("accumulated_bytes"),
-                "global_pps": row.get("global_pps"),
-                "global_bps": row.get("global_bps"),
-                "avg_entropy": row.get("avg_entropy"),
-                "is_blocked": bool(row.get("is_blocked", 0)),
-            },
-        )
 
     # ==================== 断点持久化 ====================
 
