@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Memory module — generated data (runtime artifacts)
+multi_agent_system/memory/data/feedback.db
+multi_agent_system/memory/data/patterns/active/*.json
+multi_agent_system/memory/data/patterns/shadow/*.json
+multi_agent_system/memory/data/patterns/retired/*.json
+multi_agent_system/memory/data/principles_candidate.json
+multi_agent_system/memory/data/changelog.jsonl
+multi_agent_system/memory/data/snapshots/*.json
+
+# Config — user config contains API keys, must not be committed
+config/config_user.json
+
+# Live scan checkpoint
+.live_scan_checkpoint.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -552,6 +552,86 @@ async def slow_brain_background_loop():
 
 
 # ============================================================
+# 自进化后台循环 (Loop 2 小时聚类 + Loop 3 周度 LLM 提取)
+# ============================================================
+async def _evolution_background_loop():
+    """
+    自进化系统后台循环:
+    - Loop 2: 每小时运行模式聚类 (零 LLM 成本)
+    - Loop 3: 每周日 3:00 运行 LLM 模式提取
+    """
+    from multi_agent_system.memory.clustering import run_hourly_clustering
+    from multi_agent_system.memory.weekly_extract import run_weekly_extraction
+    from datetime import datetime as _dt
+    import time as _time
+
+    _logger.info(_cyan("[Evolution] 自进化系统后台任务就绪"))
+
+    # 首次延迟 120s，给系统启动留时间
+    await asyncio.sleep(120)
+
+    last_hourly = None
+    last_weekly_check = None
+
+    while not _global_state["shutdown_requested"].is_set():
+        try:
+            now = _time.time()
+
+            # Loop 2: 每小时聚类
+            if last_hourly is None or (now - last_hourly) >= 3600:
+                _logger.info(_cyan("[Evolution:Loop2] 执行小时聚类..."))
+                result = await asyncio.to_thread(run_hourly_clustering)
+                _logger.info(
+                    "[Evolution:Loop2] 完成: 新卡片=%d 退役=%d",
+                    result.get("generated", 0),
+                    result.get("skipped_groups", 0),
+                )
+                last_hourly = now
+
+            # Loop 3: 每周日 3:00
+            if last_weekly_check is None or (now - last_weekly_check) >= 3600:
+                dt = _dt.now()
+                if dt.weekday() == 6 and dt.hour == 3:
+                    _logger.info(_cyan("[Evolution:Loop3] 执行周度 LLM 模式提取..."))
+                    try:
+                        from config.loader import load_config
+                        from multi_agent_system.config import BackendType
+                        cfg = load_config()
+                        ds_cfg = cfg.default_backends.get(BackendType.DEEPSEEK)
+                        if ds_cfg and ds_cfg.api_key:
+                            from multi_agent_system.backends.deepseek_backend import DeepSeekBackend
+                            llm = DeepSeekBackend(
+                                api_base=ds_cfg.api_base,
+                                api_key=ds_cfg.api_key,
+                                timeout=ds_cfg.timeout,
+                                max_retries=ds_cfg.max_retries,
+                                default_model=ds_cfg.model_name,
+                            )
+                            result3 = await run_weekly_extraction(llm)
+                            _logger.info(
+                                "[Evolution:Loop3] 完成: 候选原则=%d",
+                                result3.get("candidates_generated", 0),
+                            )
+                        else:
+                            _logger.info("[Evolution:Loop3] DeepSeek API Key 未配置, 跳过")
+                    except Exception as e:
+                        _logger.warning(f"[Evolution:Loop3] 执行失败: {e}")
+                    last_weekly_check = now
+
+        except Exception as e:
+            _logger.error(_red(f"[Evolution] 后台循环异常: {e}"))
+
+        try:
+            await asyncio.wait_for(
+                _global_state["shutdown_requested"].wait(), timeout=60,
+            )
+        except asyncio.TimeoutError:
+            continue
+
+    _logger.info(_green("[Evolution] 自进化后台任务已停止"))
+
+
+# ============================================================
 # Layer 4: 数据标注与数据库写入启动
 # ============================================================
 def start_data_labeling() -> bool:
@@ -770,6 +850,9 @@ async def async_main(args: argparse.Namespace):
         slow_brain_task = asyncio.create_task(slow_brain_background_loop())
         _global_state["slow_brain_task"] = slow_brain_task
 
+    # 9. 启动自进化定时任务 (Loop 2: 小时聚类, Loop 3: 周度LLM提取)
+    evolution_task = asyncio.create_task(_evolution_background_loop())
+
     # ---- 打印最终启动报告 ----
     def _status(b: bool) -> str:
         return _green("已启动 [OK]") if b else _yellow("已跳过 [--]")
@@ -837,6 +920,13 @@ async def async_main(args: argparse.Namespace):
         except asyncio.CancelledError:
             pass
         _logger.info(_green("[Layer 3] 慢脑后台上报循环已停止"))
+
+    # 1.5 停止自进化后台任务
+    evolution_task.cancel()
+    try:
+        await evolution_task
+    except asyncio.CancelledError:
+        pass
 
     # 2. 停止多智能体系统
     await stop_multi_agent_system()

@@ -348,6 +348,9 @@ class Orchestrator:
         if feedback_agent and self.config.feedback.enabled:
             await feedback_agent.process(verdict=final_verdict)
 
+        # ---- 阶段6: 写入记忆系统 (自进化) ----
+        self._record_to_memory(final_verdict, flow)
+
         self._publish_verdict(final_verdict, correlation_id)
         return final_verdict
 
@@ -606,6 +609,53 @@ class Orchestrator:
             "knowledge_base_size": self._knowledge_base.size() if self._knowledge_base else 0,
             "feedback_stats": feedback_agent.get_statistics() if feedback_agent else {},
         }
+
+    def _record_to_memory(self, verdict: ThreatVerdict, flow: FlowEvent) -> None:
+        """将判定结果写入记忆系统（自进化 Tier 0 案例记录）"""
+        try:
+            from .memory import get_store, get_index
+            store = get_store()
+            index = get_index()
+
+            # 查询当时匹配的模式卡片
+            features = {
+                "department": getattr(flow, "department", ""),
+                "protocol": getattr(flow, "protocol", "TCP"),
+                "direction": (
+                    "internal" if getattr(flow, "dst_ip", "").startswith(("10.", "192.168.", "172."))
+                    else "outbound"
+                ),
+                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
+            }
+            matching = index.query(features, min_match=0.5)
+            matched_ids = [c.card_id for c in matching]
+
+            store.record_feedback(
+                ai_verdict=verdict.verdict.value,
+                ai_confidence=verdict.confidence,
+                ai_reasoning=verdict.reasoning[:500],
+                ai_threat_type=verdict.threat_type,
+                admins_action="",      # 尚未经管理员确认
+                ai_correct=False,      # 默认为 False，等管理员反馈后更正
+                admin_note="",
+                src_ip=flow.src_ip,
+                dst_ip=flow.dst_ip,
+                src_port=flow.src_port,
+                dst_port=flow.dst_port,
+                department=getattr(flow, "department", ""),
+                protocol=flow.protocol,
+                flow_features={
+                    "entropy": getattr(flow, "entropy_score", 0),
+                    "byte_count": getattr(flow, "byte_count", 0),
+                    "pkt_count": getattr(flow, "pkt_count", 0),
+                    "avg_pkt_size": getattr(flow, "avg_pkt_size", 0),
+                    "src_port": flow.src_port,
+                    "dst_port": flow.dst_port,
+                },
+                matched_pattern_ids=matched_ids,
+            )
+        except Exception:
+            pass  # 记忆系统不可用不影响研判
 
     def _publish_verdict(self, verdict: ThreatVerdict, correlation_id: str) -> None:
         """发布最终判定到消息总线"""

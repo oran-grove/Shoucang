@@ -121,6 +121,9 @@ class FeedbackAgent(BaseAgent):
         # 规则化处理
         result = self._apply_feedback_rules(feedback, hist_verdict)
 
+        # 更新记忆系统（Tier 0 反馈案例 + Tier 1 模式强化）
+        self._update_memory(feedback, hist_verdict, result)
+
         # 同时生成 LLM 增强建议
         if hist_verdict:
             try:
@@ -243,6 +246,70 @@ class FeedbackAgent(BaseAgent):
         except Exception as e:
             logger.error("[%s] LLM 增强调用失败: %s", self.name, e)
             return None
+
+    def _update_memory(
+        self,
+        feedback: AdminFeedback,
+        hist_verdict: Optional[ThreatVerdict],
+        result: dict,
+    ) -> None:
+        """将管理员反馈写入记忆系统，强化匹配的模式卡片"""
+        try:
+            from ..memory import get_store, get_index
+
+            store = get_store()
+            index = get_index()
+
+            # 判断 AI 是否正确
+            if feedback.feedback_type == "confirm_malicious":
+                ai_correct = True
+            elif feedback.feedback_type in ("false_positive", "false_negative"):
+                ai_correct = False
+            else:
+                ai_correct = False
+
+            ai_verdict = ""
+            ai_confidence = 0.0
+            ai_reasoning = ""
+            ai_threat_type = ""
+            if hist_verdict:
+                ai_verdict = hist_verdict.verdict.value
+                ai_confidence = hist_verdict.confidence
+                ai_reasoning = hist_verdict.reasoning
+                ai_threat_type = hist_verdict.threat_type
+
+            # 写入 Tier 0 反馈案例
+            store.record_feedback(
+                ai_verdict=ai_verdict,
+                ai_confidence=ai_confidence,
+                ai_reasoning=ai_reasoning,
+                ai_threat_type=ai_threat_type,
+                admins_action=feedback.feedback_type,
+                ai_correct=ai_correct,
+                admin_note=feedback.admin_note,
+                src_ip=feedback.src_ip,
+                dst_ip=feedback.dst_ip,
+            )
+
+            # 强化匹配的 Tier 1 模式卡片
+            if feedback.src_ip:
+                features = {"src_ip": feedback.src_ip}
+                matching = index.query(features, min_match=0.3, status=None)
+                for card in matching:
+                    # 根据反馈类型决定强化方向
+                    if feedback.feedback_type == "confirm_malicious":
+                        index.reinforce_card(card.card_id, confirmed=True,
+                                            admin_note=feedback.admin_note)
+                    elif feedback.feedback_type == "false_positive":
+                        index.reinforce_card(card.card_id, confirmed=False,
+                                            admin_note=feedback.admin_note)
+                    elif feedback.feedback_type == "false_negative":
+                        # 漏报=AI判安全但实际恶意，对匹配到的正常模式卡片是打击
+                        index.reinforce_card(card.card_id, confirmed=False,
+                                            admin_note=feedback.admin_note)
+
+        except Exception:
+            pass  # 记忆系统不可用不影响反馈处理
 
     def get_statistics(self) -> dict:
         """返回统计信息"""

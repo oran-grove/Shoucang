@@ -742,9 +742,10 @@ async def api_traffic_action(payload: TrafficAction):
 
     logger.info(f"流量事件操作: action={action}, id={item_id}, reason={reason}")
 
+    target_ip = None
+
     if action == "拉黑" and item_id:
         # 找到该事件的源 IP
-        target_ip = None
         try:
             rows = _db("lists_manager", "get_traffic_logs", 200, 0)
             for row in rows:
@@ -775,6 +776,9 @@ async def api_traffic_action(payload: TrafficAction):
             _db("lists_manager", "update_traffic_action", item_id, action)
         except Exception:
             pass
+
+    # -- 写入多智能体记忆系统 (自进化 Tier 0) --
+    _record_to_memory_from_admin(item_id, action, reason, target_ip)
 
     return JSONResponse({"code": 0, "msg": f"操作成功: {action}"})
 
@@ -976,6 +980,34 @@ def start(host: str = "0.0.0.0", port: int = 8080, **kwargs):
     )
     _server_instance = uvicorn.Server(config)
     _server_instance.run()
+
+
+def _record_to_memory_from_admin(
+    traffic_id: Optional[int], action: str, reason: str, target_ip: Optional[str],
+) -> None:
+    """将管理员操作写入多智能体记忆系统"""
+    try:
+        # 确保项目根在 sys.path
+        if str(_PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(_PROJECT_ROOT))
+        from multi_agent_system.memory import get_store
+
+        # 推断 AI 是否正确（基于管理员动作）
+        # 拉黑 → 管理员确认有异常；忽视 → 管理员认为是误报
+        ai_correct = action == "拉黑"
+        category_map = {"拉黑": "tp", "忽视": "fp"}
+
+        get_store().record_feedback(
+            ai_verdict="unknown",  # 后端 API 层没有 AI 判定信息
+            ai_confidence=0.0,
+            admins_action=action,
+            ai_correct=ai_correct,
+            admin_note=reason,
+            src_ip=target_ip or "",
+            traffic_id=traffic_id,
+        )
+    except Exception:
+        pass  # 记忆系统不可用不影响 API 响应
 
 
 def start_in_thread(host: str = "0.0.0.0", port: int = 8080):

@@ -113,7 +113,20 @@ class JudgmentAgent(BaseAgent):
             f"置信度: {correlation_result.confidence}",
             f"理由: {correlation_result.reasoning}",
         ]
-        prompt = "\n".join(prompt_parts)
+        # -- 注入系统学习到的模式上下文 --
+        try:
+            from ..memory import get_index, load_approved_principles, apply_principles_to_context
+            index = get_index()
+            # 从检测结果推理中尝试提取特征
+            features = _extract_features_from_verdicts(detection_result, correlation_result)
+            pattern_context = index.format_context(features)
+            principles = load_approved_principles()
+            principles_context = apply_principles_to_context(principles)
+            extra_context = pattern_context + principles_context
+        except Exception:
+            extra_context = ""
+
+        prompt = "\n".join(prompt_parts) + extra_context
 
         try:
             response = await self.call_llm(prompt)
@@ -261,6 +274,38 @@ class JudgmentAgent(BaseAgent):
             ttl_minutes=ttl,
             comment=f"研判生成: {verdict.threat_type} | {verdict.reasoning[:200]}",
         )
+
+
+def _extract_features_from_verdicts(
+    detection: "ThreatVerdict",
+    correlation: "ThreatVerdict",
+) -> dict:
+    """从检测和关联结果中提取用于模式匹配的特征字典"""
+    features = {}
+    reasoning = (detection.reasoning or "") + " " + (correlation.reasoning or "")
+    reasoning_lower = reasoning.lower()
+
+    if "财务" in reasoning:
+        features["department"] = "财务部"
+    elif "研发" in reasoning or "开发" in reasoning:
+        features["department"] = "研发部"
+    elif "人事" in reasoning:
+        features["department"] = "人事部"
+
+    for proto in ("TCP", "UDP", "HTTP", "TLS", "DNS"):
+        if proto in reasoning:
+            features["protocol"] = proto
+            break
+
+    if "外" in reasoning or "outbound" in reasoning_lower or "出站" in reasoning:
+        features["direction"] = "outbound"
+    elif "内" in reasoning or "internal" in reasoning_lower:
+        features["direction"] = "internal"
+
+    if any(kw in reasoning_lower for kw in ("加密", "tls", "entropy", "高熵", "7.")):
+        features["encryption"] = True
+
+    return features
 
 
 __all__ = ["JudgmentAgent"]

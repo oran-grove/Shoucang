@@ -105,8 +105,22 @@ class DetectionAgent(BaseAgent):
                         detection_result_id=self.name,
                     )
 
-        # 2. 调用 LLM 分析
-        prompt = f"请分析以下流量：\n{flow_event.to_prompt_text()}"
+        # 2. 注入系统学习到的模式上下文（Tier 1 激活卡片）
+        pattern_context = ""
+        try:
+            from ..memory import get_index
+            features = {
+                "department": getattr(flow_event, "department", ""),
+                "protocol": getattr(flow_event, "protocol", "TCP"),
+                "direction": "internal" if getattr(flow_event, "dst_ip", "").startswith(("10.", "192.168.", "172.")) else "outbound",
+                "encryption": getattr(flow_event, "entropy_score", 0) > 7.0,
+            }
+            pattern_context = get_index().format_context(features)
+        except Exception:
+            pass  # 记忆系统不可用不影响检测
+
+        # 3. 调用 LLM 分析
+        prompt = f"请分析以下流量：\n{flow_event.to_prompt_text()}{pattern_context}"
         try:
             response = await self.call_llm(prompt)
         except Exception as e:
@@ -122,7 +136,7 @@ class DetectionAgent(BaseAgent):
                 detection_result_id=self.name,
             )
 
-        # 3. 解析 LLM 回复
+        # 4. 解析 LLM 回复
         parsed = self.extract_json_from_response(response)
         raw_verdict = parsed.get("verdict", "unknown")
         confidence = float(parsed.get("confidence", 0.0))
