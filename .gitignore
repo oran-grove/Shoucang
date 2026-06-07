@@ -21,8 +21,8 @@ htmlcov/
 # ============================================================
 # GeoIP — auto-downloaded binary, do not commit
 # ============================================================
-data_labeling/GeoLite2-City.mmdb
-data_labeling/GeoLite2-City.mmdb.gz
+data_gateway/GeoLite2-City.mmdb
+data_gateway/GeoLite2-City.mmdb.gz
 
 # ============================================================
 # Memory module — runtime artifacts

@@ -184,6 +184,6 @@
     "update_interval_hours": 168,
     "enabled": true,
     "download_url": "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
-    "db_path": "data_labeling/GeoLite2-City.mmdb"
+    "db_path": "data_gateway/GeoLite2-City.mmdb"
   }
 }

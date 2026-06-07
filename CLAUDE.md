@@ -106,7 +106,7 @@ Frontend is pure static HTML/CSS/JS served by FastAPI from `frontend/`. Uses Lay
 
 ## GeoIP module
 
-`GeoLite2-City.mmdb` is stored in `data_labeling/`. Auto-updates every 168h (7 days) from jsDelivr CDN. `update_geoip_db()` downloads a gzipped copy and decompresses it. The `maxminddb` package is optional — the cold table processor degrades gracefully if it's not installed.
+`GeoLite2-City.mmdb` is stored in `data_gateway/`. Auto-updates every 168h (7 days) from jsDelivr CDN. `update_geoip_db()` downloads a gzipped copy and decompresses it. The `maxminddb` package is optional — the cold table processor degrades gracefully if it's not installed.
 
 ## P4 program
 

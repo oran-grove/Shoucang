@@ -20,7 +20,7 @@ thrift>=0.16.0            # Thrift直连BMv2交换机 (control.py 剧情线3: te
 httpx>=0.27.0             # 快/慢脑智能体异步HTTP调用LLM (openai/lmstudio/deepseek_backend.py)
 json5>=0.9.0              # JSON5解析 (core/agent.py)，支持注释/尾逗号等宽松格式
 
-# ---- 数据标注与持久化 (data_labeling/ & database/) ----
+# ---- 数据网关与持久化 (data_gateway/ & database/) ----
 pymysql>=1.1.0            # MySQL数据库连接 (writer.py, shared_memory_consumer.py)
 maxminddb>=2.5.0          # GeoIP2地理定位 (cold_table_processor.py)，可选，缺失时自动跳过
 psutil>=5.9.0             # 系统资源监控 (CPU/RAM/网络)，前端仪表盘 /api/status 使用

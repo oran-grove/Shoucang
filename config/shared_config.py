@@ -44,7 +44,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 GEOIP_UPDATE_INTERVAL_HOURS = 168  # 7 天
 
 # GeoIP 数据库文件绝对路径
-GEOIP_DB_PATH = str(PROJECT_ROOT / "data_labeling" / "GeoLite2-City.mmdb")
+GEOIP_DB_PATH = str(PROJECT_ROOT / "data_gateway" / "GeoLite2-City.mmdb")
 
 # GeoIP 下载源
 GEOIP_DOWNLOAD_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"

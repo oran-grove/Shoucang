@@ -16,7 +16,7 @@
     - SlowBrainOrchestrator：基线画像 / 时序异常 / 长周期深度分析
     - 本地 LLM (LM Studio) 或云端 API (OpenAI / DeepSeek) 后端
 
-  Layer 3 — 数据标注与持久化 (data_labeling)
+  Layer 3 — 数据网关 (data_gateway)
     - DataBridge：UDP 9999 接收冷热表，GeoIP 丰富，MySQL 入库
     - 后台攒批写入线程：queue.Queue -> MySQL 零拷贝
 
@@ -632,13 +632,13 @@ async def _evolution_background_loop():
 
 
 # ============================================================
-# Layer 4: 数据标注与数据库写入启动
+# Layer 3: 数据网关启动
 # ============================================================
-def start_data_labeling() -> bool:
-    """启动冷表处理器"""
-    _logger.info(_cyan("[Layer 4] 启动数据标注与持久化层..."))
+def start_data_gateway() -> bool:
+    """启动数据桥"""
+    _logger.info(_cyan("[Layer 3] 启动数据网关..."))
     try:
-        from data_labeling.data_bridge import DataBridge
+        from data_gateway.data_bridge import DataBridge
 
         bridge = DataBridge()
         _global_state["data_bridge"] = bridge
@@ -652,27 +652,27 @@ def start_data_labeling() -> bool:
 
         _logger.info(
             _green(
-                "[Layer 4] 冷表处理器已启动 [OK] (UDP :9999, 零拷贝队列 -> MySQL)"
+                "[Layer 3] 数据桥已启动 [OK] (UDP :9999, 零拷贝队列 -> MySQL)"
             )
         )
         return True
 
     except Exception as e:
-        _logger.error(_red(f"[Layer 4] 数据标注层启动失败: {e}"))
+        _logger.error(_red(f"[Layer 3] 数据网关启动失败: {e}"))
         import traceback
         traceback.print_exc()
         return False
 
 
-def stop_data_labeling():
-    """优雅关闭数据标注层"""
+def stop_data_gateway():
+    """优雅关闭数据网关"""
     bridge = _global_state.get("data_bridge")
     if bridge is not None:
         try:
             bridge.running = False
-            _logger.info("[Layer 4] 冷表处理器已请求停止")
+            _logger.info("[Layer 3] 数据桥已请求停止")
         except Exception as e:
-            _logger.warning(_yellow(f"[Layer 4] 停止冷表处理器时出错: {e}"))
+            _logger.warning(_yellow(f"[Layer 3] 停止数据桥时出错: {e}"))
 
     db_stop = _global_state.get("db_stop_event")
     if db_stop is not None:
@@ -680,9 +680,9 @@ def stop_data_labeling():
             from database.writer import stop_db_writer
 
             stop_db_writer(db_stop)
-            _logger.info("[Layer 4] 数据库写入线程已请求停止")
+            _logger.info("[Layer 3] 数据库写入线程已请求停止")
         except Exception as e:
-            _logger.warning(_yellow(f"[Layer 4] 停止 DB 写入器时出错: {e}"))
+            _logger.warning(_yellow(f"[Layer 3] 停止 DB 写入器时出错: {e}"))
 
 
 # ============================================================
@@ -720,7 +720,7 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
         while not _global_state["shutdown_requested"].is_set():
             try:
                 _logger.info(_cyan("[GeoIP] 开始定期更新 GeoIP 数据库..."))
-                from data_labeling.data_bridge import update_geoip_db
+                from data_gateway.data_bridge import update_geoip_db
                 success = update_geoip_db()
                 if success:
                     _logger.info(_green("[GeoIP] 自动更新完成"))
@@ -748,7 +748,7 @@ def health_check_loop():
             "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
             "slow_brain": _global_state.get("slow_brain") is not None,
-            "data_labeling": _global_state.get("data_bridge") is not None,
+            "data_gateway": _global_state.get("data_bridge") is not None,
             "backend": _global_state.get("backend_thread") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
         }
@@ -762,7 +762,7 @@ def health_check_loop():
             f"多智能体={_ok(status['multi_agent'])} "
             f"逐条扫描={_ok(status['live_scanner'])} "
             f"深度分析={_ok(status['slow_brain'])} "
-            f"数据标注={_ok(status['data_labeling'])} "
+            f"数据网关={_ok(status['data_gateway'])} "
             f"前端={_ok(status['backend'])} "
             f"| 运行 {status['uptime']:.0f}s"
         )
@@ -811,11 +811,11 @@ async def async_main(args: argparse.Namespace):
     else:
         _logger.info(_yellow("[WebUI] 后端服务器已跳过 (--no-frontend)"))
 
-    # 2. Layer 4: 数据标注层
+    # 2. 数据网关
     if not args.no_cold_table:
-        start_data_labeling()
+        start_data_gateway()
     else:
-        _logger.info(_yellow("[Layer 4] 数据桥已跳过 (--no-cold-table)"))
+        _logger.info(_yellow("[Layer 3] 数据桥已跳过 (--no-cold-table)"))
 
     # 3. Layer 1: P4 硬件控制层
     if not args.no_p4:
@@ -892,7 +892,7 @@ async def async_main(args: argparse.Namespace):
     if not args.no_frontend:
         print(f"    前端可视化 (FastAPI) -> http://0.0.0.0:{args.frontend_port}")
     print("    P4 控制面 (Flask)   -> http://0.0.0.0:5000")
-    print("    冷表处理器 (UDP)     -> 0.0.0.0:9999")
+    print("    数据桥 (UDP)         -> 0.0.0.0:9999")
     print()
     print("  按 Ctrl+C 优雅关闭系统")
     print("=" * 76)
@@ -932,7 +932,7 @@ async def async_main(args: argparse.Namespace):
     await stop_multi_agent_system()
 
     # 3. 停止数据标注层
-    stop_data_labeling()
+    stop_data_gateway()
 
     # 4. 停止前端服务器
     stop_backend()
@@ -1040,7 +1040,7 @@ def main():
     # ---- GeoIP 自动更新引导 ----
     if args.update_geoip_now:
         _logger.info(_cyan("手动触发 GeoIP 数据库更新..."))
-        from data_labeling.data_bridge import update_geoip_db
+        from data_gateway.data_bridge import update_geoip_db
         success = update_geoip_db()
         if success:
             _logger.info(_green("GeoIP 数据库更新完成。"))

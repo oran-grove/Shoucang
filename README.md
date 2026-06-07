@@ -206,7 +206,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 │   ├── writer.py              #   队列攒批写入 MySQL
 │   ├── lists_manager.py       #   黑白名单 / IP 映射缓存
 │   └── create_database.sql    #   建库 DDL
-├── data_labeling/             # 数据标注与 UDP 接收
+├── data_gateway/              # 数据网关 (UDP 接收 + GeoIP + DB 写入)
 │   └── cold_table_processor.py  # 冷热表合并 + GeoIP 富化
 ├── p4_program/                # P4 交换机程序源码（独立编译）
 │   └── data_platform.txt
