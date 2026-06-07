@@ -34,8 +34,8 @@ python main.py --update-geoip-now       # Force GeoIP DB update on startup
 | Layer | What | Port | Tech |
 |---|---|---|---|
 | Layer 1 | P4 hardware controller | **5000** (Flask) | Flask + pynng + Thrift |
-| Layer 2 | Fast-brain AI agents | internal | LLM orchestration + live scan |
-| Layer 3 | Slow-brain deep analysis | internal | Baseline profiling + temporal anomaly |
+| Layer 2 | Multi-agent system (slow brain) | internal | LLM orchestration + live scan + deep analysis |
+| Layer 3 | Data labeling (cold-table) | **9999** (UDP) | ColdTableProcessor + GeoIP + MySQL batching |
 | Layer 4 | WebUI + config management | **8080** (FastAPI) | FastAPI + LayUI (static frontend) |
 
 Supporting components (not numbered layers):
@@ -47,9 +47,8 @@ Supporting components (not numbered layers):
 **`main.py` is the single entrypoint** — starts all layers, health check, and GeoIP thread in correct order.
 
 ### Cross-layer feedback
-- **Slow brain → Fast brain**: Strategy/rule updates from deep analysis feed back to detection thresholds
-- **Slow brain → P4**: Interception rules pushed to P4 switch flow tables
-- **Slow brain → WebUI**: High-severity alerts pushed to dashboard
+- **Multi-agent system → P4**: Interception rules pushed to P4 switch flow tables
+- **Multi-agent system → WebUI**: High-severity alerts pushed to dashboard
 - **WebUI → P4**: Blacklist/whitelist actions from the dashboard directly invoke `p4_controller.add_ip`
 - **WebUI → Agents**: Config changes via dashboard write to `config_user.json`, affecting all agents on reload
 

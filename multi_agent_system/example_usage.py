@@ -6,7 +6,7 @@
 - 模拟流量事件分析
 - 管理员反馈闭环
 - 获取 P4 交换机规则
-- 慢脑层长周期分析
+- 深度分析子模块（基线画像 + 时序异常）
 
 运行前请确保：
 1. LM Studio 已运行于 http://localhost:1234
@@ -39,7 +39,7 @@ logging.basicConfig(
 
 
 # ============================================================
-# 示例数据构建 — 快脑层（实时单流）
+# 示例数据构建 — 实时单流检测
 # ============================================================
 
 def build_sample_flows() -> list[FlowEvent]:
@@ -101,7 +101,7 @@ def build_sample_flows() -> list[FlowEvent]:
 
 
 # ============================================================
-# 示例数据构建 — 慢脑层（长期历史日志）
+# 示例数据构建 — 深度分析（长期历史日志）
 # ============================================================
 
 def build_historical_flows(entity_id: str = "user_zhangsan") -> list[FlowEvent]:
@@ -214,7 +214,7 @@ def build_historical_flows(entity_id: str = "user_zhangsan") -> list[FlowEvent]:
 
 
 # ============================================================
-# 快脑层演示 — LM Studio 模型管理
+# 多智能体系统演示 — LM Studio 模型管理
 # ============================================================
 
 async def lmstudio_management_example():
@@ -323,7 +323,7 @@ async def lmstudio_management_example():
 
 
 # ============================================================
-# 快脑层演示 — DeepSeek 后端
+# 多智能体系统演示 — DeepSeek 后端
 # ============================================================
 
 async def deepseek_example():
@@ -382,7 +382,7 @@ async def deepseek_example():
 
 
 # ============================================================
-# 快脑层演示 — 异步流程
+# 多智能体系统演示 — 异步分析流程
 # ============================================================
 
 async def async_example():
@@ -461,7 +461,7 @@ async def async_example():
 
 
 # ============================================================
-# 快脑层演示 — 同步流程
+# 多智能体系统演示 — 同步流程
 # ============================================================
 
 async def _sync_example_impl():
@@ -513,12 +513,12 @@ def sync_example():
 
 
 # ============================================================
-# 慢脑层演示 — 长周期深度分析（全部配置来自 config_user.json）
+# 深度分析演示 — 基线画像 + 时序异常检测（配置来自 config_user.json）
 # ============================================================
 
 async def slow_brain_example():
     """
-    演示慢脑层智能体的完整工作流程：
+    演示慢脑深度分析子模块的完整工作流程：
     1. BaselineProfilingAgent — 构建/更新用户行为基线
     2. TemporalAnomalyAgent — 检测90天窗口内的时序异常
     3. SlowBrainOrchestrator — 协调分析流程并生成告警
@@ -542,7 +542,7 @@ async def slow_brain_example():
     )
 
     print("=" * 60)
-    print("慢脑层长周期深度分析演示")
+    print("深度分析子模块 — 基线画像 + 时序异常检测演示")
     print("=" * 60)
 
     # ============================================================
@@ -567,7 +567,7 @@ async def slow_brain_example():
     # ============================================================
     # 步骤 2: 从 config_user.json 加载配置，创建智能体实例
     # ============================================================
-    print("\n🔧 步骤 2: 从配置文件加载慢脑层智能体配置...")
+    print("\n🔧 步骤 2: 从配置文件加载深度分析子模块智能体配置...")
     _slow_cfg = load_config("config_user.json")
 
     # 基线画像智能体 — 配置来自 slow_brain.baseline_profiling
@@ -588,7 +588,7 @@ async def slow_brain_example():
         temperature=_tcfg.temperature,
         max_tokens=_tcfg.max_tokens,
     )
-    # 研判智能体 — 配置来自 judgment（与快脑层共用提示词）
+    # 研判智能体 — 配置来自 judgment（与多智能体系统共用提示词）
     _jcfg = _slow_cfg.judgment
     judgment_agent = JudgmentAgent(
         name="SlowJudgmentAgent",
@@ -669,7 +669,7 @@ async def slow_brain_example():
         print("   ℹ️ 将使用模拟数据演示分析流程...")
         backend_available = False
 
-    # 创建慢脑编排器
+    # 创建深度分析编排器
     slow_brain = SlowBrainOrchestrator(
         baseline_agent=baseline_agent,
         temporal_agent=temporal_agent,
@@ -750,7 +750,7 @@ async def slow_brain_example():
         print(f"   ⚠ 偏离评估出错: {e}")
 
     # ============================================================
-    # 步骤 6: 慢脑编排器批量分析
+    # 步骤 6: 深度分析编排器批量分析
     # ============================================================
     print("\n🧠 步骤 6: SlowBrainOrchestrator 综合研判...")
     print("   协调基线+时序结果 → 综合判定")
@@ -773,7 +773,7 @@ async def slow_brain_example():
 
         # 获取统计
         stats = slow_brain.get_statistics()
-        print(f"\n   📊 慢脑层统计:")
+        print(f"\n   📊 深度分析子模块统计:")
         for k, v in stats.items():
             print(f"      {k}: {v}")
 
@@ -789,7 +789,7 @@ async def slow_brain_example():
         print("           传输量从2MB递进到5MB，形成低慢外传模式，")
         print("           已触发三层时序模式匹配：周期性低频+渐进递增+目标轮换")
 
-    print("\n✅ 慢脑层长周期分析演示完成")
+    print("\n✅ 深度分析子模块演示完成")
     print("   (完整功能需要LLM后端运行)")
 
 
@@ -854,8 +854,8 @@ async def json_config_example():
     print("    'include_reasoning': true | false")
     print("      是否在 reply 中附加模型的思考过程")
 
-    # ---- 方式 6：慢脑层配置说明 ----
-    print("\n📋 慢脑层 (SlowBrain) 配置结构说明:")
+    # ---- 方式 6：深度分析子模块配置说明 ----
+    print("\n📋 深度分析子模块 (SlowBrain) 配置结构说明:")
     print("  OrchestratorConfig.slow_brain 包含:")
     print("    - analysis_interval_hours: 分析周期（默认24h）")
     print("    - baseline_profiling: BaselineProfilingAgentConfig")
@@ -927,7 +927,7 @@ def integration_example_pseudocode():
                 p4_controller.sync_rules(rules)
                 print(f"[定时同步] 已同步 {len(rules)} 条规则到 P4")
 
-        # ====== 慢脑层定时分析（每24小时） ======
+        # ====== 深度分析定时任务（每24小时） ======
         async def periodic_slow_brain_analysis():
             while True:
                 await asyncio.sleep(86400)  # 24h
@@ -937,8 +937,8 @@ def integration_example_pseudocode():
                     if alert.severity >= SeverityLevel.HIGH:
                         # 推送到 WebUI
                         web_ui.push_alert(alert)
-                        # 更新快脑检测阈值
-                        fast_brain.update_thresholds(alert)
+                        # 更新检测阈值
+                        detection_agent.update_thresholds(alert)
 
     ============================================
     """
@@ -962,7 +962,7 @@ if __name__ == "__main__":
     print("  [3] 多智能体同步流程演示")
     print("  [4] DeepSeek 后端使用演示")
     print("  [5] JSON 配置文件加载演示")
-    print("  [6] 慢脑层长周期深度分析演示")
+    print("  [6] 深度分析子模块演示（基线画像+时序异常）")
     print("  [7] 运行全部示例")
 
     # 允许命令行参数选择
@@ -1028,12 +1028,12 @@ if __name__ == "__main__":
                 print(f"⚠ DeepSeek 演示跳过: {e}")
 
             print("\n" + "█" * 60)
-            print("  [6/6] 慢脑层长周期深度分析演示")
+            print("  [6/6] 深度分析子模块演示（基线画像+时序异常）")
             print("█" * 60)
             try:
                 await slow_brain_example()
             except Exception as e:
-                print(f"⚠ 慢脑层演示跳过: {e}")
+                print(f"⚠ 深度分析子模块演示跳过: {e}")
         else:
             print(f"未知选项: {choice}，可选值 1-7")
 

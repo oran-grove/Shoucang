@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AGENTS.md` is the canonical source for setup, startup commands, and the 4-layer architecture diagram. Read it first. This file covers architectural details that `AGENTS.md` does not.
 
-## Multi-agent analysis pipeline (fast brain)
+## Multi-agent analysis pipeline (慢脑 / slow brain)
 
-The core data flow for the fast-brain layer is a fixed 5-stage pipeline in `multi_agent_system/orchestrator.py:Orchestrator.analyze_flow()`:
+The core data flow for the multi-agent system is a fixed 5-stage pipeline in `multi_agent_system/orchestrator.py:Orchestrator.analyze_flow()`:
 
 ```
 FlowEvent → [1] DetectionAgent → [2] CorrelationAgent → [3] JudgmentAgent → [4] Rule auto-generation → [5] FeedbackAgent

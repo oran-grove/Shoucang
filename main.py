@@ -10,17 +10,13 @@
     - pynng 子线程：监听 P4 交换机上报的实时行为特征
     - 定时器线程：每 100 秒 SSH 拉取 P4 寄存器、清扫重置
 
-  Layer 2 — 快脑智能体层 (multi_agent_system)
+  Layer 2 — 多智能体系统（慢脑）— 基于 LLM 的异步分析与研判
     - 多智能体编排器：检测/关联/研判/反馈全流程
     - LiveScanOrchestrator：逐条评判队列扫描（从DB拉取逐一分析）
+    - SlowBrainOrchestrator：基线画像 / 时序异常 / 长周期深度分析
     - 本地 LLM (LM Studio) 或云端 API (OpenAI / DeepSeek) 后端
 
-  Layer 3 — 慢脑智能体层 (multi_agent_system slow_brain)
-    - 基线画像智能体：构建用户行为基线
-    - 时序异常智能体：检测长周期/低频/碎片化泄密
-    - 慢脑编排器：协调深度分析与策略反哺
-
-  Layer 4 — 统一管理面 (数据标注 + 数据库)
+  Layer 3 — 数据标注与持久化 (data_labeling)
     - ColdTableProcessor：UDP 9999 接收冷热表，GeoIP 丰富，MySQL 入库
     - 后台攒批写入线程：queue.Queue -> MySQL 零拷贝
 
@@ -31,9 +27,9 @@
 
   使用方式：
        python main.py                        # 全量启动
-       python main.py --no-slow-brain        # 禁用慢脑层
+       python main.py --no-slow-brain        # 跳过深度分析子模块
        python main.py --no-live-scan         # 禁用逐条评判扫描
-       python main.py --no-llm               # 禁用 LLM 智能体（仅 P4 + 数据标注 + 前端）
+       python main.py --no-llm               # 禁用多智能体系统（仅 P4 + 数据标注 + 前端）
        python main.py --dry-run              # 仅打印启动信息，不实际运行
 
   依赖安装：
@@ -134,11 +130,10 @@ def print_banner():
 |          P4 异构多智能体反泄密平台（守藏）-- 系统启动中...                       |
 |                                                                            |
 |  Layer 1  P4 硬件层        -> pynng 探针 + Flask API(:5000) + 100s 遥测    |
-|  Layer 2  快脑智能体层      -> 多智能体编排 + 逐条评判队列扫描              |
-|  Layer 3  慢脑智能体层      -> 基线画像 + 时序异常 + 长周期深度分析            |
-|  Layer 4  统一管理面        -> ColdTableProcessor UDP:9999 + MySQL 攒批写入  |
-|  WebUI  前端可视化          -> FastAPI(:8080) 仪表盘 / REST API / 静态资源   |
-|  跨层联动  策略反哺          -> 慢脑生成策略 -> 快脑阈值更新 / P4 流表下发     |
+|  Layer 2  多智能体系统(慢脑) -> 检测/关联/研判/反馈管线 + 基线画像 + 时序异常   |
+|  Layer 3  数据标注层         -> ColdTableProcessor UDP:9999 + MySQL 攒批写入  |
+|  WebUI    前端可视化         -> FastAPI(:8080) 仪表盘 / REST API / 静态资源    |
+|  跨层联动 策略反哺           -> 慢脑生成策略 -> P4 流表下发 / 检测阈值更新      |
 +============================================================================+
 """
     print(banner)
@@ -267,20 +262,20 @@ def _patch_control_timer():
 
 
 # ============================================================
-# Layer 2: 快脑智能体层启动
+# Layer 2: 多智能体系统（慢脑）启动
 # ============================================================
-async def start_fast_brain(
+async def start_multi_agent_system(
     enable_llm: bool = True,
     enable_live_scan: bool = True,
 ) -> bool:
     """
-    启动多智能体编排器（快脑层）+ 逐条评判队列扫描器。
+    启动多智能体编排器（慢脑）+ 逐条评判队列扫描器。
     """
     if not enable_llm:
-        _logger.info(_yellow("[Layer 2] 快脑智能体层已跳过 (--no-llm)"))
+        _logger.info(_yellow("[Layer 2] 多智能体系统已跳过 (--no-llm)"))
         return False
 
-    _logger.info(_cyan("[Layer 2] 启动快脑智能体层..."))
+    _logger.info(_cyan("[Layer 2] 启动多智能体系统（慢脑）..."))
     try:
         from config.loader import load_config
 
@@ -298,7 +293,7 @@ async def start_fast_brain(
         await system.start()
 
         _global_state["multi_agent_system"] = system
-        _logger.info(_green("[Layer 2] 快脑智能体层已启动 [OK]"))
+        _logger.info(_green("[Layer 2] 多智能体系统已启动 [OK]"))
         _logger.info(
             f"[Layer 2]   检测: {config.detection.backend.value}/{config.detection.model_name}"
         )
@@ -344,14 +339,14 @@ async def start_fast_brain(
         return True
 
     except Exception as e:
-        _logger.error(_red(f"[Layer 2] 快脑智能体层启动失败: {e}"))
+        _logger.error(_red(f"[Layer 2] 多智能体系统启动失败: {e}"))
         import traceback
         traceback.print_exc()
         return False
 
 
-async def stop_fast_brain():
-    """优雅关闭快脑智能体层"""
+async def stop_multi_agent_system():
+    """优雅关闭多智能体系统"""
     live_scanner = _global_state.get("live_scanner")
     if live_scanner is not None:
         try:
@@ -364,21 +359,21 @@ async def stop_fast_brain():
     if system is not None:
         try:
             await system.stop()
-            _logger.info(_green("[Layer 2] 快脑智能体层已停止"))
+            _logger.info(_green("[Layer 2] 多智能体系统已停止"))
         except Exception as e:
-            _logger.warning(_yellow(f"[Layer 2] 快脑停止时出错: {e}"))
+            _logger.warning(_yellow(f"[Layer 2] 多智能体停止时出错: {e}"))
 
 
 # ============================================================
-# Layer 3: 慢脑智能体层启动
+# 慢脑子模块：深度分析（基线画像 + 时序异常检测）
 # ============================================================
 async def start_slow_brain(enable_llm: bool = True) -> bool:
-    """启动慢脑智能体层"""
+    """启动慢脑深度分析子模块（基线画像 + 时序异常）"""
     if not enable_llm:
-        _logger.info(_yellow("[Layer 3] 慢脑智能体层已跳过"))
+        _logger.info(_yellow("[Layer 3] 慢脑深度分析子模块已跳过"))
         return False
 
-    _logger.info(_cyan("[Layer 3] 启动慢脑智能体层..."))
+    _logger.info(_cyan("[Layer 3] 启动慢脑深度分析子模块..."))
     try:
         from multi_agent_system.agents.baseline_profiling_agent import (
             BaselineProfilingAgent,
@@ -503,14 +498,14 @@ async def start_slow_brain(enable_llm: bool = True) -> bool:
         )
 
         _global_state["slow_brain"] = slow_brain
-        _logger.info(_green("[Layer 3] 慢脑智能体层已就绪 [OK]"))
+        _logger.info(_green("[Layer 3] 慢脑深度分析子模块已就绪 [OK]"))
         _logger.info(
             f"[Layer 3]   分析周期: {_slow_cfg.slow_brain.analysis_interval_hours}h"
         )
         return True
 
     except Exception as e:
-        _logger.error(_red(f"[Layer 3] 慢脑智能体层启动失败: {e}"))
+        _logger.error(_red(f"[Layer 3] 慢脑深度分析子模块启动失败: {e}"))
         import traceback
         traceback.print_exc()
         return False
@@ -518,8 +513,8 @@ async def start_slow_brain(enable_llm: bool = True) -> bool:
 
 async def slow_brain_background_loop():
     """
-    慢脑层后台循环：每 analysis_interval_hours 小时执行一次深度分析。
-    分析结果通过策略反哺到快脑层和 P4 层。
+    慢脑深度分析后台循环：每 analysis_interval_hours 小时执行一次深度分析。
+    分析结果通过策略反哺到 P4 层和检测阈值。
     """
     slow_brain = _global_state.get("slow_brain")
     if slow_brain is None:
@@ -537,7 +532,7 @@ async def slow_brain_background_loop():
         try:
             _logger.info(_cyan("[Layer 3] 慢脑开始执行长周期深度分析..."))
             stats = slow_brain.get_statistics() if slow_brain else {}
-            _logger.info(f"[Layer 3] 慢脑层当前统计: {stats}")
+            _logger.info(f"[Layer 3] 慢脑深度分析当前统计: {stats}")
 
             alerts = slow_brain.get_recent_alerts(severity_min=3) if slow_brain else []
             if alerts:
@@ -670,7 +665,7 @@ def health_check_loop():
     while not _global_state["shutdown_requested"].is_set():
         status = {
             "p4_controller": _global_state["p4_controller_ready"].is_set(),
-            "fast_brain": _global_state.get("multi_agent_system") is not None,
+            "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
             "slow_brain": _global_state.get("slow_brain") is not None,
             "data_labeling": _global_state.get("cold_processor") is not None,
@@ -684,9 +679,9 @@ def health_check_loop():
         _logger.info(
             f"[HealthCheck] 系统状态: "
             f"P4={_ok(status['p4_controller'])} "
-            f"快脑={_ok(status['fast_brain'])} "
+            f"多智能体={_ok(status['multi_agent'])} "
             f"逐条扫描={_ok(status['live_scanner'])} "
-            f"慢脑={_ok(status['slow_brain'])} "
+            f"深度分析={_ok(status['slow_brain'])} "
             f"数据标注={_ok(status['data_labeling'])} "
             f"前端={_ok(status['backend'])} "
             f"| 运行 {status['uptime']:.0f}s"
@@ -749,13 +744,13 @@ async def async_main(args: argparse.Namespace):
     else:
         _logger.info(_yellow("[Layer 1] P4 控制器已跳过 (--no-p4)"))
 
-    # 4. Layer 2: 快脑智能体层
-    fast_brain_ready = await start_fast_brain(
+    # 4. 多智能体系统（慢脑）
+    multi_agent_ready = await start_multi_agent_system(
         enable_llm=not args.no_llm,
         enable_live_scan=not args.no_live_scan,
     )
 
-    # 5. Layer 3: 慢脑智能体层
+    # 5. 慢脑深度分析子模块（基线画像 + 时序异常）
     slow_brain_ready = await start_slow_brain(
         enable_llm=not args.no_llm and not args.no_slow_brain
     )
@@ -797,13 +792,13 @@ async def async_main(args: argparse.Namespace):
         f"  P4 控制器        {_status(not args.no_p4) : <40}"
     )
     print(
-        f"  快脑智能体       {_status(fast_brain_ready) : <40}"
+        f"  多智能体系统     {_status(multi_agent_ready) : <40}"
     )
     print(
         f"  逐条评判扫描     {_status(live_scan_running) : <40}"
     )
     print(
-        f"  慢脑智能体       {_status(slow_brain_ready) : <40}"
+        f"  深度分析子模块   {_status(slow_brain_ready) : <40}"
     )
     print(
         f"  冷表处理器       {_status(not args.no_cold_table) : <40}"
@@ -843,8 +838,8 @@ async def async_main(args: argparse.Namespace):
             pass
         _logger.info(_green("[Layer 3] 慢脑后台上报循环已停止"))
 
-    # 2. 停止快脑智能体层
-    await stop_fast_brain()
+    # 2. 停止多智能体系统
+    await stop_multi_agent_system()
 
     # 3. 停止数据标注层
     stop_data_labeling()
@@ -885,25 +880,25 @@ def main():
 使用示例:
   python main.py                          # 全量启动 (所有4层 + 逐条扫描 + 前端)
   python main.py --no-llm                 # 跳过 LLM 智能体 (仅 P4 + 数据标注 + 前端)
-  python main.py --no-slow-brain          # 跳过慢脑层
+  python main.py --no-slow-brain          # 跳过深度分析子模块（基线画像+时序异常）
   python main.py --no-live-scan           # 跳过逐条评判队列扫描
   python main.py --no-p4                  # 跳过 P4 控制器
   python main.py --no-cold-table          # 跳过冷表处理器
   python main.py --no-frontend            # 跳过前端服务器
   python main.py --frontend-port 3000     # 前端使用端口 3000
-  python main.py --no-p4 --no-cold-table  # 仅启动智能体层
+  python main.py --no-p4 --no-cold-table  # 仅启动智能体系统
   python main.py --dry-run                # 仅打印启动信息，不实际运行
         """,
     )
     parser.add_argument(
         "--no-llm",
         action="store_true",
-        help="禁用 LLM 智能体层 (快脑 + 慢脑)",
+        help="禁用 LLM 智能体系统（多智能体系统 + 深度分析子模块）",
     )
     parser.add_argument(
         "--no-slow-brain",
         action="store_true",
-        help="仅禁用慢脑智能体层",
+        help="仅禁用慢脑深度分析子模块（基线画像+时序异常）",
     )
     parser.add_argument(
         "--no-live-scan",
@@ -974,12 +969,12 @@ def main():
             print(f"    端口:           {args.frontend_port}")
             print(f"    后端:           FastAPI (REST API + 静态文件)")
         print(f"  P4 控制器:        {'[OK]' if not args.no_p4 else '[--] (--no-p4)'}")
-        print(f"  快脑智能体:       {'[OK]' if not args.no_llm else '[--] (--no-llm)'}")
+        print(f"  多智能体系统:     {'[OK]' if not args.no_llm else '[--] (--no-llm)'}")
         print(
             f"  逐条评判扫描:     {'[OK]' if not args.no_llm and not args.no_live_scan else '[--]'}"
         )
         print(
-            f"  慢脑智能体:       {'[OK]' if not args.no_llm and not args.no_slow_brain else '[--]'}"
+            f"  深度分析子模块:   {'[OK]' if not args.no_llm and not args.no_slow_brain else '[--]'}"
         )
         print(
             f"  冷表处理器:       {'[OK]' if not args.no_cold_table else '[--] (--no-cold-table)'}"
@@ -987,7 +982,7 @@ def main():
         print("\n实际启动请移除 --dry-run 参数。")
         return
 
-    # 处理 --no-llm 同时影响快脑和慢脑的语义
+    # 处理 --no-llm 同时禁用整个多智能体系统和深度分析子模块的语义
     if args.no_llm:
         args.no_slow_brain = True
 
