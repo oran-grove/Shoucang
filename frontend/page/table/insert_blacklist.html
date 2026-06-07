@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>新增白名单</title>
+    <title>新增黑名单</title>
     <meta name="renderer" content="webkit">
     <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
@@ -33,7 +33,18 @@
         </div>
     </div>
     <div class="layui-form-item">
-        <label class="layui-form-label required">加白原因</label>
+        <label class="layui-form-label required">威胁等级</label>
+        <div class="layui-input-block">
+          <select name="threat_level" lay-filter="threatLevel">
+            <option value=""></option>
+            <option value="低">低</option>
+            <option value="中">中</option>
+            <option value="高" selected>高</option>
+          </select>
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">拉黑原因</label>
         <div class="layui-input-block">
             <input type="text" name="reason" lay-verify="required" value="手动添加" class="layui-input">
         </div>
@@ -44,10 +55,9 @@
         </div>
     </div>
 </div>
-</div>
 <script src="../../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
 <script>
-        var apiUrl = '/api/whitelist';
+        var apiUrl = '/api/blacklist';
 
         layui.use(['form'], function () {
             var form = layui.form,
@@ -63,8 +73,8 @@
                     if (!response.ok) throw new Error('网络响应错误');
                     return response.json();
                 })
-                .then(function() {
-                    layer.msg('保存成功', { icon: 1 }, function () {
+                .then(function(result) {
+                    layer.msg(result.msg || '保存成功', { icon: 1 }, function () {
                         var iframeIndex = parent.layer.getFrameIndex(window.name);
                         parent.layer.close(iframeIndex);
                         parent.location.reload();

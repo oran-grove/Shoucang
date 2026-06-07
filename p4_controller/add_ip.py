@@ -8,6 +8,7 @@
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -59,7 +60,7 @@ def _ssh_exec_p4_cmd(p4_cmd: str) -> str:
 #    - 数据库写入: database.add_to_db_blacklist()
 #    - P4 物理流表: SSH 注入 drop 规则
 # ==========================================
-def add_to_blacklist(ip: str, source: str) -> bool:
+def add_to_blacklist(ip: str, source: str, reason: Optional[str] = None) -> bool:
     """远程穿透至虚拟机，注入精确匹配阻断流表"""
     if source not in ["frontend", "controller"]:
         print(f"❌ [非法调用] 未知的拉黑来源: {source}", flush=True)
@@ -75,7 +76,8 @@ def add_to_blacklist(ip: str, source: str) -> bool:
     print(f"💀 [封杀执行] 来源: {source} | 目标 IP: {ip} | 正在跨系统下发 P4 流表...", flush=True)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
-    if not add_to_db_blacklist(ip, threat_level="高", reason=f"由{source}触发"):
+    db_reason = reason if reason else f"由{source}触发"
+    if not add_to_db_blacklist(ip, threat_level="高", reason=db_reason):
         print(f"   => ❌ 数据库黑名单写入失败，终止拉黑", flush=True)
         return False
 
@@ -96,7 +98,7 @@ def add_to_blacklist(ip: str, source: str) -> bool:
 #    - 数据库写入: database.add_to_db_whitelist()
 #    - P4 物理流表: SSH 注入免检规则
 # ==========================================
-def add_to_whitelist(ip: str, source: str) -> bool:
+def add_to_whitelist(ip: str, source: str, reason: Optional[str] = None) -> bool:
     """远程穿透至虚拟机，注入 LPM 匹配免检流表"""
     if source != "frontend":
         print(f"🚨 [越权拦截] 警告！{source} 试图下发白名单！只有前端拥有此权限。", flush=True)
@@ -108,7 +110,8 @@ def add_to_whitelist(ip: str, source: str) -> bool:
     print(f"🛡️ [特权加白] 来源: {source} | 目标 IP: {ip} | 正在开通 P4 免检通道...", flush=True)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
-    if not add_to_db_whitelist(ip, reason=f"由{source}手动加白"):
+    db_reason = reason if reason else f"由{source}手动加白"
+    if not add_to_db_whitelist(ip, reason=db_reason):
         print(f"   => ❌ 数据库白名单写入失败，终止加白", flush=True)
         return False
 

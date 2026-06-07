@@ -600,22 +600,16 @@ async def api_blacklist_get():
 
 @app.post("/api/blacklist")
 async def api_blacklist_add(payload: BlacklistAdd):
-    """加入黑名单"""
+    """加入黑名单 — P4 硬件流表 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）"""
     target_ip = payload.ip
 
-    # 1. P4 硬件级拉黑
     try:
         from p4_controller.add_ip import add_to_blacklist as _p4_block
-        _p4_block(target_ip, source="frontend")
+        if not _p4_block(target_ip, source="frontend", reason=payload.reason or "手动添加"):
+            return JSONResponse({"status": "error", "msg": f"拉黑 {target_ip} 失败（P4 交换机可能未连接）"}, status_code=500)
     except Exception as e:
-        logger.error(f"P4 硬件拉黑失败: {e}")
-
-    # 2. 数据库层面 — 通过 database 模块统一接口写入
-    try:
-        _db("lists_manager", "add_to_db_blacklist",
-            target_ip, "高", payload.reason or "手动添加")
-    except Exception as e:
-        logger.error(f"数据库黑名单写入失败: {e}")
+        logger.error(f"P4 硬件拉黑异常: {e}")
+        return JSONResponse({"status": "error", "msg": f"拉黑失败: {e}"}, status_code=500)
 
     return JSONResponse({"status": "success", "msg": f"已成功拉黑 {target_ip}"})
 
@@ -662,22 +656,16 @@ async def api_whitelist_get():
 
 @app.post("/api/whitelist")
 async def api_whitelist_add(payload: WhitelistAdd):
-    """加入白名单"""
+    """加入白名单 — P4 流表 + 数据库写入（由 add_ip.add_to_whitelist 统一完成）"""
     target_ip = payload.ip
 
-    # 1. P4 层面解封
     try:
         from p4_controller.add_ip import add_to_whitelist as _p4_unblock
-        _p4_unblock(target_ip, source="frontend")
+        if not _p4_unblock(target_ip, source="frontend", reason=payload.reason or "手动添加"):
+            return JSONResponse({"code": 1, "msg": f"加白 {target_ip} 失败（P4 交换机可能未连接）"}, status_code=500)
     except Exception as e:
-        logger.error(f"P4 解封失败: {e}")
-
-    # 2. 数据库层面 — 通过 database 模块统一接口写入
-    try:
-        _db("lists_manager", "add_to_db_whitelist",
-            target_ip, payload.reason or "手动添加")
-    except Exception as e:
-        logger.error(f"数据库白名单写入失败: {e}")
+        logger.error(f"P4 解封异常: {e}")
+        return JSONResponse({"code": 1, "msg": f"加白失败: {e}"}, status_code=500)
 
     return JSONResponse({"code": 0, "msg": f"已加白 {target_ip}"})
 
@@ -756,19 +744,14 @@ async def api_traffic_action(payload: TrafficAction):
             pass
 
         if target_ip:
-            # P4 硬件拉黑
+            # P4 硬件拉黑 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）
             try:
                 from p4_controller.add_ip import add_to_blacklist as _p4_block
-                _p4_block(target_ip, source="frontend")
+                ok = _p4_block(target_ip, source="frontend", reason=reason)
+                if not ok:
+                    logger.warning(f"P4 拉黑 {target_ip} 返回失败（交换机可能未连接）")
             except Exception as e:
-                logger.error(f"P4 硬件拉黑失败: {e}")
-
-            # 数据库层面
-            try:
-                _db("lists_manager", "add_to_db_blacklist",
-                    target_ip, "高", reason)
-            except Exception as e:
-                logger.error(f"数据库黑名单写入失败: {e}")
+                logger.error(f"P4 硬件拉黑异常: {e}")
 
     # 更新流量记录的拦截状态
     if item_id:

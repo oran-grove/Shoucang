@@ -23,10 +23,10 @@
     <div class="container">
         <div class="toolbar">
             <button id="insertBtn" class="layui-btn" onclick="openInsertForm()">
-                <i class="layui-icon">&#xe654;</i> 新增
+                <i class="layui-icon">&#xe654;</i> 新增黑名单
             </button>
         </div>
-        <table id="whitelistTable" lay-filter="whitelistTable"></table>
+        <table id="blacklistTable" lay-filter="blacklistTable"></table>
     </div>
 
     <script type="text/html" id="toolbar">
@@ -45,16 +45,16 @@
             layer = layui.layer;
 
             tableIns = table.render({
-                elem: '#whitelistTable',
+                elem: '#blacklistTable',
                 url: apiUrl,
                 method: 'GET',
                 cellMinWidth: 80,
                 cols: [[
                     {field: 'ip_address', title: 'IP地址', width: 150},
                     {field: 'port', title: '端口', width: 100},
-                    {field: 'trust_level', title: '信任级别', width: 110},
-                    {field: 'reason', title: '原因', width: 190},
-                    {field: 'created_at', title: '创建时间', width: 190},
+                    {field: 'threat_level', title: '威胁等级', width: 110},
+                    {field: 'attack_type', title: '攻击类型', width: 110},
+                    {field: 'reason', title: '拉黑原因', width: 190},
                     {title: '操作', width: 80, toolbar: '#toolbar', fixed: 'right'}
                 ]],
                 page: true,
@@ -72,9 +72,9 @@
                 }
             });
 
-            table.on('tool(whitelistTable)', function(obj) {
+            table.on('tool(blacklistTable)', function(obj) {
                 if (obj.event === 'delete') {
-                    layer.confirm('确定要删除这条记录吗？', {
+                    layer.confirm('确定要删除这条黑名单记录吗？', {
                         btn: ['确定', '取消']
                     }, function() {
                         fetch(apiUrl + '/' + obj.data.id, { method: 'DELETE' })
@@ -100,9 +100,9 @@
 
             layer.open({
                 type: 2,
-                title: '新增白名单',
-                content: 'table/insert_whitelist.html',
-                area: ['500px', '420px'],
+                title: '新增黑名单',
+                content: 'table/insert_blacklist.html',
+                area: ['500px', '350px'],
                 shade: 0.3
             });
         }

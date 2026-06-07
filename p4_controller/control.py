@@ -11,7 +11,7 @@ import struct
 import threading
 import pynng
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask
 
 # 🌟 剧情线 3：Thrift 直连 BMv2 交换机（替代 SSH）
 from thrift.transport import TSocket, TTransport
@@ -56,31 +56,6 @@ def report_alert_to_frontend(ip_addr, label):
         requests.post(FRONTEND_ALERT_API, json=payload, timeout=2)
     except Exception:
         _logger.debug("通知前端大屏失败 (大屏服务可能未启动)")
-
-
-# ==========================================
-# 🎬 剧情线 1：前端上帝之手 (API -> 对齐 add_ip 接口)
-# ==========================================
-@app.route('/api/blacklist', methods=['POST'])
-def handle_frontend_blacklist():
-    data = request.json
-    target_ip = data.get('ip')
-    action = data.get('action')
-
-    if not target_ip:
-        return jsonify({"status": "error", "msg": "缺少 IP 参数"}), 400
-
-    if action == 'block':
-        # 完美对齐：传入 ip 和 source="frontend" 满足权限校验
-        add_ip.add_to_blacklist(target_ip, source="frontend")
-        return jsonify({"status": "success", "msg": f"已成功物理拉黑 {target_ip}"})
-
-    elif action == 'whitelist':
-        # 完美对齐：传入 ip 和 source="frontend" 满足特权校验
-        add_ip.add_to_whitelist(target_ip, source="frontend")
-        return jsonify({"status": "success", "msg": f"已成功加白/解封 {target_ip}"})
-
-    return jsonify({"status": "error", "msg": "未知控制动作"}), 400
 
 
 # ==========================================
@@ -239,5 +214,5 @@ if __name__ == '__main__':
     # 2. 异步启动 P4 硬件探针报文监听子线程
     threading.Thread(target=p4_listener_thread, daemon=True, name="P4-Probe-Bus").start()
 
-    # 3. 启动 Flask 接收前端黑白名单控制（阻断运行）
+    # 3. 启动 Flask（P4 控制面守护进程，黑名单下发已迁移至 FastAPI :8080）
     app.run(host='0.0.0.0', port=5000, use_reloader=False)
