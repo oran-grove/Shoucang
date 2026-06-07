@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-@module: analyzer.py (内鬼监视大脑 - 精准反误杀版)
-@description: 针对纯外发拓扑，通过 60 分红线与多维动态交织，实现零误杀的前线精准阻断。
+@module: analyzer.py
+@description: 流量分析器 — 基于多维特征的异常外发检测与评分。
 """
 
 # ==========================================
-# ⚙️ 激进派安全控制阈值
+# 安全控制阈值
 # ==========================================
-BLOCK_SCORE_THRESHOLD = 60  # 红线严卡 60 分，必须多维复合中毒才会触发物理拉黑
-BURST_RATIO_CRITICAL = 5.0  # 突发脉冲敏感线
-ENTROPY_STABLE_LIMIT = 300  # 熵值死板线
-NORMAL_LOW_SPEED_BPS = 20480  # 降低保护线（20KB/s）
+BLOCK_SCORE_THRESHOLD = 60  # 阻断阈值，需多维特征同时命中才会触发拉黑
+BURST_RATIO_CRITICAL = 5.0  # 带宽突发比例阈值
+ENTROPY_STABLE_LIMIT = 300  # 熵值稳定度上限
+NORMAL_LOW_SPEED_BPS = 20480  # 低速流量基线（20KB/s）
 
 
 def evaluate(vector):
     """
-    【多维特征全联动 - 零误杀打分引擎】
-    :param vector: 严格长度为 21 的一维特征数组
+    多维特征综合评分。
+    :param vector: 长度为 21 的一维特征数组
     :return: (is_malicious: bool, label: str)
     """
     if not vector or vector[0] == "Unknown":
@@ -26,7 +26,7 @@ def evaluate(vector):
     anomaly_reasons = []
 
     # ==========================================
-    # 🗂️ 21 维特征张量契约原位提取
+    # 21 维特征提取
     # ==========================================
     src_ip = vector[0]
     dst_ip = vector[1]
@@ -58,7 +58,7 @@ def evaluate(vector):
     min_entropy = vector[18]
 
     # ==========================================
-    # ⚡ 核心进化：一票否决制 (针对极端危险情报)
+    # 一票否决：极端危险目标
     # ==========================================
     if dst_danger_level >= 9.0:
         vector[20] = 100.0
@@ -70,10 +70,10 @@ def evaluate(vector):
             return True, f"Instant_Kill:__Core_Asset_Active_Exfiltration_Attempt"
 
     # ==========================================
-    # ⚖️ 特征动态研判流（多维交叉打分）
+    # 多维交叉评分
     # ==========================================
 
-    # 1. 静态风险交叉相乘 (修正补齐了日志原因)
+    # 1. 静态风险交叉
     static_cross_risk = (src_danger_level * dst_danger_level)
     if static_cross_risk > 75.0:
         threat_score += 40
@@ -85,7 +85,7 @@ def evaluate(vector):
         threat_score += 20
         anomaly_reasons.append("Suspicious_Static_Match")
 
-    # 2. 出海抽水带宽脉冲突变 (修正补齐了日志原因)
+    # 2. 带宽突增检测
     base_global_bps = global_bps if global_bps > 0 else 1
     if instant_bps > NORMAL_LOW_SPEED_BPS:
         bps_burst_ratio = instant_bps / base_global_bps
@@ -97,7 +97,7 @@ def evaluate(vector):
             threat_score += 15
             anomaly_reasons.append("Minor_Bandwidth_Burst")
 
-    # 3. 累计外泄体积审计 (卡死 5MB 和 1MB)
+    # 3. 累计外发数据量
     if accumulated_bytes > 5242880:  # > 5MB
         threat_score += 25
         anomaly_reasons.append("High_Volume_Exfiltration")
@@ -105,7 +105,7 @@ def evaluate(vector):
         threat_score += 10
         anomaly_reasons.append("Warning_Volume_Exfiltration")
 
-    # 4. 深度载荷死板度审计
+    # 4. 载荷熵值分析
     entropy_gap = max_entropy - min_entropy
     flow_duration = last_hw_ts - initial_hw_ts
 
@@ -117,21 +117,21 @@ def evaluate(vector):
             threat_score += 25
             anomaly_reasons.append("Covert_C2_Beacon")
 
-    # 5. 敏感端口高熵数据走私 (DNS 隧道直接给 55 分)
+    # 5. 敏感端口高熵检测（DNS 隧道）
     if dst_port == 53 and avg_entropy > 2200:
         threat_score += 55
-        anomaly_reasons.append("DNS_Tunnel_走私嫌疑")
+        anomaly_reasons.append("DNS_Tunnel_Suspicious")
 
     # ==========================================
-    # 🏁 判定裁决与特征反哺
+    # 判定与特征写入
     # ==========================================
     final_score = min(threat_score, 100.0)
-    vector[20] = final_score  # 无损回哺给第 20 号槽位，大模型的最爱
+    vector[20] = final_score  # 将评分写入第 20 号槽位
 
-    # 超过 60 分，前线铁证如山，直接物理阻断
+    # 超过阈值，触发阻断
     if final_score >= BLOCK_SCORE_THRESHOLD:
         label = f"Insider_Blocked:_{','.join(anomaly_reasons)}"
         return True, label
 
-    # 纯净流量，完全无嫌疑
+    # 正常流量
     return False, "Normal_Outbound_Traffic"

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-守藏系统 — 统一 FastAPI 后端
+守藏 — 统一 FastAPI 后端
 ============================
-替代所有 PHP 脚本，提供 REST API + 前端静态文件服务。
+提供 REST API + 前端静态文件服务。
 由 main.py 一键启动。
 
 所有数据库访问通过 database 模块统一接口，不直接连接数据库。
@@ -131,7 +131,7 @@ _perf_thread = threading.Thread(target=_perf_sampler, daemon=True, name="PerfSam
 _perf_thread.start()
 
 # ---- FastAPI 应用 ----
-app = FastAPI(title="守藏系统API", version="3.0.0", docs_url=None, redoc_url=None)
+app = FastAPI(title="守藏API", version="3.0.0", docs_url=None, redoc_url=None)
 
 # CORS
 app.add_middleware(
@@ -152,7 +152,7 @@ class ConfigSaveRequest(BaseModel):
     judgment: Optional[dict] = None
     feedback: Optional[dict] = None
     backends: Optional[dict] = None
-    slow_brain: Optional[dict] = None
+    deep_analysis: Optional[dict] = None
 
 
 class BackendConfigSave(BaseModel):
@@ -276,7 +276,7 @@ async def api_init():
         {
             "homeInfo": {"title": "首页", "href": "page/welcome-1.html"},
             "logoInfo": {
-                "title": "智能反泄密平台",
+                "title": "守藏",
                 "image": "images/logo.png",
                 "href": "",
             },
@@ -760,7 +760,7 @@ async def api_traffic_action(payload: TrafficAction):
         except Exception:
             pass
 
-    # -- 写入多智能体记忆系统 (自进化 Tier 0) --
+    # -- 写入多智能体记忆系统 (自适应 Tier 0) --
     _record_to_memory_from_admin(item_id, action, reason, target_ip)
 
     return JSONResponse({"code": 0, "msg": f"操作成功: {action}"})

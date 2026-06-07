@@ -88,7 +88,7 @@ def load_lists_from_db() -> None:
         with _ip_dept_lock:
             _ip_dept_map = new_ip_dept
 
-        print(f"🔐 [数据库] 黑白名单 + IP 映射已加载: "
+        print(f"[数据库] 黑白名单 + IP 映射已加载: "
               f"黑名单 {len(_blacklist)} 条, 白名单 {len(_whitelist)} 条, "
               f"IP-员工映射 {len(_ip_dept_map)} 条")
     except Exception as e:
@@ -105,7 +105,7 @@ def reload_lists_after_change() -> None:
     在数据库黑白名单被修改后调用，刷新常驻内存副本。
     线程安全：先获取新数据，然后一次性替换。
     """
-    print("🔄 [数据库] 检测到黑白名单变更，刷新常驻内存...")
+    print("[数据库] 检测到黑白名单变更，刷新常驻内存...")
     load_lists_from_db()
 
 
@@ -180,7 +180,7 @@ def add_to_db_blacklist(ip: str,
         conn = None
 
         reload_lists_after_change()
-        print(f"💀 [数据库] 黑名单已写入: {ip} (威胁等级: {threat_level})")
+        print(f"[数据库] 黑名单已写入: {ip} (威胁等级: {threat_level})")
         return True
     except Exception as e:
         print(f"❌ [数据库] 黑名单写入失败: {e}")
@@ -219,7 +219,7 @@ def add_to_db_whitelist(ip: str,
         conn = None
 
         reload_lists_after_change()
-        print(f"🛡️  [数据库] 白名单已写入: {ip}")
+        print(f"[数据库] 白名单已写入: {ip}")
         return True
     except Exception as e:
         print(f"❌ [数据库] 白名单写入失败: {e}")
@@ -302,7 +302,7 @@ def remove_from_blacklist(item_id: int) -> bool:
         conn.close()
         conn = None
         reload_lists_after_change()
-        print(f"🗑️  [数据库] 黑名单记录 id={item_id} 已删除")
+        print(f"[数据库] 黑名单记录 id={item_id} 已删除")
         return True
     except Exception as e:
         print(f"❌ [数据库] 黑名单删除失败: {e}")
@@ -325,7 +325,7 @@ def remove_from_whitelist(item_id: int) -> bool:
         conn.close()
         conn = None
         reload_lists_after_change()
-        print(f"🗑️  [数据库] 白名单记录 id={item_id} 已删除")
+        print(f"[数据库] 白名单记录 id={item_id} 已删除")
         return True
     except Exception as e:
         print(f"❌ [数据库] 白名单删除失败: {e}")
@@ -398,7 +398,7 @@ def add_employee(number: str, ip: str, department: str, name: str) -> bool:
         conn.close()
         conn = None
         reload_lists_after_change()
-        print(f"👤 [数据库] 员工已新增: {name} ({number}) — {ip}")
+        print(f"[数据库] 员工已新增: {name} ({number}) — {ip}")
         return True
     except Exception as e:
         print(f"❌ [数据库] 新增员工失败: {e}")
@@ -425,7 +425,7 @@ def update_employee(emp_id: int, **fields) -> bool:
         conn.close()
         conn = None
         reload_lists_after_change()
-        print(f"✏️  [数据库] 员工 id={emp_id} 已更新")
+        print(f"[数据库] 员工 id={emp_id} 已更新")
         return True
     except Exception as e:
         print(f"❌ [数据库] 更新员工失败: {e}")
@@ -448,7 +448,7 @@ def delete_employee(emp_id: int) -> bool:
         conn.close()
         conn = None
         reload_lists_after_change()
-        print(f"🗑️  [数据库] 员工 id={emp_id} 已删除")
+        print(f"[数据库] 员工 id={emp_id} 已删除")
         return True
     except Exception as e:
         print(f"❌ [数据库] 删除员工失败: {e}")

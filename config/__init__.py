@@ -22,7 +22,7 @@ from .schema import (
     FeedbackAgentConfig,
     BaselineProfilingAgentConfig,
     TemporalAnomalyAgentConfig,
-    SlowBrainConfig,
+    DeepAnalysisConfig,
     KnowledgeBaseConfig,
     OrchestratorConfig,
 )
@@ -47,7 +47,7 @@ __all__ = [
     "FeedbackAgentConfig",
     "BaselineProfilingAgentConfig",
     "TemporalAnomalyAgentConfig",
-    "SlowBrainConfig",
+    "DeepAnalysisConfig",
     "KnowledgeBaseConfig",
     "OrchestratorConfig",
     # 加载器

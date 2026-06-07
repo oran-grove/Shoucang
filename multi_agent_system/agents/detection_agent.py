@@ -53,7 +53,7 @@ class DetectionAgent(BaseAgent):
             "- 若完全符合正常行为模式 → safe\n\n"
             "回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", "
             "\"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", "
-            "\"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"内部越权\"|\"正常\"|\"未知\", "
+            "\"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"未授权访问\"|\"正常\"|\"未知\", "
             "\"insider_threat_indicators\": [\"指标1\", \"指标2\"] }"
         )
         super().__init__(

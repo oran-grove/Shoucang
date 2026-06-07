@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-多智能体自进化记忆系统
+多智能体自适应记忆系统
 ======================
 
-三层记忆架构 + 三环自进化流程。
+三层记忆架构 + 三环自适应流程。
 
 快速使用:
 
@@ -86,7 +86,7 @@ __all__ = [
     "get_index",
     "format_cards_for_prompt",
 
-    # 自进化循环
+    # 自适应循环
     "run_hourly_clustering",    # Loop 2
     "run_weekly_extraction",    # Loop 3
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AGENTS.md` is the canonical source for setup, startup commands, and the 4-layer architecture diagram. Read it first. This file covers architectural details that `AGENTS.md` does not.
 
-## Multi-agent analysis pipeline (慢脑 / slow brain)
+## Multi-agent analysis pipeline (深度分析 / slow brain)
 
 The core data flow for the multi-agent system is a fixed 5-stage pipeline in `multi_agent_system/orchestrator.py:Orchestrator.analyze_flow()`:
 
@@ -63,7 +63,7 @@ The system uses a **mixed threading + asyncio** model:
 - `main.py` runs an asyncio event loop (`asyncio.run(async_main)`). All layer startup is async.
 - **Flask** (P4 controller, port 5000) runs in a daemon thread — Flask is synchronous/blocking.
 - **FastAPI** (WebUI, port 8080) runs in a daemon thread via `uvicorn`. `backend/api_server.py` uses `start_in_thread()` which runs the uvicorn server in a thread.
-- **UDP listener** (ColdTableProcessor, port 9999) runs in a daemon thread with blocking `socket.recvfrom()`.
+- **UDP listener** (FlowProcessor, port 9999) runs in a daemon thread with blocking `socket.recvfrom()`.
 - **Multi-agent system** runs async inside the main event loop. `Orchestrator` is async-first but provides `*_sync()` wrappers that handle event-loop creation for sync callers.
 - **Slow brain** background loop is an `asyncio.Task` created in the main loop.
 - Graceful shutdown uses a `threading.Event` (`shutdown_requested`) that all components check.

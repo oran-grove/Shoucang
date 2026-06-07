@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 r"""
-SQLite 记忆存储 — 自进化系统的 Tier 0 持久化层
+SQLite 记忆存储 — 自适应系统的 Tier 0 持久化层
 ================================================
 
 反馈案例库 (feedback_cases) 是多智能体系统的私有记忆，
@@ -415,7 +415,7 @@ class MemoryStore:
     # ==================== 统计概览 ====================
 
     def get_overview(self) -> dict:
-        """获取自进化系统概览（供前端面板使用）"""
+        """获取自适应系统概览（供前端面板使用）"""
         conn = self._get_conn()
         try:
             total = conn.execute("SELECT COUNT(*) FROM feedback_cases").fetchone()[0]

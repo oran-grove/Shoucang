@@ -348,7 +348,7 @@ class Orchestrator:
         if feedback_agent and self.config.feedback.enabled:
             await feedback_agent.process(verdict=final_verdict)
 
-        # ---- 阶段6: 写入记忆系统 (自进化) ----
+        # ---- 阶段6: 写入记忆系统 (自适应) ----
         self._record_to_memory(final_verdict, flow)
 
         self._publish_verdict(final_verdict, correlation_id)
@@ -611,7 +611,7 @@ class Orchestrator:
         }
 
     def _record_to_memory(self, verdict: ThreatVerdict, flow: FlowEvent) -> None:
-        """将判定结果写入记忆系统（自进化 Tier 0 案例记录）"""
+        """将判定结果写入记忆系统（自适应 Tier 0 案例记录）"""
         try:
             from .memory import get_store, get_index
             store = get_store()

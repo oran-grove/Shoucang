@@ -1,4 +1,4 @@
-# AGENTS.md — P4异构多智能体反泄密平台（守藏）
+# AGENTS.md — 守藏 — 基于P4的异构多智能体反泄密平台
 
 ## Setup
 
@@ -23,7 +23,7 @@ python main.py --no-llm                 # Skip AI agents (P4 + data-labeling + f
 python main.py --no-slow-brain          # Skip slow-brain layer only
 python main.py --no-live-scan           # Skip live-scan orchestrator
 python main.py --no-p4                  # Skip P4 controller
-python main.py --no-cold-table          # Skip UDP cold-table processor
+python main.py --no-flow-data          # Skip UDP flow-data processor
 python main.py --no-frontend            # Skip WebUI backend
 python main.py --frontend-port 3000     # Change WebUI port (default 8080)
 python main.py --update-geoip-now       # Force GeoIP DB update on startup
@@ -35,11 +35,11 @@ python main.py --update-geoip-now       # Force GeoIP DB update on startup
 |---|---|---|---|
 | Layer 1 | P4 hardware controller | **5000** (Flask) | Flask + pynng + Thrift |
 | Layer 2 | Multi-agent system (slow brain) | internal | LLM orchestration + live scan + deep analysis |
-| Layer 3 | Data labeling (cold-table) | **9999** (UDP) | ColdTableProcessor + GeoIP + MySQL batching |
+| Layer 3 | Data labeling (flow-data) | **9999** (UDP) | FlowProcessor + GeoIP + MySQL batching |
 | Layer 4 | WebUI + config management | **8080** (FastAPI) | FastAPI + LayUI (static frontend) |
 
 Supporting components (not numbered layers):
-- **ColdTableProcessor** — UDP :9999 listener, GeoIP enrichment, batch writes to MySQL
+- **FlowProcessor** — UDP :9999 listener, GeoIP enrichment, batch writes to MySQL
 - **KnowledgeBase** — in-memory rule engine (`multi_agent_system/core/knowledge.py`), thread-safe blacklist/whitelist/greylist with TTL auto-cleanup
 
 **Flask and FastAPI coexist** — not unified. Flask handles P4 control (:5000), FastAPI handles WebUI/REST (:8080).

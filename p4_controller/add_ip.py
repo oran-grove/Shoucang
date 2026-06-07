@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 @module: add_ip.py
-@description: 户籍资产与物理流表注入引擎
+@description: IP黑白名单管理与P4流表注入
               黑白名单通过 database 模块统一管理（MySQL 为唯一数据源，常驻内存共享读取）
               禁止各模块私自操作数据库或自建黑白名单库。
 """
@@ -26,17 +26,17 @@ from database import (
 )
 
 # ==========================================
-# ⚙️ 远程虚拟机网络拓扑配置 (与中央控制器完全对齐)
+# 远程虚拟机网络配置
 # ==========================================
 VM_IP = "192.168.56.101"        # VirtualBox 虚拟机网卡 IP
-VM_PORT = 22                    # 虚拟机标准 SSH 端口
+VM_PORT = 22                    # 虚拟机 SSH 端口
 VM_USER = "p4"                  # 虚拟机用户名
 VM_PASSWORD = "p4"              # 虚拟机密码
-THRIFT_PORT = "9100"            # P4 交换机监听的控制端口
+THRIFT_PORT = "9100"            # P4 交换机 Thrift 控制端口
 
 
 # ==========================================
-# SSH 连接 & P4 流表下发辅助
+# SSH 连接与 P4 流表下发
 # ==========================================
 def _ssh_exec_p4_cmd(p4_cmd: str) -> str:
     """
@@ -56,83 +56,83 @@ def _ssh_exec_p4_cmd(p4_cmd: str) -> str:
 
 
 # ==========================================
-# 💀 黑名单下发模块 (双源调用 - 远程注入版)
-#    - 数据库写入: database.add_to_db_blacklist()
-#    - P4 物理流表: SSH 注入 drop 规则
+# 黑名单下发
+#   - 数据库写入: database.add_to_db_blacklist()
+#   - P4 流表: SSH 下发 drop 规则
 # ==========================================
 def add_to_blacklist(ip: str, source: str, reason: Optional[str] = None) -> bool:
-    """远程穿透至虚拟机，注入精确匹配阻断流表"""
+    """通过SSH向P4交换机下发黑名单阻断流表，同时写入数据库"""
     if source not in ["frontend", "controller"]:
-        print(f"❌ [非法调用] 未知的拉黑来源: {source}", flush=True)
+        print(f"[错误] 未知的拉黑来源: {source}", flush=True)
         return False
 
     if is_whitelisted(ip):
-        print(f"⚠️ [行动取消] IP {ip} 拥有白名单免死金牌，{source} 拉黑请求被驳回！", flush=True)
+        print(f"[跳过] IP {ip} 在白名单中，{source} 的拉黑请求已忽略", flush=True)
         return False
 
     if is_blacklisted(ip):
         return True
 
-    print(f"💀 [封杀执行] 来源: {source} | 目标 IP: {ip} | 正在跨系统下发 P4 流表...", flush=True)
+    print(f"[黑名单] 来源: {source} | 目标 IP: {ip} | 正在下发 P4 流表...", flush=True)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
     db_reason = reason if reason else f"由{source}触发"
     if not add_to_db_blacklist(ip, threat_level="高", reason=db_reason):
-        print(f"   => ❌ 数据库黑名单写入失败，终止拉黑", flush=True)
+        print(f"   => [失败] 数据库黑名单写入失败，终止拉黑", flush=True)
         return False
 
-    # 第二步：SSH 注入 P4 物理流表
+    # 第二步：SSH 下发 P4 流表
     clean_ip = ip.split('/')[0].strip()
     p4_cmd = f'table_add MyIngress.blacklist_table drop {clean_ip} =>'
     try:
         output = _ssh_exec_p4_cmd(p4_cmd)
-        print(f"   => 🔒 P4 物理网反馈: {output}", flush=True)
+        print(f"   => [完成] P4 交换机响应: {output}", flush=True)
         return True
     except Exception as e:
-        print(f"   => ❌ P4 物理拦截下发遭遇系统性失败: {e}", flush=True)
+        print(f"   => [失败] P4 流表下发异常: {e}", flush=True)
         return False
 
 
 # ==========================================
-# 🛡️ 白名单下发模块 (单源调用 - 远程注入版)
-#    - 数据库写入: database.add_to_db_whitelist()
-#    - P4 物理流表: SSH 注入免检规则
+# 白名单下发
+#   - 数据库写入: database.add_to_db_whitelist()
+#   - P4 流表: SSH 下发白名单规则
 # ==========================================
 def add_to_whitelist(ip: str, source: str, reason: Optional[str] = None) -> bool:
-    """远程穿透至虚拟机，注入 LPM 匹配免检流表"""
+    """通过SSH向P4交换机下发白名单放行流表，同时写入数据库"""
     if source != "frontend":
-        print(f"🚨 [越权拦截] 警告！{source} 试图下发白名单！只有前端拥有此权限。", flush=True)
+        print(f"[拒绝] {source} 无权下发白名单，仅前端有此权限", flush=True)
         return False
 
     if is_whitelisted(ip):
         return True
 
-    print(f"🛡️ [特权加白] 来源: {source} | 目标 IP: {ip} | 正在开通 P4 免检通道...", flush=True)
+    print(f"[白名单] 来源: {source} | 目标 IP: {ip} | 正在下发 P4 流表...", flush=True)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
     db_reason = reason if reason else f"由{source}手动加白"
     if not add_to_db_whitelist(ip, reason=db_reason):
-        print(f"   => ❌ 数据库白名单写入失败，终止加白", flush=True)
+        print(f"   => [失败] 数据库白名单写入失败，终止加白", flush=True)
         return False
 
-    # 第二步：SSH 注入 P4 物理流表
+    # 第二步：SSH 下发 P4 流表
     target_lpm = ip if '/' in ip else f"{ip}/32"
     p4_cmd = f'table_add MyIngress.whitelist_table set_whitelisted {target_lpm} =>'
     try:
         output = _ssh_exec_p4_cmd(p4_cmd)
-        print(f"   => 🟢 P4 免检网反馈: {output}", flush=True)
+        print(f"   => [完成] P4 交换机响应: {output}", flush=True)
         return True
     except Exception as e:
-        print(f"   => ❌ P4 免检通道下发失败: {e}", flush=True)
+        print(f"   => [失败] P4 流表下发异常: {e}", flush=True)
         return False
 
 
 # ==========================================
-# 🔎 资产画像及身份标签快速查询接口
+# IP 身份标签查询
 # ==========================================
 def get_ip_label(ip: str) -> str:
     """
-    提供给数据打包器的 IP 身份查询接口。
+    IP 身份查询接口。
     查询顺序：白名单 → 黑名单 → 内网/外网判定。
     """
     if is_whitelisted(ip):

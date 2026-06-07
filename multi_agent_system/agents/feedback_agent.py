@@ -68,7 +68,7 @@ class FeedbackAgent(BaseAgent):
             "4. **TTL自适应**：根据反馈确认的威胁严重度和用户历史记录，"
             "自适应调整规则有效期\n"
             "5. **长周期模式学习**：记录管理员确认的长周期泄密案例，"
-            "提取低慢外传的模式特征，反哺给检测和关联智能体\n\n"
+            "提取低慢外传的模式特征，反馈给检测和关联智能体\n\n"
             "回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|"
             "\"adjust_confidence\"|\"adjust_threshold\"|\"update_baseline\"|\"no_change\", "
             "\"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, "

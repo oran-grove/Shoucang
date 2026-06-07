@@ -1,23 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-冷表处理器：从 UDP 9999 接收原代码发送的冷/热表 JSON，
-遍历冷表解析第六位 P4 寄存器原始数据，与热表合并后写入数据库。
+流量数据处理器：从 UDP 9999 接收流量数据 JSON，
+遍历未分析流解析第六位 P4 寄存器原始数据，与已分析流合并后写入数据库。
 内置零拷贝写入：queue.Queue → DB背景攒批线程，无JSON序列化，无内存拷贝。
 独立于原代码运行，不修改任何原有文件。
 
-合并规则（冷表 hash_idx 在热表中存在）：
-  - 五元组、资产标签：保持不变（取自热表）
-  - 历史总累计包   = 热表[8]  + 冷表.pkts
-  - 历史总累计字节 = 热表[9]  + 冷表.bytes
+合并规则（未分析流 hash_idx 在已分析流中存在）：
+  - 五元组、资产标签：保持不变（取自已分析流）
+  - 历史总累计包   = 已分析流[8]  + 未分析流.pkts
+  - 历史总累计字节 = 已分析流[9]  + 未分析流.bytes
   - 全局PPS        = 更新后总包 // 100
   - 全局BPS        = 更新后总字节 // 100
-  - 历史均熵       = (热表均熵 * 热表总包 + 冷表均熵 * 冷表总包) / 更新后总包
-  - 历史最高熵     = max(热表[17], 冷表.max_e)
-  - 历史最低熵     = min(热表[18], 冷表.min_e)
+  - 历史均熵       = (已分析流均熵 * 已分析流总包 + 未分析流均熵 * 未分析流总包) / 更新后总包
+  - 历史最高熵     = max(已分析流[17], 未分析流.max_e)
+  - 历史最低熵     = min(已分析流[18], 未分析流.min_e)
   - 删除：初始时钟[10]、上次时钟[11]、瞬时PPS[12]、瞬时BPS[14]、reason[19]、Normal[20]
 
-不在热表中：
-  - 五元组取自冷表，资产标签默认 5，其余取冷表解析值
+不在已分析流中：
+  - 五元组取自未分析流，资产标签默认 5，其余取未分析流解析值
 """
 
 import socket
@@ -45,7 +45,7 @@ GEOIP_GZ_TEMP = GEOIP_DB_PATH + ".gz"
 
 
 # ============================================================
-# 1. P4 寄存器原始数据解析（冷表第六位）
+# 1. P4 寄存器原始数据解析
 # ============================================================
 def parse_raw_p4_hex(hex_str: str) -> dict:
     """
@@ -214,7 +214,7 @@ def refresh_employee_cache() -> dict:
 
 
 # ============================================================
-# 4. 核心：遍历冷表，与热表合并（增加 GeoIP + 员工信息丰富）
+# 4. 核心：遍历未分析流，与已分析流合并（增加 GeoIP + 员工信息丰富）
 # ============================================================
 def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
               src_tag, sp_tag, dp_tag,
@@ -248,8 +248,8 @@ def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
 
 def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
     """
-    遍历冷表，解析第六位原数据，与热表合并后返回新结果表。
-    冷表和热表均只读，不做任何修改。
+    遍历未分析流，解析第六位原数据，与已分析流合并后返回新结果表。
+    未分析流和已分析流均只读，不做任何修改。
     """
     result_table = {}
 
@@ -268,7 +268,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 
         if hot is not None:
             # ============================================
-            # 情况 A：热表中存在 —— 冷热合并
+            # 情况 A：已分析流中存在 —— 流合并
             # ============================================
             new_pkts = hot[8] + cold["pkts"]
             new_bytes = hot[9] + cold["bytes"]
@@ -296,7 +296,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 
         else:
             # ============================================
-            # 情况 B：热表中不存在 —— 纯冷表数据
+            # 情况 B：已分析流中不存在 —— 纯未分析流数据
             # ============================================
             src_ip, dst_ip, sp, dp, proto = cold_entry[0:5]
 
@@ -339,7 +339,7 @@ from database.writer import start_db_writer, stop_db_writer
 # 6. UDP 接收与主循环
 # ============================================================
 class DataBridge:
-    """UDP 数据桥：接收 P4 冷/热表，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
+    """UDP 数据桥：接收流量数据，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
 
     def __init__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -361,7 +361,7 @@ class DataBridge:
         unanalyzed = payload.get("unanalyzed_data", {})
         analyzed = payload.get("analyzed_data", {})
 
-        print(f"📥 冷表 {len(unanalyzed)} 条, 热表 {len(analyzed)} 条")
+        print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
 
         with self.lock:
             result = process_tables(unanalyzed, analyzed)
@@ -386,7 +386,7 @@ class DataBridge:
         # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
         refresh_employee_cache()
 
-        print(f"🚀 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
+        print(f"[数据桥] 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
         print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
         print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
 
@@ -394,7 +394,7 @@ class DataBridge:
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(65535)
-                print(f"📡 收到来自 {addr}，{len(data)} 字节")
+                print(f"[数据桥] 收到来自 {addr}，{len(data)} 字节")
                 self.handle_payload(data)
             except socket.timeout:
                 # 每 10 分钟刷新员工缓存

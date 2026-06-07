@@ -38,7 +38,7 @@ from .schema import (
     FeedbackAgentConfig,
     BaselineProfilingAgentConfig,
     TemporalAnomalyAgentConfig,
-    SlowBrainConfig,
+    DeepAnalysisConfig,
     KnowledgeBaseConfig,
     OrchestratorConfig,
 )
@@ -229,8 +229,8 @@ def _build_temporal_anomaly_config(d: dict) -> TemporalAnomalyAgentConfig:
     )
 
 
-def _build_slow_brain_config(d: dict) -> SlowBrainConfig:
-    return SlowBrainConfig(
+def _build_deep_analysis_config(d: dict) -> DeepAnalysisConfig:
+    return DeepAnalysisConfig(
         analysis_interval_hours=d.get("analysis_interval_hours", 24),
         baseline_profiling=_build_baseline_profiling_config(
             d.get("baseline_profiling", {})
@@ -321,7 +321,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         correlation=_build_correlation_config(merged.get("correlation", {})),
         judgment=_build_judgment_config(merged.get("judgment", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
-        slow_brain=_build_slow_brain_config(merged.get("slow_brain", {})),
+        deep_analysis=_build_deep_analysis_config(merged.get("deep_analysis", {})),
         knowledge_base=_build_knowledge_base_config(merged.get("knowledge_base", {})),
         default_backends=default_backends,
         max_queue_size=merged.get("max_queue_size", 10000),
@@ -571,7 +571,7 @@ if __name__ == "__main__":
         config = load_config(user_path)
 
         print("=" * 60)
-        print("多智能体反泄密系统 — 配置加载成功")
+        print("多智能体分析系统 — 配置加载成功")
         print("=" * 60)
         print(f"\n后端:")
         for bt in BackendType:

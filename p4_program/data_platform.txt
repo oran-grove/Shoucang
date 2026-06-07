@@ -210,7 +210,7 @@ if (pkts == 0) {
             // 触发 28 字节高危报警
             meta.digest_trigger = 2; 
             
-            // 🌟【硬核染色】：将 20 位的 hash_idx 注入低位，最高字节强行染成 0xFF000000 
+            // 🌟【标记】：将 20 位的 hash_idx 注入低位，最高字节强行染成 0xFF000000 
 
             meta.msg2_cache.hash_index = ((bit<32>)hash_idx) | 0xFF000000; 
             

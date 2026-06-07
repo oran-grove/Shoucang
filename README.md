@@ -1,10 +1,10 @@
 # 守藏 — P4 异构多智能体反泄密平台
 
-基于 P4 可编程交换机的多层异构智能体联动反泄密系统。P4 硬件层毫秒级截断异常流量，多智能体系统（慢脑）异步深度分析，从实时单流研判到长周期碎片化泄密无处遁形，三层闭环反哺，一个管理面统揽全局。
+基于 P4 可编程交换机的多层异构智能体联动反泄密系统。P4 硬件层毫秒级截断异常流量，多智能体系统异步深度分析，实时单流研判与长周期深度分析结合，三层闭环反馈。
 
 ## 概览
 
-传统 DLP 方案走到头了——要么纯硬件规则匹配，漏检太高；要么纯软件旁路分析，拦截来不及。守藏把 P4 交换机搬进数据面，在交换机 ASIC 里直接把流特征抠出来，由 P4 控制器和数据标注层（快脑）做毫秒级实时处理；判不准的，沉淀到 MySQL，由多智能体系统（慢脑）跑异步深度分析，挖出那些跨天、跨周、碎片拼图式的隐蔽泄密。关键是慢脑生成的策略能直接下发 P4 流表规则，让下一次同类攻击在硬件层就被截断。
+传统 DLP 方案走到头了——要么纯硬件规则匹配，漏检太高；要么纯软件旁路分析，拦截来不及。守藏把 P4 交换机搬进数据面，在交换机 ASIC 里直接把流特征抠出来，由 P4 控制器和数据网关做毫秒级实时处理；判不准的，沉淀到 MySQL，由多智能体系统跑异步深度分析，挖出那些跨天、跨周、碎片拼图式的隐蔽泄密。关键是深度分析生成的策略能直接下发 P4 流表规则，让下一次同类攻击在硬件层就被截断。
 
 ## 系统架构
 
@@ -58,7 +58,7 @@ graph TD
         P4Switch -.->|匹配拦截规则| HardwareDrop
     end
 
-    subgraph Layer2 [多智能体系统 - 慢脑]
+    subgraph Layer2 [多智能体系统 - 深度分析]
         FastAgent(多智能体编排器):::agentBrain
         RealTimeAnalysis{检测/关联/研判管线}:::agentBrain
         LogGenerator[生成实时流量日志]:::agentBrain
@@ -71,7 +71,7 @@ graph TD
     RealTimeAnalysis -->|异常: 下发拦截规则| HardwareDrop
     RealTimeAnalysis -->|未知: 记录数据| LogGenerator
 
-    subgraph Layer3 [慢脑 - 深度分析子模块]
+    subgraph Layer3 [深度分析子模块]
         direction LR
         HistoryLog[(历史日志数据库)]:::data
         KnowledgeGraph[(安全知识图谱)]:::data
@@ -101,12 +101,12 @@ graph TD
 | 层级 | 定位 | 技术栈 | 端口 |
 |------|------|--------|------|
 | **P4 硬件层** | 数据面包转发、特征提取、硬线速拦截 | P4 (BMv2) + pynng + Thrift + Flask | 5000 |
-| **多智能体系统（慢脑）** | 检测/关联/研判/反馈流水线 + 逐条评判扫描 | 五阶段管线 + LLM 后端（OpenAI/LMStudio/DeepSeek） | —（内部） |
-| **慢脑 - 深度分析子模块** | 异步长周期分析、基线画像、策略反哺 | 基线画像 / 时序异常检测 + DeepSeek V4 | —（内部） |
+| **多智能体系统（深度分析）** | 检测/关联/研判/反馈流水线 + 逐条分析扫描 | 五阶段管线 + LLM 后端（OpenAI/LMStudio/DeepSeek） | —（内部） |
+| **深度分析子模块** | 异步长周期分析、基线画像、策略反馈 | 基线画像 / 时序异常检测 + DeepSeek V4 | —（内部） |
 | **统一管理面** | Web 仪表盘、策略配置、告警处置、日志审计 | FastAPI + LayUI 纯静态前端 | 8080 |
-| **数据标注** | UDP 冷热表接收、GeoIP 富化、攒批入 MySQL | UDP socket + queue.Queue + PyMySQL | 9999 |
+| **数据网关** | UDP 流量数据接收、GeoIP 富化、攒批入 MySQL | UDP socket + queue.Queue + PyMySQL | 9999 |
 
-跨层闭环：慢脑深度分析子模块的策略输出可以直接向 P4 交换机下发流表规则，也可以反哺检测阈值。管理面的人工处置（拉黑/加白）通过 Flask API 注入 P4 硬件层。
+跨层闭环：深度分析子模块的策略输出可以直接向 P4 交换机下发流表规则，也可以反馈给检测阈值。管理面的人工处置（拉黑/加白）通过 FastAPI 后端注入 P4 硬件层。
 
 ## 快速开始
 
@@ -132,11 +132,11 @@ python main.py
 | 参数 | 作用 |
 |------|------|
 | `python main.py` | 全量启动（四层 + 前端） |
-| `--no-llm` | 禁用所有 LLM 智能体，仅保留 P4 + 数据标注 + 前端 |
+| `--no-llm` | 禁用所有 LLM 智能体，仅保留 P4 + 数据网关 + 前端 |
 | `--no-slow-brain` | 仅禁用深度分析子模块（基线画像+时序异常） |
-| `--no-live-scan` | 禁用逐条评判队列扫描 |
+| `--no-live-scan` | 禁用逐条分析队列扫描 |
 | `--no-p4` | 禁用 P4 控制器 |
-| `--no-cold-table` | 禁用 UDP 冷表处理器 |
+| `--no-data-gateway` | 禁用数据网关 (UDP :9999 + MySQL 写入) |
 | `--no-frontend` | 禁用 Web 前端 |
 | `--frontend-port 3000` | 指定前端端口（默认 8080） |
 | `--dry-run` | 打印启动配置，不实际运行 |
@@ -189,10 +189,10 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 │   ├── loader.py              #   加载/合并/校验/保存
 │   └── shared_config.py       #   数据库连接、路径等常量
 ├── p4_controller/             # P4 硬件控制面
-│   ├── control.py             #   Flask API + pynng 探针 + Thrift 遥测
+│   ├── control.py             #   Flask 守护进程 + pynng 监听 + Thrift 遥测
 │   ├── add_ip.py              #   黑白名单操作的统一入口
-│   ├── analyzer.py            #   数据包分析判官
-│   └── data_packer.py         #   数据打包底座
+│   ├── analyzer.py            #   流量分析器
+│   └── data_packer.py         #   数据包处理（特征向量构建）
 ├── multi_agent_system/        # 多智能体系统
 │   ├── __init__.py            #   MultiAgentSystem 主类
 │   ├── orchestrator.py        #   编排器（流水线调度）
@@ -207,7 +207,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 │   ├── lists_manager.py       #   黑白名单 / IP 映射缓存
 │   └── create_database.sql    #   建库 DDL
 ├── data_gateway/              # 数据网关 (UDP 接收 + GeoIP + DB 写入)
-│   └── cold_table_processor.py  # 冷热表合并 + GeoIP 富化
+│   └── data_bridge.py         #   流量数据合并 + GeoIP 富化
 ├── p4_program/                # P4 交换机程序源码（独立编译）
 │   └── data_platform.txt
 ├── frontend/                  # 纯静态前端（LayUI）

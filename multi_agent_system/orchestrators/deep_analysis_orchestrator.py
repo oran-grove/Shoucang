@@ -1,7 +1,7 @@
 """
-慢脑深度分析编排器
+深度分析编排器
 ==================
-协调慢脑深度分析子模块的三个核心智能体：
+协调深度分析子模块的三个核心智能体：
 1. BaselineProfilingAgent — 行为基线画像
 2. TemporalAnomalyAgent — 时序异常检测
 3. 关联智能体+研判智能体 — 深度分析
@@ -9,7 +9,7 @@
 负责：
 - 定期批量分析历史日志
 - 生成长周期威胁报告
-- 反哺给检测管线（策略/基线更新）
+- 反馈给检测管线（策略/基线更新）
 - 推送告警到WebUI
 """
 
@@ -29,9 +29,9 @@ from ..core.message import (
 logger = logging.getLogger(__name__)
 
 
-class SlowBrainOrchestrator:
+class DeepAnalysisOrchestrator:
     """
-    慢脑深度分析编排器 — 负责长周期异步深度分析。
+    深度分析编排器 — 负责长周期异步深度分析。
 
     工作流程：
     1. 从历史日志数据库拉取用户/部门的长期流量记录
@@ -132,7 +132,7 @@ class SlowBrainOrchestrator:
                     verdict=TrafficVerdict.SUSPICIOUS,
                     severity=SeverityLevel.MEDIUM,
                     confidence=0.6,
-                    threat_type="慢脑综合分析",
+                    threat_type="深度综合分析",
                     reasoning="\n".join(combined_prompt_lines),
                     recommended_action="monitor",
                 )
@@ -143,7 +143,7 @@ class SlowBrainOrchestrator:
                 if final_judgment.verdict != TrafficVerdict.SAFE:
                     alerts.append(final_judgment)
             except Exception as e:
-                logger.error("[SlowBrain] 研判失败: %s", e)
+                logger.error("[DeepAnalysis] 研判失败: %s", e)
 
         return alerts
 
@@ -169,7 +169,7 @@ class SlowBrainOrchestrator:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error("[SlowBrain] 分析实体失败: %s", result)
+                logger.error("[DeepAnalysis] 分析实体失败: %s", result)
             elif isinstance(result, list):
                 all_alerts.extend(result)
 
@@ -198,4 +198,4 @@ class SlowBrainOrchestrator:
         }
 
 
-__all__ = ["SlowBrainOrchestrator"]
+__all__ = ["DeepAnalysisOrchestrator"]

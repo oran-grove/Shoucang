@@ -1,5 +1,5 @@
 """
-多智能体反泄密系统 — 主程序调用示例
+多智能体分析系统 — 主程序调用示例
 ======================================
 演示 MultiAgentSystem 的完整使用流程，包括：
 - 创建系统并配置后端
@@ -388,7 +388,7 @@ async def deepseek_example():
 async def async_example():
     """异步使用示例"""
     print("=" * 60)
-    print("多智能体反泄密系统 — 异步示例")
+    print("多智能体分析系统 — 异步示例")
     print("=" * 60)
 
     # 1. 创建系统 — 使用 DeepSeek API 配置
@@ -496,7 +496,7 @@ def sync_example():
     import asyncio
 
     print("=" * 60)
-    print("多智能体反泄密系统 — 同步示例")
+    print("多智能体分析系统 — 同步示例")
     print("=" * 60)
 
     # 检测是否在已有事件循环中运行
@@ -516,17 +516,17 @@ def sync_example():
 # 深度分析演示 — 基线画像 + 时序异常检测（配置来自 config_user.json）
 # ============================================================
 
-async def slow_brain_example():
+async def deep_analysis_example():
     """
-    演示慢脑深度分析子模块的完整工作流程：
+    演示深度分析子模块的完整工作流程：
     1. BaselineProfilingAgent — 构建/更新用户行为基线
     2. TemporalAnomalyAgent — 检测90天窗口内的时序异常
-    3. SlowBrainOrchestrator — 协调分析流程并生成告警
+    3. DeepAnalysisOrchestrator — 协调分析流程并生成告警
 
     演示目的：
         - 展示基线画像智能体如何从历史日志中提取正常行为模式
         - 展示时序异常智能体如何发现"每3天凌晨2点低频泄密"
-        - 展示慢脑编排器如何将基线偏离和时序异常合并研判
+        - 展示深度分析编排器如何将基线偏离和时序异常合并研判
 
     所有智能体的提示词、模型名、后端参数均从 config_user.json 读取，
     代码中不再硬编码任何配置。
@@ -534,7 +534,7 @@ async def slow_brain_example():
     from multi_agent_system.agents.baseline_profiling_agent import BaselineProfilingAgent
     from multi_agent_system.agents.temporal_anomaly_agent import TemporalAnomalyAgent
     from multi_agent_system.agents.judgment_agent import JudgmentAgent
-    from multi_agent_system.orchestrators.slow_brain_orchestrator import SlowBrainOrchestrator
+    from multi_agent_system.orchestrators.deep_analysis_orchestrator import DeepAnalysisOrchestrator
     from multi_agent_system.backends import (
         LMStudioBackend,
         OpenAIBackend,
@@ -568,10 +568,10 @@ async def slow_brain_example():
     # 步骤 2: 从 config_user.json 加载配置，创建智能体实例
     # ============================================================
     print("\n🔧 步骤 2: 从配置文件加载深度分析子模块智能体配置...")
-    _slow_cfg = load_config("config_user.json")
+    _deep_cfg = load_config("config_user.json")
 
-    # 基线画像智能体 — 配置来自 slow_brain.baseline_profiling
-    _bcfg = _slow_cfg.slow_brain.baseline_profiling
+    # 基线画像智能体 — 配置来自 deep_analysis.baseline_profiling
+    _bcfg = _deep_cfg.deep_analysis.baseline_profiling
     baseline_agent = BaselineProfilingAgent(
         name="BaselineProfilingAgent",
         system_prompt=_bcfg.system_prompt,
@@ -579,8 +579,8 @@ async def slow_brain_example():
         temperature=_bcfg.temperature,
         max_tokens=_bcfg.max_tokens,
     )
-    # 时序异常智能体 — 配置来自 slow_brain.temporal_anomaly
-    _tcfg = _slow_cfg.slow_brain.temporal_anomaly
+    # 时序异常智能体 — 配置来自 deep_analysis.temporal_anomaly
+    _tcfg = _deep_cfg.deep_analysis.temporal_anomaly
     temporal_agent = TemporalAnomalyAgent(
         name="TemporalAnomalyAgent",
         system_prompt=_tcfg.system_prompt,
@@ -589,7 +589,7 @@ async def slow_brain_example():
         max_tokens=_tcfg.max_tokens,
     )
     # 研判智能体 — 配置来自 judgment（与多智能体系统共用提示词）
-    _jcfg = _slow_cfg.judgment
+    _jcfg = _deep_cfg.judgment
     judgment_agent = JudgmentAgent(
         name="SlowJudgmentAgent",
         system_prompt=_jcfg.system_prompt,
@@ -605,9 +605,9 @@ async def slow_brain_example():
     print("   尝试连接后端...")
     backend_available = True
     try:
-        _lm_cfg = _slow_cfg.default_backends[BackendType.LMSTUDIO]
-        _ds_cfg = _slow_cfg.default_backends[BackendType.DEEPSEEK]
-        _oa_cfg = _slow_cfg.default_backends[BackendType.OPENAI]
+        _lm_cfg = _deep_cfg.default_backends[BackendType.LMSTUDIO]
+        _ds_cfg = _deep_cfg.default_backends[BackendType.DEEPSEEK]
+        _oa_cfg = _deep_cfg.default_backends[BackendType.OPENAI]
 
         # 基线智能体用 LM Studio
         lm_backend = LMStudioBackend(
@@ -670,13 +670,13 @@ async def slow_brain_example():
         backend_available = False
 
     # 创建深度分析编排器
-    slow_brain = SlowBrainOrchestrator(
+    deep_analysis = DeepAnalysisOrchestrator(
         baseline_agent=baseline_agent,
         temporal_agent=temporal_agent,
         judgment_agent=judgment_agent,
-        analysis_interval_hours=_slow_cfg.slow_brain.analysis_interval_hours,
+        analysis_interval_hours=_deep_cfg.deep_analysis.analysis_interval_hours,
     )
-    print("   ✅ SlowBrainOrchestrator 初始化完成")
+    print("   ✅ DeepAnalysisOrchestrator 初始化完成")
 
     # ============================================================
     # 步骤 3: 执行基线画像（纯统计，不需要 LLM）
@@ -684,7 +684,7 @@ async def slow_brain_example():
     print("\n📈 步骤 3: 构建用户行为基线...")
     baseline = None
     try:
-        baseline = slow_brain.baseline_agent.build_or_update_baseline(
+        baseline = deep_analysis.baseline_agent.build_or_update_baseline(
             entity_id="user_zhangsan",
             entity_type="user",
             historical_flows=baseline_flows,
@@ -706,7 +706,7 @@ async def slow_brain_example():
     print("   分析窗口: 后30天")
     print("   检测目标: 周期性低频传输 / 渐进递增 / 信标心跳 / 非工作时段活动")
     try:
-        temporal_result = await slow_brain.temporal_agent.analyze(
+        temporal_result = await deep_analysis.temporal_agent.analyze(
             entity_id="user_zhangsan",
             historical_flows=recent_flows,
             window_days=30,
@@ -732,7 +732,7 @@ async def slow_brain_example():
     try:
         deviation_count = 0
         for flow in recent_flows[:50]:  # 采样分析
-            dev_result = slow_brain.baseline_agent.evaluate_flow(flow, baseline)
+            dev_result = deep_analysis.baseline_agent.evaluate_flow(flow, baseline)
             if dev_result.verdict == TrafficVerdict.SUSPICIOUS:
                 deviation_count += 1
         print(f"   偏离事件数 (采样50条): {deviation_count}")
@@ -741,7 +741,7 @@ async def slow_brain_example():
             print("   ⚠ 存在基线偏离 — 正常办公时间外的异常流量模式")
 
         # 基线变化分析
-        shift_result = await slow_brain.baseline_agent.analyze_baseline_shift(
+        shift_result = await deep_analysis.baseline_agent.analyze_baseline_shift(
             "user_zhangsan", recent_flows[:100]
         )
         print(f"   基线偏移判定: {shift_result.verdict.value}")
@@ -752,12 +752,12 @@ async def slow_brain_example():
     # ============================================================
     # 步骤 6: 深度分析编排器批量分析
     # ============================================================
-    print("\n🧠 步骤 6: SlowBrainOrchestrator 综合研判...")
+    print("\n🧠 步骤 6: DeepAnalysisOrchestrator 综合研判...")
     print("   协调基线+时序结果 → 综合判定")
     try:
         entity_flows = {"user_zhangsan": ("user", baseline_flows)}
         recent_map = {"user_zhangsan": recent_flows}
-        alerts = await slow_brain.batch_analyze(entity_flows, recent_map)
+        alerts = await deep_analysis.batch_analyze(entity_flows, recent_map)
         print(f"   生成告警数: {len(alerts)}")
         for i, alert in enumerate(alerts):
             print(f"\n   --- 告警 #{i+1} ---")
@@ -768,11 +768,11 @@ async def slow_brain_example():
                 print(f"   理由: {alert.reasoning[:250]}")
 
         # 获取高严重度告警
-        high_alerts = slow_brain.get_recent_alerts(severity_min=SeverityLevel.MEDIUM)
+        high_alerts = deep_analysis.get_recent_alerts(severity_min=SeverityLevel.MEDIUM)
         print(f"\n   📊 中高危告警数: {len(high_alerts)}")
 
         # 获取统计
-        stats = slow_brain.get_statistics()
+        stats = deep_analysis.get_statistics()
         print(f"\n   📊 深度分析子模块统计:")
         for k, v in stats.items():
             print(f"      {k}: {v}")
@@ -855,8 +855,8 @@ async def json_config_example():
     print("      是否在 reply 中附加模型的思考过程")
 
     # ---- 方式 6：深度分析子模块配置说明 ----
-    print("\n📋 深度分析子模块 (SlowBrain) 配置结构说明:")
-    print("  OrchestratorConfig.slow_brain 包含:")
+    print("\n📋 深度分析子模块 (DeepAnalysis) 配置结构说明:")
+    print("  OrchestratorConfig.deep_analysis 包含:")
     print("    - analysis_interval_hours: 分析周期（默认24h）")
     print("    - baseline_profiling: BaselineProfilingAgentConfig")
     print("        backend: LMSTUDIO (建议本地模型，低成本高频调用)")
@@ -928,11 +928,11 @@ def integration_example_pseudocode():
                 print(f"[定时同步] 已同步 {len(rules)} 条规则到 P4")
 
         # ====== 深度分析定时任务（每24小时） ======
-        async def periodic_slow_brain_analysis():
+        async def periodic_deep_analysis():
             while True:
                 await asyncio.sleep(86400)  # 24h
-                history = db.query_flows_since(slow_brain._last_analysis_time)
-                alerts = await slow_brain.batch_analyze(history)
+                history = db.query_flows_since(deep_analysis._last_analysis_time)
+                alerts = await deep_analysis.batch_analyze(history)
                 for alert in alerts:
                     if alert.severity >= SeverityLevel.HIGH:
                         # 推送到 WebUI
@@ -985,7 +985,7 @@ if __name__ == "__main__":
         elif choice == "5":
             await json_config_example()
         elif choice == "6":
-            await slow_brain_example()
+            await deep_analysis_example()
         elif choice == "7":
             print("\n" + "█" * 60)
             print("  [1/6] JSON 配置文件加载演示")
@@ -1031,7 +1031,7 @@ if __name__ == "__main__":
             print("  [6/6] 深度分析子模块演示（基线画像+时序异常）")
             print("█" * 60)
             try:
-                await slow_brain_example()
+                await deep_analysis_example()
             except Exception as e:
                 print(f"⚠ 深度分析子模块演示跳过: {e}")
         else:

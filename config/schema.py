@@ -195,8 +195,8 @@ class TemporalAnomalyAgentConfig:
 
 
 @dataclass
-class SlowBrainConfig:
-    """慢脑层总配置"""
+class DeepAnalysisConfig:
+    """深度分析层配置"""
     analysis_interval_hours: int = 24
     baseline_profiling: BaselineProfilingAgentConfig = field(default_factory=BaselineProfilingAgentConfig)
     temporal_anomaly: TemporalAnomalyAgentConfig = field(default_factory=TemporalAnomalyAgentConfig)
@@ -240,7 +240,7 @@ class OrchestratorConfig:
     correlation: CorrelationAgentConfig = field(default_factory=CorrelationAgentConfig)
     judgment: JudgmentAgentConfig = field(default_factory=JudgmentAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
-    slow_brain: SlowBrainConfig = field(default_factory=SlowBrainConfig)
+    deep_analysis: DeepAnalysisConfig = field(default_factory=DeepAnalysisConfig)
     knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
     live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
     retrospective_scan: RetrospectiveScanAgentConfig = field(default_factory=RetrospectiveScanAgentConfig)
