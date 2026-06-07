@@ -4,10 +4,13 @@ import socket
 import json
 
 try:
-    from add_ip import get_ip_label
+    from .add_ip import get_ip_label  # 包内导入
 except ImportError:
-    def get_ip_label(ip):
-        return "Unknown_Label"
+    try:
+        from add_ip import get_ip_label  # 独立运行
+    except ImportError:
+        def get_ip_label(ip: str) -> str:
+            return "Unknown_Label"
 
 TARGET_IP = "127.0.0.1"
 TARGET_PORT = 9999
@@ -140,10 +143,10 @@ def build_feature_vector(chunk):
         vector = ["Unknown"] * 8 + [0, 0, current_ts, current_ts, 0, 0, 0, 0, 0.0, 0, 9999, reason, "Normal"]
 
     # 3. 累加统计
-    old_pkts = vector[8]
-    old_bytes = vector[9]
-    initial_ts = vector[10]
-    last_ts = vector[11]
+    old_pkts = int(vector[8])
+    old_bytes = int(vector[9])
+    initial_ts = int(vector[10])
+    last_ts = int(vector[11])
 
     new_pkts = old_pkts + pkts
     new_bytes = old_bytes + bytes_len
