@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude
+.claude/
+
+# Logs & runtime
+*.log
+crash.txt
+
+# Data files
+blacklist.txt
+whitelist.txt
+
+# GeoIP
+*.mmdb
+*.mmdb.gz
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
