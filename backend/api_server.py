@@ -60,7 +60,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 # ---- 统一配置加载（通过 config 模块）----
 from config.loader import (
     load_config_dict,
-    load_default_config_dict,
     save_config_dict,
 )
 
@@ -210,10 +209,6 @@ class BlacklistItem(BaseModel):
 # ============================================================================
 def _read_config_user() -> dict:
     return load_config_dict()
-
-
-def _read_config_default() -> dict:
-    return load_default_config_dict()
 
 
 def _save_config_user(config: dict):
@@ -434,9 +429,8 @@ async def api_config_backend_test(payload: BackendTestRequest):
 
 @app.post("/api/config/reset")
 async def api_config_reset():
-    """重置为默认配置"""
-    default = _read_config_default()
-    _save_config_user(default)
+    """重置为默认配置 — 清空用户覆盖，config_user.json 写入空对象"""
+    _save_config_user({})
     return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
 
 

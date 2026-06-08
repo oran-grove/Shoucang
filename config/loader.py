@@ -523,13 +523,42 @@ def load_default_config_dict() -> dict:
     return json.loads(_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def _compute_delta(default: dict, current: dict) -> dict:
+    """
+    递归比较 current 与 default，只返回与默认值不同的键。
+
+    规则：
+      - 若 current[key] 与 default[key] 值相同 → 不纳入 delta
+      - 若两者都是 dict → 递归比较，子 dict 为空则省略父 key
+      - 若 key 仅在 current 中存在 → 纳入 delta
+      - 以 _ 开头的 key（元数据/注释）始终跳过
+    """
+    delta: dict = {}
+    for key, value in current.items():
+        if key.startswith("_"):
+            continue
+        if key not in default:
+            delta[key] = deepcopy(value)
+        elif isinstance(value, dict) and isinstance(default[key], dict):
+            sub_delta = _compute_delta(default[key], value)
+            if sub_delta:
+                delta[key] = sub_delta
+        elif value != default[key]:
+            delta[key] = deepcopy(value)
+    return delta
+
+
 def save_config_dict(config: dict) -> None:
     """
-    将配置字典写入 config_user.json。
-    供前端配置保存等场景使用。
+    将配置字典的增量部分写入 config_user.json。
+
+    只存储与 config_default.json 不同的字段。
+    这样 config_user.json 保持精简，仅包含用户实际修改过的内容。
     """
+    default = json.loads(_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    delta = _compute_delta(default, config)
     USER_CONFIG_PATH.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2),
+        json.dumps(delta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
