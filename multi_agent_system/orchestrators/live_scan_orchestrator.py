@@ -33,6 +33,7 @@
 import asyncio
 import json
 import logging
+import queue
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,10 +73,12 @@ class LiveScanOrchestrator:
         orchestrator,  # Orchestrator 实例
         config,  # LiveScanAgentConfig
         db_config: Optional[DbConfig] = None,
+        verdict_queue: Optional[queue.Queue] = None,
     ):
         self._orchestrator = orchestrator
         self._config = config
         self._db_config: DbConfig = db_config or DB_CONFIG
+        self._verdict_queue: Optional[queue.Queue] = verdict_queue
 
         self._running = False
         self._scan_task: Optional[asyncio.Task] = None
@@ -177,7 +180,7 @@ class LiveScanOrchestrator:
     def _fetch_unanalyzed_batch(self) -> list[dict]:
         """
         从 traffic_log 表中拉取一批未分析的记录。
-        游标基于 id > _last_processed_id，按 id 升序。
+        优先使用 ai_analyzed 标记，游标 id 为辅。
         """
         conn = None
         try:
@@ -185,7 +188,8 @@ class LiveScanOrchestrator:
             with conn.cursor(pymysql.cursors.DictCursor) as cursor:
                 sql = (
                     "SELECT * FROM traffic_log "
-                    "WHERE id > %s "
+                    "WHERE (ai_analyzed IS NULL OR ai_analyzed = 0) "
+                    "AND id > %s "
                     "ORDER BY id ASC "
                     "LIMIT %s"
                 )
@@ -226,6 +230,9 @@ class LiveScanOrchestrator:
                     "[LiveScan] id=%s src=%s → %s (置信度=%.2f)",
                     row_id, row.get("src_ip", "?"), verdict, result.confidence,
                 )
+
+                # 判定结果入队 → 数据库批量写入
+                self._enqueue_verdict(row_id, verdict)
             else:
                 self._stats["total_safe"] += 1
 
@@ -238,6 +245,22 @@ class LiveScanOrchestrator:
             if row_id > self._last_processed_id:
                 self._last_processed_id = row_id
             self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
+
+    def _enqueue_verdict(self, row_id: int, verdict: str) -> None:
+        """将判定结果放入队列，供 verdict_writer 批量 UPDATE 数据库。"""
+        if self._verdict_queue is None:
+            return
+        verdict_map = {"safe": 0, "suspicious": 1, "malicious": 2}
+        ai_verdict = verdict_map.get(verdict)
+        if ai_verdict is None:
+            return
+        try:
+            self._verdict_queue.put_nowait({
+                "traffic_id": row_id,
+                "ai_verdict": ai_verdict,
+            })
+        except queue.Full:
+            pass  # 队列满时丢弃，避免阻塞扫描管线
 
     # ==================== 断点持久化 ====================
 

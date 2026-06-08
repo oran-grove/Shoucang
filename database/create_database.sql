@@ -63,6 +63,8 @@ CREATE TABLE traffic_log (
     country VARCHAR(50) DEFAULT NULL COMMENT '国家',
     employee VARCHAR(50) DEFAULT NULL COMMENT '员工',
     hash_idx VARCHAR(100) DEFAULT NULL COMMENT '哈希索引',
+    ai_analyzed TINYINT DEFAULT 0 COMMENT 'AI是否已分析(0未分析/1已分析)',
+    ai_verdict TINYINT DEFAULT NULL COMMENT 'AI判定(0安全/1可疑/2危险)',
     
     INDEX idx_src_ip (src_ip),
     INDEX idx_dst_ip (dst_ip),
