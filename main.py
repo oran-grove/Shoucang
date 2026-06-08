@@ -111,6 +111,8 @@ _global_state = {
     "p4_controller_ready": threading.Event(),
     "shutdown_requested": threading.Event(),
     "live_scanner": None,
+    "verdict_write_queue": None,
+    "verdict_stop_event": None,
     "backend_server": None,
     "backend_thread": None,
     "backend_port": 8080,
@@ -308,13 +310,26 @@ async def start_multi_agent_system(
                 from backend.api_server import push_alert
 
                 src_ip = flow.src_ip if flow else ""
-                bt_depth = verdict.extra.get("backtrack_depth", 0) if verdict.extra else 0
+                lookback_hours = (
+                    verdict.extra.get("lookback_window_hours", 0)
+                    if verdict.extra else 0
+                )
                 label_parts = [
                     f"[L3-研判] {verdict.threat_type}",
                     f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%}",
                 ]
-                if bt_depth > 0:
-                    label_parts[-1] += f", 回溯{bt_depth}次"
+                if lookback_hours > 0:
+                    if lookback_hours < 1:
+                        win_label = f"{int(lookback_hours * 60)}m"
+                    elif lookback_hours < 24:
+                        win_label = f"{lookback_hours:.0f}h"
+                    elif lookback_hours % 24 == 0:
+                        win_label = f"{int(lookback_hours // 24)}d"
+                    else:
+                        d = int(lookback_hours // 24)
+                        h = int(lookback_hours % 24)
+                        win_label = f"{d}d{h}h"
+                    label_parts[-1] += f", 回溯窗口{win_label}"
                 label_parts[-1] += ")"
 
                 push_alert(
@@ -329,7 +344,7 @@ async def start_multi_agent_system(
                         "src_ip": src_ip,
                         "dst_ip": flow.dst_ip if flow else "",
                         "recommended_action": verdict.recommended_action,
-                        "backtrack_depth": bt_depth,
+                        "lookback_window_hours": lookback_hours,
                     },
                 )
                 _logger.debug(
@@ -350,6 +365,7 @@ async def start_multi_agent_system(
             live_scanner = LiveScanOrchestrator(
                 orchestrator=system._orchestrator,
                 config=config.live_scan,
+                verdict_queue=_global_state.get("verdict_write_queue"),
             )
             _global_state["live_scanner"] = live_scanner
 
@@ -572,6 +588,13 @@ async def async_main(args: argparse.Namespace):
     except Exception as e:
         _logger.warning(_yellow(f"[数据库] 黑白名单初始化失败 (非致命): {e}"))
 
+    # ---- 启动判定结果批量写入器 ----
+    from database.verdict_writer import start_verdict_writer, stop_verdict_writer as _stop_vw
+    _vq, _ve = start_verdict_writer()
+    _global_state["verdict_write_queue"] = _vq
+    _global_state["verdict_stop_event"] = _ve
+    _logger.info(_green("[数据库] 判定批量写入器已启动 [OK]"))
+
     # ---- 启动顺序 ----
 
     # 1. FastAPI 统一后端（最先启动，前端 + REST API）
@@ -679,6 +702,13 @@ async def async_main(args: argparse.Namespace):
 
     # 2. 停止多智能体系统
     await stop_multi_agent_system()
+
+    # 2.5 停止判定批量写入器（在多智能体之后、数据网关之前）
+    _ve = _global_state.get("verdict_stop_event")
+    if _ve is not None:
+        from database.verdict_writer import stop_verdict_writer as _stop_vw
+        _stop_vw(_ve)
+        _logger.info(_green("[数据库] 判定批量写入器已停止"))
 
     # 3. 停止数据网关
     stop_data_gateway()

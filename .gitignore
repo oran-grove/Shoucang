@@ -1,33 +1,58 @@
+# ============================================================
 # Python
+# ============================================================
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.egg-info/
 dist/
 build/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Claude
-.claude/
-
-# Logs & runtime
+.venv/
 *.log
-crash.txt
 
-# Data files
-blacklist.txt
-whitelist.txt
+# ============================================================
+# Testing & coverage
+# ============================================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
 
-# GeoIP
-*.mmdb
-*.mmdb.gz
+# ============================================================
+# GeoIP — auto-downloaded binary, do not commit
+# ============================================================
+data_gateway/GeoLite2-City.mmdb
+data_gateway/GeoLite2-City.mmdb.gz
 
+# ============================================================
+# Memory module — runtime artifacts
+# ============================================================
+multi_agent_system/memory/data/feedback.db
+multi_agent_system/memory/data/patterns/active/*.json
+multi_agent_system/memory/data/patterns/shadow/*.json
+multi_agent_system/memory/data/patterns/retired/*.json
+multi_agent_system/memory/data/principles_candidate.json
+multi_agent_system/memory/data/changelog.jsonl
+multi_agent_system/memory/data/snapshots/*.json
+
+# ============================================================
+# Config — contains API keys, must NOT be committed
+# ============================================================
+config/config_user.json
+
+# ============================================================
+# Live scan checkpoint
+# ============================================================
+.live_scan_checkpoint.json
+
+# ============================================================
+# IDE
+# ============================================================
+.vscode/
+.idea/
+
+# ============================================================
 # OS
-Thumbs.db
+# ============================================================
 .DS_Store
-Desktop.ini
+Thumbs.db

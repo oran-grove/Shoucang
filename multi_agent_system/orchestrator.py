@@ -34,6 +34,19 @@ from .agents.feedback_agent import FeedbackAgent, AdminFeedback
 logger = logging.getLogger(__name__)
 
 
+def _fmt_window(hours: float) -> str:
+    """格式化回溯窗口为人类可读字符串 (e.g. 0.5→30m, 24→1d, 168→7d)"""
+    if hours < 1:
+        return f"{int(hours * 60)}m"
+    if hours < 24:
+        return f"{hours:.0f}h"
+    if hours % 24 == 0:
+        return f"{hours // 24:.0f}d"
+    d = int(hours // 24)
+    h = int(hours % 24)
+    return f"{d}d{h}h"
+
+
 class Orchestrator:
     """
     多智能体编排器。
@@ -285,19 +298,17 @@ class Orchestrator:
 
         # ========== Layer 2 ⇄ Layer 3 循环 ==========
         backtrack_cfg = self.config.backtrack
-        max_backtrack = backtrack_cfg.max_backtrack_count
-        lookback_hours = backtrack_cfg.initial_lookback_hours
-        multipler = backtrack_cfg.lookback_multiplier
-
-        backtrack_depth = 0
+        lookback_windows = list(backtrack_cfg.lookback_windows)
+        total_windows = len(lookback_windows)
         all_related_records: list[dict] = []
+        seen_record_ids: set = set()  # 已见过的记录ID，用于判定本轮是否有新增数据
         final_adjudication: Optional[ThreatVerdict] = None
 
-        while backtrack_depth < max_backtrack:
-            backtrack_depth += 1
+        for win_idx, lookback_hours in enumerate(lookback_windows):
+            window_label = _fmt_window(lookback_hours)
             logger.info(
-                "[%s] L2-回溯 第%d/%d次 窗口=%dh",
-                pipeline_id, backtrack_depth, max_backtrack, lookback_hours,
+                "[%s] L2-回溯 第%d/%d轮 窗口=%s",
+                pipeline_id, win_idx + 1, total_windows, window_label,
             )
 
             # ---- Layer 2: 历史回溯 ----
@@ -307,33 +318,61 @@ class Orchestrator:
                 max_records=backtrack_cfg.max_similar_records,
             )
 
+            new_matched: list[dict] = []
             if not similar_records:
-                logger.info("[%s] L2 未找到相似历史记录", pipeline_id)
+                logger.info("[%s] L2 窗口=%s 内未找到相似记录", pipeline_id, window_label)
             else:
                 backtrack_agent = cast(BacktrackAgent, self._agents["backtrack"])
-                backtrack_result = await backtrack_agent.process(flow, similar_records)
-
-                matched = backtrack_result.get("matched_records", [])
-                logger.info(
-                    "[%s] L2-回溯结果: 总相似=%d → 高关联=%d (阈值=%.2f)",
-                    pipeline_id, len(similar_records), len(matched),
-                    backtrack_cfg.relevance_threshold,
+                backtrack_result = await backtrack_agent.process(
+                    flow, similar_records, lookback_window_hours=lookback_hours,
                 )
 
+                matched = backtrack_result.get("matched_records", [])
+                new_matched = [m for m in matched if m.get("id") not in seen_record_ids]
+                for m in matched:
+                    record_id = m.get("id")
+                    if record_id is not None:
+                        seen_record_ids.add(record_id)
                 all_related_records.extend(matched)
+
+                logger.info(
+                    "[%s] L2-回溯结果(窗口=%s): 总相似=%d → 高关联=%d (新增%d, 阈值=%.2f)",
+                    pipeline_id, window_label, len(similar_records), len(matched),
+                    len(new_matched), backtrack_cfg.relevance_threshold,
+                )
+
+            # 本轮无新增关联数据 → 跳过 L3，直接进入下一轮更长窗口回溯
+            if win_idx > 0 and not new_matched:
+                logger.info(
+                    "[%s] 窗口=%s 无新增关联记录，跳过 L3 研判，扩展窗口继续",
+                    pipeline_id, window_label,
+                )
+                if win_idx < total_windows - 1:
+                    next_label = _fmt_window(lookback_windows[win_idx + 1])
+                    logger.info(
+                        "[%s] 回溯窗口 %s → %s (无新增数据)",
+                        pipeline_id, window_label, next_label,
+                    )
+                else:
+                    logger.info(
+                        "[%s] 已遍历全部回溯窗口(最大=%s)且无新增，"
+                        "降级上报告警将在管线结束后处理",
+                        pipeline_id, _fmt_window(lookback_windows[-1]),
+                    )
+                continue
 
             # ---- Layer 3: 最终研判 ----
             adjudication_agent = cast(AdjudicationAgent, self._agents["adjudication"])
             final_adjudication = await adjudication_agent.process(
                 flow=flow,
                 related_context=all_related_records,
-                backtrack_depth=backtrack_depth,
+                lookback_window_hours=lookback_hours,
                 screening_result=screening_result,
             )
 
             logger.info(
-                "[%s] L3-研判 第%d次: %s | 严重度: %s | 置信度: %.2f",
-                pipeline_id, backtrack_depth,
+                "[%s] L3-研判 (窗口=%s): %s | 严重度: %s | 置信度: %.2f",
+                pipeline_id, window_label,
                 final_adjudication.verdict.value,
                 final_adjudication.severity.value,
                 final_adjudication.confidence,
@@ -341,35 +380,35 @@ class Orchestrator:
 
             # safe → 停止循环，丢弃
             if final_adjudication.verdict == TrafficVerdict.SAFE:
-                logger.info("[%s] L3 判定安全，停止回溯", pipeline_id)
+                logger.info("[%s] L3 在窗口=%s 判定安全，停止回溯", pipeline_id, window_label)
                 break
 
             # dangerous → 停止循环，上报
             if final_adjudication.verdict == TrafficVerdict.MALICIOUS:
-                logger.info("[%s] L3 判定危险，上报前端", pipeline_id)
+                logger.info("[%s] L3 在窗口=%s 判定危险，上报前端", pipeline_id, window_label)
                 self._alert_if_needed(final_adjudication, flow, pipeline_id)
                 break
 
             # suspicious → 扩展窗口继续回溯
-            if backtrack_depth < max_backtrack:
-                lookback_hours = int(lookback_hours * multipler)
+            if win_idx < total_windows - 1:
+                next_label = _fmt_window(lookback_windows[win_idx + 1])
                 logger.info(
-                    "[%s] L3 仍可疑，扩展回溯窗口至 %dh 继续...",
-                    pipeline_id, lookback_hours,
+                    "[%s] L3 仍可疑，扩展回溯窗口 %s → %s 继续...",
+                    pipeline_id, window_label, next_label,
                 )
             else:
                 logger.info(
-                    "[%s] L3 已达最大回溯次数(%d)，降级上报告警",
-                    pipeline_id, max_backtrack,
+                    "[%s] L3 已遍历全部回溯窗口(最大=%s)，降级上报告警",
+                    pipeline_id, _fmt_window(lookback_windows[-1]),
                 )
 
         # ---- 循环结束后的处理 ----
         if final_adjudication is None:
             final_adjudication = screening_result
 
-        # 若最终仍是可疑且达到最大次数，告警
+        # 若最终仍是可疑且遍历完所有窗口，告警
         if (final_adjudication.verdict == TrafficVerdict.SUSPICIOUS
-                and backtrack_depth >= max_backtrack):
+                and lookback_windows and lookback_hours == lookback_windows[-1]):
             self._alert_if_needed(final_adjudication, flow, pipeline_id)
 
         # 写入记忆系统

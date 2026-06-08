@@ -36,6 +36,11 @@ from .writer import (
     stop_db_writer,
 )
 
+from .verdict_writer import (
+    start_verdict_writer,
+    stop_verdict_writer,
+)
+
 from .lists_manager import (
     load_lists_from_db,
     reload_lists_after_change,
@@ -78,6 +83,8 @@ __all__ = [
     "store_packet",
     "start_db_writer",
     "stop_db_writer",
+    "start_verdict_writer",
+    "stop_verdict_writer",
     "load_lists_from_db",
     "reload_lists_after_change",
     "get_blacklist",
