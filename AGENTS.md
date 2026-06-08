@@ -20,7 +20,6 @@ No CI, no linter, no typechecker, no test framework in this repo. Don't try to r
 python main.py                          # Full stack (all 4 layers + WebUI)
 python main.py --dry-run                # Print config only, don't start
 python main.py --no-llm                 # Skip AI agents (P4 + data-labeling + frontend only)
-python main.py --no-slow-brain          # Skip slow-brain layer only
 python main.py --no-live-scan           # Skip live-scan orchestrator
 python main.py --no-p4                  # Skip P4 controller
 python main.py --no-flow-data          # Skip UDP flow-data processor
@@ -34,7 +33,7 @@ python main.py --update-geoip-now       # Force GeoIP DB update on startup
 | Layer | What | Port | Tech |
 |---|---|---|---|
 | Layer 1 | P4 hardware controller | **5000** (Flask) | Flask + pynng + Thrift |
-| Layer 2 | Multi-agent system (slow brain) | internal | LLM orchestration + live scan + deep analysis |
+| Layer 2 | Multi-agent system (3-tier) | internal | LLM: L1-Screening → L2-Backtrack ⇄ L3-Adjudication |
 | Layer 3 | Data labeling (flow-data) | **9999** (UDP) | FlowProcessor + GeoIP + MySQL batching |
 | Layer 4 | WebUI + config management | **8080** (FastAPI) | FastAPI + LayUI (static frontend) |
 
@@ -45,6 +44,11 @@ Supporting components (not numbered layers):
 **Flask and FastAPI coexist** — not unified. Flask handles P4 control (:5000), FastAPI handles WebUI/REST (:8080).
 **Frontend is pure static** (HTML/CSS/JS/LayUI) — FastAPI serves it from `frontend/`. No build step.
 **`main.py` is the single entrypoint** — starts all layers, health check, and GeoIP thread in correct order.
+
+### 3-Tier multi-agent pipeline
+- **L1 Screening** — Concurrent row-by-row analysis via LLM; dangerous→frontend, safe→discard, suspicious→L2
+- **L2 Backtrack** — DB query similar records within lookback window, LLM judges relevance, high-relevance merged with original → L3
+- **L3 Adjudication** — Final verdict with historical context; suspicious results loop back to L2 with expanded window (up to max_backtrack_count)
 
 ### Cross-layer feedback
 - **Multi-agent system → P4**: Interception rules pushed to P4 switch flow tables

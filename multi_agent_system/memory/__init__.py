@@ -27,7 +27,7 @@
     # 检测时注入模式上下文
     index = get_index()
     context = index.format_context(flow_features)
-    # context 直接追加到 DetectionAgent / JudgmentAgent 的提示词中
+    # context 直接追加到 ScreeningAgent / AdjudicationAgent 的提示词中
 
     # 后台定时任务
     from multi_agent_system.memory.clustering import run_hourly_clustering

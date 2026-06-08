@@ -1,10 +1,9 @@
 """
-多智能体分析系统（慢脑）—— 全真模拟测试
-========================================
+多智能体分析系统 — 三层架构全真模拟测试
+=======================================
 
 在全真环境下测试多智能体模块的全部功能：
-  - 实时分析管线（Detection -> Correlation -> Judgment -> Feedback）
-  - 深度分析子模块（BaselineProfiling + TemporalAnomaly + DeepAnalysis）
+  - 三层分析管线（筛查 → 回溯 ⇄ 研判）
   - 管理员反馈 + 记忆系统自适应学习
   - LiveScanOrchestrator 逐条扫描调度
   - LM Studio 模型管理（可选，通过 --lmstudio 或自动检测启用）
@@ -36,15 +35,8 @@ from multi_agent_system import (
     MultiAgentSystem, Orchestrator, OrchestratorConfig,
     FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel,
     BackendType,
-    DetectionAgent, CorrelationAgent, JudgmentAgent, FeedbackAgent,
+    ScreeningAgent, BacktrackAgent, AdjudicationAgent, FeedbackAgent,
     AdminFeedback,
-)
-from multi_agent_system.agents.baseline_profiling_agent import (
-    BaselineProfilingAgent, BehaviorBaseline,
-)
-from multi_agent_system.agents.temporal_anomaly_agent import TemporalAnomalyAgent
-from multi_agent_system.orchestrators.deep_analysis_orchestrator import (
-    DeepAnalysisOrchestrator,
 )
 from multi_agent_system.orchestrators.live_scan_orchestrator import (
     LiveScanOrchestrator,
@@ -112,7 +104,7 @@ def _check_backend_available(config: OrchestratorConfig, bt: BackendType) -> boo
 # ═══════════════════════════════════════════════════════════════
 
 def build_sample_flows() -> list[FlowEvent]:
-    """构造实时管线测试用流量。"""
+    """构造三层管线测试用流量。"""
     now = datetime.now(timezone.utc)
     return [
         FlowEvent(
@@ -163,66 +155,16 @@ def build_sample_flows() -> list[FlowEvent]:
     ]
 
 
-def build_historical_flows(entity_id: str = "user_zhangsan") -> list[FlowEvent]:
-    """构造 90 天历史流量，模拟长周期低频率泄密模式。
-
-    前 60 天：正常办公基线（工作日 09:00-18:00）
-    后 30 天：混入隐蔽泄密（每 3 天凌晨 2 点传输 2-5MB，渐进递增）
-    """
-    now = datetime.now(timezone.utc)
-    flows: list[FlowEvent] = []
-    normal_ips = ["142.250.80.46", "93.184.216.34", "151.101.1.140"]
-    exfil_ips = ["203.0.113.42", "198.51.100.77", "45.33.32.156"]
-
-    for day_offset in range(90, 0, -1):
-        day = now - timedelta(days=day_offset)
-        if day.weekday() < 5:
-            for hour in [9, 10, 11, 14, 15, 16, 17]:
-                flows.append(FlowEvent(
-                    timestamp=day.replace(hour=hour, minute=0, second=0),
-                    src_ip="192.168.1.50", dst_ip=normal_ips[hour % 3],
-                    src_port=50000 + hour, dst_port=443,
-                    protocol="TCP", app_protocol="TLS",
-                    pkt_count=60, byte_count=30000, duration_seconds=5.0,
-                    avg_pkt_size=500, entropy_score=5.5,
-                    user_id=entity_id, department="研发部",
-                ))
-        if day_offset <= 30:
-            if day_offset % 3 == 0:
-                size = 2_000_000 + (30 - day_offset) * 100_000
-                flows.append(FlowEvent(
-                    timestamp=day.replace(hour=2, minute=15, second=0),
-                    src_ip="192.168.1.50", dst_ip=exfil_ips[day_offset % 3],
-                    src_port=49152 + (day_offset % 10), dst_port=8443,
-                    protocol="TCP", app_protocol="TLS",
-                    pkt_count=int(size / 1400), byte_count=size,
-                    duration_seconds=20.0, avg_pkt_size=1400, entropy_score=7.85,
-                    user_id=entity_id, department="研发部",
-                ))
-            if day_offset % 2 == 0:
-                flows.append(FlowEvent(
-                    timestamp=day.replace(hour=23, minute=45, second=0),
-                    src_ip="192.168.1.50", dst_ip="8.8.8.8",
-                    src_port=30000 + (day_offset % 100), dst_port=53,
-                    protocol="UDP", app_protocol="DNS",
-                    pkt_count=3, byte_count=600, duration_seconds=1.0,
-                    avg_pkt_size=200, entropy_score=6.1,
-                    dns_query=f"data-{day_offset}.sync.exfil.example.com",
-                    user_id=entity_id, department="研发部",
-                ))
-    return flows
-
-
 # ═══════════════════════════════════════════════════════════════
-# 测试 1: 实时分析管线（全真 API 调用）
+# 测试 1: 三层分析管线（全真 API 调用）
 # ═══════════════════════════════════════════════════════════════
 
 async def test_pipeline(config: OrchestratorConfig):
-    """全真测试 Detection -> Correlation -> Judgment 管线。
+    """全真测试 L1筛查 → L2回溯 ⇄ L3研判 三层管线。
 
     使用 config_user.json 中的 DeepSeek API Key 进行真实 LLM 分析。
     """
-    _h("测试 1: 实时分析管线 (Detection -> Correlation -> Judgment)")
+    _h("测试 1: 三层分析管线 (筛查 → 回溯 ⇄ 研判)")
 
     ds_ok = _check_backend_available(config, BackendType.DEEPSEEK)
     if not ds_ok:
@@ -231,6 +173,9 @@ async def test_pipeline(config: OrchestratorConfig):
         return
 
     _info(f"后端: DeepSeek/{config.default_backends[BackendType.DEEPSEEK].model_name}")
+    _info(f"L1-筛查: {config.screening.backend.value}/{config.screening.model_name}")
+    _info(f"L2-回溯: {config.backtrack.backend.value}/{config.backtrack.model_name}")
+    _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
 
     system = MultiAgentSystem(config)
     await system.start()
@@ -244,9 +189,11 @@ async def test_pipeline(config: OrchestratorConfig):
         try:
             verdict = await system.analyze(flow)
             results.append(verdict)
+            bt_depth = verdict.extra.get("backtrack_depth", 0) if verdict.extra else 0
             verdict_icon = {"malicious": "!!", "suspicious": " ?", "safe": "  ", "unknown": ".."}.get(
                 verdict.verdict.value, "??")
-            _ok(f"[{verdict_icon}] {verdict.verdict.value.upper()} | "
+            depth_info = f" (回溯{bt_depth}次)" if bt_depth > 0 else ""
+            _ok(f"[{verdict_icon}] {verdict.verdict.value.upper()}{depth_info} | "
                 f"严重度={verdict.severity.value} | 置信度={verdict.confidence:.0%}")
             _info(f"威胁类型: {verdict.threat_type}")
             _info(f"建议动作: {verdict.recommended_action}")
@@ -275,10 +222,7 @@ async def test_pipeline(config: OrchestratorConfig):
 # ═══════════════════════════════════════════════════════════════
 
 async def test_feedback(config: OrchestratorConfig):
-    """测试管理员反馈闭环 + 记忆系统自适应学习。
-
-    使用真实 LLM 增强分析反馈模式。
-    """
+    """测试管理员反馈闭环 + 记忆系统自适应学习。"""
     _h("测试 2: 管理员反馈 + 记忆系统")
 
     from multi_agent_system.memory import get_store, get_index
@@ -350,128 +294,125 @@ async def test_feedback(config: OrchestratorConfig):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 测试 3: 深度分析子模块
+# 测试 3: 三层智能体独立验证
 # ═══════════════════════════════════════════════════════════════
 
-async def test_deep_analysis(config: OrchestratorConfig):
-    """测试深度分析：基线画像 + 时序异常检测 + 综合研判。
+async def test_agents_standalone(config: OrchestratorConfig):
+    """独立测试三个智能体的创建和基本功能。"""
+    _h("测试 3: 三层智能体独立验证")
 
-    基线画像使用纯统计方法（不依赖 LLM），可完全验证。
-    时序异常先做统计预分析，如有可用后端则调用 LLM 进行模式解释。
-    """
-    _h("测试 3: 深度分析 (Baseline + Temporal + Judgment)")
+    ds_ok = _check_backend_available(config, BackendType.DEEPSEEK)
+    if not ds_ok:
+        _warn("DeepSeek API Key 未配置，仅验证构造不调用 LLM")
+        await _test_agents_no_llm(config)
+        return
 
-    historical = build_historical_flows("user_zhangsan")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    baseline_flows = [f for f in historical if f.timestamp < cutoff]
-    recent_flows = [f for f in historical if f.timestamp >= cutoff]
-    _info(f"历史数据: {len(historical)} 条 (基线窗口={len(baseline_flows)}, 近期={len(recent_flows)})")
+    from multi_agent_system.backends import DeepSeekBackend
+    ds_cfg = config.default_backends[BackendType.DEEPSEEK]
 
-    # -- 3a. 基线画像 --
-    _sh("3a. 基线画像构建 (纯统计)")
-    baseline_agent = BaselineProfilingAgent()
-    baseline = baseline_agent.build_or_update_baseline(
-        entity_id="user_zhangsan", entity_type="user",
-        historical_flows=baseline_flows,
-    )
-    _ok(f"基线: entity={baseline.entity_id}, samples={baseline.sample_count}")
-    _info(f"日均流量: {baseline.avg_flows_per_day:.1f} 次/天")
-    _info(f"时均字节: {baseline.avg_bytes_per_hour / 1024:.1f} KB/h")
-    _info(f"非工作时段占比: {baseline.off_hours_ratio:.1%}")
-    _info(f"协议分布: {baseline.protocol_distribution}")
-
-    # 基线偏离评估
-    deviations = 0
-    for flow in recent_flows[:20]:
-        result = baseline_agent.evaluate_flow(flow, baseline)
-        if result.verdict == TrafficVerdict.SUSPICIOUS:
-            deviations += 1
-    _ok(f"偏离评估: {deviations}/{min(20, len(recent_flows))} 条偏离基线")
-    if deviations > 0:
-        _info("凌晨泄密流量被基线偏离度正确捕获")
-
-    # -- 3b. 时序异常 --
-    _sh("3b. 时序异常检测")
-    temporal_agent = TemporalAnomalyAgent()
-
-    # 注入后端
-    if _check_backend_available(config, BackendType.DEEPSEEK):
-        ds_cfg = config.default_backends[BackendType.DEEPSEEK]
-        from multi_agent_system.backends import DeepSeekBackend
-        temporal_agent.set_backend(DeepSeekBackend(
-            api_base=ds_cfg.api_base, api_key=ds_cfg.api_key,
-            timeout=ds_cfg.timeout, max_retries=ds_cfg.max_retries,
-            default_model=ds_cfg.model_name,
-        ))
-        temporal_agent.model_name = ds_cfg.model_name
-
-    # 统计预分析（不依赖 LLM）
-    slices = temporal_agent.slice_time_series(recent_flows, window_days=30)
-    _info(f"时序切片: {len(slices)} 片 (每片 {temporal_agent.slice_size_hours}h)")
-    active = [s for s in slices if s.total_bytes > 0]
-    _info(f"活跃切片: {len(active)}/{len(slices)}")
-
-    has_period, period_conf, period_desc = temporal_agent.detect_periodicity(slices)
-    _ok(f"周期检测: {period_desc}")
-
-    trend_dir, trend_conf, trend_desc = temporal_agent.detect_trend(slices)
-    _ok(f"趋势检测: {trend_desc}")
-
-    # LLM 全真分析
-    if _check_backend_available(config, BackendType.DEEPSEEK):
-        _info("调用 DeepSeek API 进行时序模式解释...")
-        try:
-            temporal_result = await temporal_agent.analyze(
-                entity_id="user_zhangsan",
-                historical_flows=recent_flows,
-                window_days=30,
-            )
-            _ok(f"LLM 时序分析: verdict={temporal_result.verdict.value} | "
-                f"confidence={temporal_result.confidence:.0%}")
-            _info(f"威胁类型: {temporal_result.threat_type}")
-            if temporal_result.reasoning:
-                _info(f"推理: {temporal_result.reasoning[:250]}")
-        except Exception as e:
-            _warn(f"LLM 时序分析失败: {e}")
-
-    # -- 3c. DeepAnalysisOrchestrator 组装 --
-    _sh("3c. 综合研判编排")
-    jcfg = config.judgment
-    judgment_agent = JudgmentAgent(
-        name="SlowJudgmentAgent",
-        system_prompt=jcfg.system_prompt, model_name=jcfg.model_name,
-        temperature=jcfg.temperature, max_tokens=jcfg.max_tokens,
-    )
-    if _check_backend_available(config, BackendType.DEEPSEEK):
-        ds_cfg = config.default_backends[BackendType.DEEPSEEK]
-        from multi_agent_system.backends import DeepSeekBackend
-        judgment_agent.set_backend(DeepSeekBackend(
-            api_base=ds_cfg.api_base, api_key=ds_cfg.api_key,
-            timeout=ds_cfg.timeout, max_retries=ds_cfg.max_retries,
-            default_model=ds_cfg.model_name,
-        ))
-        judgment_agent.model_name = ds_cfg.model_name
-
-    da = DeepAnalysisOrchestrator(
-        baseline_agent=baseline_agent, temporal_agent=temporal_agent,
-        judgment_agent=judgment_agent,
-        analysis_interval_hours=config.deep_analysis.analysis_interval_hours,
+    backend = DeepSeekBackend(
+        api_base=ds_cfg.api_base, api_key=ds_cfg.api_key,
+        timeout=ds_cfg.timeout, max_retries=ds_cfg.max_retries,
+        default_model=ds_cfg.model_name,
     )
 
-    # 批量分析
-    entity_flows = {"user_zhangsan": ("user", baseline_flows)}
-    recent_map = {"user_zhangsan": recent_flows}
-    alerts = await da.batch_analyze(entity_flows, recent_map)
-    _ok(f"批量分析完成: {len(alerts)} 条告警")
-    for i, alert in enumerate(alerts):
-        _info(f"告警 #{i+1}: {alert.verdict.value}/{alert.severity.value} "
-              f"({alert.confidence:.0%}) — {alert.threat_type}")
+    # 3a. 筛查智能体
+    _sh("3a. L1-筛查智能体")
+    screening = ScreeningAgent(
+        name="TestScreening",
+        system_prompt=config.screening.system_prompt,
+        model_name=config.screening.model_name,
+    )
+    screening.set_backend(backend)
+    _ok("筛查智能体创建成功")
 
-    stats = da.get_statistics()
-    _info(f"基线跟踪: {stats['baselines_tracked']} 个实体 | "
-          f"近期告警: {stats['total_recent_alerts']}")
+    flow = FlowEvent(
+        src_ip="192.168.1.100", dst_ip="45.33.32.156",
+        src_port=49152, dst_port=443,
+        protocol="TCP", app_protocol="TLS",
+        byte_count=8_000_000, entropy_score=7.95,
+        department="财务部",
+    )
+    try:
+        result = await screening.process(flow)
+        _ok(f"筛查结果: {result.verdict.value} (置信度={result.confidence:.0%})")
+        _info(f"阈值校准: {screening.classify_threshold(result)}")
+    except Exception as e:
+        _warn(f"筛查失败: {e}")
+
+    # 3b. 回溯智能体
+    _sh("3b. L2-回溯智能体")
+    backtrack = BacktrackAgent(
+        name="TestBacktrack",
+        system_prompt=config.backtrack.system_prompt,
+        model_name=config.backtrack.model_name,
+        relevance_threshold=config.backtrack.relevance_threshold,
+    )
+    backtrack.set_backend(backend)
+    _ok("回溯智能体创建成功")
+
+    similar_records = [
+        {"id": 101, "src_ip": "192.168.1.100", "dst_ip": "45.33.32.156",
+         "protocol": "TCP", "traffic_size": 5000000, "entropy": 7.8,
+         "department": "财务部", "created_at": "2026-06-07 02:00:00"},
+        {"id": 102, "src_ip": "192.168.1.100", "dst_ip": "8.8.8.8",
+         "protocol": "UDP", "traffic_size": 500, "entropy": 6.0,
+         "department": "财务部", "created_at": "2026-06-06 23:00:00"},
+    ]
+    matched: list = []
+    try:
+        bt_result = await backtrack.process(flow, similar_records)
+        matched = bt_result.get("matched_records", [])
+        _ok(f"回溯结果: {len(similar_records)}总 → {len(matched)}高关联")
+    except Exception as e:
+        _warn(f"回溯失败: {e}")
+
+    # 3c. 研判智能体
+    _sh("3c. L3-研判智能体")
+    adjudication = AdjudicationAgent(
+        name="TestAdjudication",
+        system_prompt=config.adjudication.system_prompt,
+        model_name=config.adjudication.model_name,
+    )
+    adjudication.set_backend(backend)
+    _ok("研判智能体创建成功")
+
+    try:
+        adj_result = await adjudication.process(
+            flow=flow,
+            related_context=matched,
+            backtrack_depth=1,
+        )
+        _ok(f"研判结果: {adj_result.verdict.value} | "
+            f"严重度={adj_result.severity.value} | 置信度={adj_result.confidence:.0%}")
+    except Exception as e:
+        _warn(f"研判失败: {e}")
 
     _ok("测试 3 完成")
+
+
+async def _test_agents_no_llm(config: OrchestratorConfig):
+    """仅验证智能体构造（不调用 LLM）。"""
+    screening = ScreeningAgent(
+        system_prompt=config.screening.system_prompt,
+        model_name=config.screening.model_name,
+    )
+    _ok(f"筛查智能体: {screening.name} (model={screening.model_name})")
+
+    backtrack = BacktrackAgent(
+        system_prompt=config.backtrack.system_prompt,
+        model_name=config.backtrack.model_name,
+    )
+    _ok(f"回溯智能体: {backtrack.name} (model={backtrack.model_name}, "
+        f"threshold={backtrack.relevance_threshold})")
+
+    adjudication = AdjudicationAgent(
+        system_prompt=config.adjudication.system_prompt,
+        model_name=config.adjudication.model_name,
+    )
+    _ok(f"研判智能体: {adjudication.name} (model={adjudication.model_name})")
+
+    _ok("三层智能体构造完成 (未调用 LLM)")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -501,8 +442,6 @@ def test_live_scan(config: OrchestratorConfig):
           f"interval={config.live_scan.scan_interval_seconds}s, "
           f"batch={config.live_scan.batch_size}, "
           f"concurrency={config.live_scan.max_concurrent_analyses}")
-    _info(f"回溯配置: lookback={config.retrospective_scan.lookback_days}d, "
-          f"entities_per_cycle={config.retrospective_scan.entities_per_cycle}")
 
     _ok("测试 4 完成")
 
@@ -580,11 +519,7 @@ def _detect_lmstudio(api_base: str = "http://localhost:1234/v1") -> bool:
 
 
 def test_lmstudio(config: OrchestratorConfig):
-    """LM Studio 模型管理功能测试。
-
-    需要本地运行 LM Studio (>=0.3.x) 并启用 API 服务。
-    通过 --lmstudio 参数或自动检测启用。
-    """
+    """LM Studio 模型管理功能测试。"""
     _h("测试 6: LM Studio 模型管理")
 
     lm_cfg = config.default_backends.get(BackendType.LMSTUDIO)
@@ -650,7 +585,6 @@ def test_lmstudio(config: OrchestratorConfig):
         except Exception as e:
             _warn(f"模型加载演示跳过: {e}")
 
-    # 自动加载开关
     _info(f"auto_load: {backend.auto_load}")
 
     _ok("测试 6 完成")
@@ -668,14 +602,16 @@ def test_status(config: OrchestratorConfig):
     _info(f"OpenAI:   {'已配置' if _check_backend_available(config, BackendType.OPENAI) else '未配置'}")
     _info(f"LMStudio: {'已注册' if BackendType.LMSTUDIO in config.default_backends else '未注册'}")
 
-    _info(f"检测智能体: {config.detection.backend.value}/{config.detection.model_name}")
-    _info(f"关联智能体: {config.correlation.backend.value}/{config.correlation.model_name}")
-    _info(f"研判智能体: {config.judgment.backend.value}/{config.judgment.model_name}")
-    _info(f"反馈智能体: {config.feedback.backend.value}/{config.feedback.model_name}")
-    _info(f"深度分析周期: {config.deep_analysis.analysis_interval_hours}h")
+    _info(f"L1-筛查: {config.screening.backend.value}/{config.screening.model_name}")
+    _info(f"L2-回溯: {config.backtrack.backend.value}/{config.backtrack.model_name}")
+    _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
+    _info(f"反馈:   {config.feedback.backend.value}/{config.feedback.model_name}")
+
+    _info(f"回溯配置: 初始窗口={config.backtrack.initial_lookback_hours}h, "
+          f"最大次数={config.backtrack.max_backtrack_count}, "
+          f"扩展倍数={config.backtrack.lookback_multiplier}x")
     _info(f"实时扫描: {'启用' if config.live_scan.enabled else '禁用'} "
           f"(间隔={config.live_scan.scan_interval_seconds}s)")
-    _info(f"回溯扫描: lookback={config.retrospective_scan.lookback_days}d")
 
     _ok("测试 7 完成")
 
@@ -685,7 +621,7 @@ def test_status(config: OrchestratorConfig):
 # ═══════════════════════════════════════════════════════════════
 
 def _parse_args():
-    p = argparse.ArgumentParser(description="多智能体系统（慢脑）全真模拟测试")
+    p = argparse.ArgumentParser(description="多智能体系统（三层架构）全真模拟测试")
     p.add_argument("modules", nargs="*", default=None,
                    help="指定测试编号 (1-7)，不指定则运行全部")
     p.add_argument("--lmstudio", action="store_true",
@@ -711,9 +647,9 @@ async def main():
     lmstudio_enabled = args.lmstudio or _detect_lmstudio(_lm_base)
 
     all_tests = [
-        ("1", "实时分析管线", lambda: test_pipeline(config)),
+        ("1", "三层分析管线", lambda: test_pipeline(config)),
         ("2", "管理员反馈 + 记忆系统", lambda: test_feedback(config)),
-        ("3", "深度分析 (Baseline+Temporal+Judgment)", lambda: test_deep_analysis(config)),
+        ("3", "三层智能体独立验证", lambda: test_agents_standalone(config)),
         ("4", "LiveScanOrchestrator 调度", lambda: test_live_scan(config)),
         ("5", "记忆系统", lambda: test_memory()),
         ("6", "LM Studio 模型管理", lambda: test_lmstudio(config)),
@@ -743,7 +679,7 @@ async def main():
             _info("使用 --lmstudio 参数强制启用")
 
     print(f"\n{'=' * 64}")
-    print(f"  多智能体系统（慢脑）—— 全真模拟测试")
+    print(f"  多智能体系统（三层架构）—— 全真模拟测试")
     print(f"{'=' * 64}")
     print(f"  时间: {datetime.now(timezone.utc).isoformat()}")
     print(f"  后端: DeepSeek {'已配置' if _check_backend_available(config, BackendType.DEEPSEEK) else '未配置'} | "

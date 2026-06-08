@@ -1,6 +1,9 @@
 """
-多智能体流量分析系统
-========================
+多智能体流量分析系统 — 三层架构
+================================
+Layer 1 — ScreeningAgent:    初步筛查 (多线程逐条分析)
+Layer 2 — BacktrackAgent:    历史回溯 (DB查询 + LLM关联过滤)
+Layer 3 — AdjudicationAgent: 最终研判 (结合回溯数据二次判定)
 
 快速使用：
 
@@ -18,9 +21,6 @@
 
     # 管理员反馈
     system.feedback("false_positive", src_ip="10.0.0.5")
-
-    # 获取 P4 规则
-    rules = system.get_p4_rules()
 """
 
 from typing import Optional
@@ -28,9 +28,9 @@ from typing import Optional
 from .config import (
     BackendType,
     LLMBackendConfig,
-    DetectionAgentConfig,
-    CorrelationAgentConfig,
-    JudgmentAgentConfig,
+    ScreeningAgentConfig,
+    BacktrackAgentConfig,
+    AdjudicationAgentConfig,
     FeedbackAgentConfig,
     OrchestratorConfig,
 )
@@ -41,9 +41,9 @@ from .core.message import (
     SeverityLevel,
 )
 from .backends import OpenAIBackend, LMStudioBackend
-from .agents.detection_agent import DetectionAgent
-from .agents.correlation_agent import CorrelationAgent
-from .agents.judgment_agent import JudgmentAgent
+from .agents.screening_agent import ScreeningAgent
+from .agents.backtrack_agent import BacktrackAgent
+from .agents.adjudication_agent import AdjudicationAgent
 from .agents.feedback_agent import FeedbackAgent, AdminFeedback
 from .orchestrator import Orchestrator
 
@@ -57,13 +57,13 @@ class MultiAgentSystem:
     多智能体分析系统主类。
 
     设计目标：对主调程序暴露最简洁的接口，
-    屏蔽内部 LLM 后端、消息总线等细节。
+    屏蔽内部 LLM 后端、三层管线等细节。
 
     —— 典型使用方式 ——
 
         系统 = MultiAgentSystem()
         系统.add_deepseek_backend("sk-your-key")
-        系统.set_detection_backend(BackendType.DEEPSEEK)
+        系统.set_screening_backend(BackendType.DEEPSEEK)
 
         # 流量事件（来自 P4 交换机镜像）
         flow = FlowEvent(
@@ -115,21 +115,7 @@ class MultiAgentSystem:
         auto_load: bool = True,
         load_config: Optional[dict] = None,
     ) -> None:
-        """
-        添加 LM Studio 本地 AI 后端。
-
-        Args:
-            api_base: LM Studio OpenAI 兼容 API 地址
-            model_name: 模型名称（如 "qwen3.5-9b"）
-            timeout: 请求超时秒数
-            auto_load: 是否在调用前自动加载未就绪的模型
-            load_config: 模型加载参数，如：
-                {
-                    "context_length": 16384,
-                    "flash_attention": True,
-                    "eval_batch_size": 512,
-                }
-        """
+        """添加 LM Studio 本地 AI 后端"""
         self._config.default_backends[BackendType.LMSTUDIO] = LLMBackendConfig(
             backend_type=BackendType.LMSTUDIO,
             api_base=api_base,
@@ -141,19 +127,43 @@ class MultiAgentSystem:
             load_config=load_config or {},
         )
 
-    def set_detection_backend(self, backend: BackendType = BackendType.LMSTUDIO) -> None:
-        """设置检测智能体使用的后端"""
-        self._config.detection.backend = backend
+    def add_deepseek_backend(
+        self,
+        api_key: str,
+        api_base: str = "https://api.deepseek.com",
+        model_name: str = "deepseek-v4-flash",
+        timeout: float = 120.0,
+        max_retries: int = 5,
+        thinking_enabled: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
+        include_reasoning: bool = False,
+    ) -> None:
+        """添加 DeepSeek V4 API 后端"""
+        self._config.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
+            backend_type=BackendType.DEEPSEEK,
+            api_base=api_base,
+            api_key=api_key,
+            model_name=model_name,
+            timeout=timeout,
+            max_retries=max_retries,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+            include_reasoning=include_reasoning,
+        )
 
-    def set_correlation_backend(self, backend: BackendType = BackendType.OPENAI) -> None:
-        """设置关联智能体使用的后端"""
-        self._config.correlation.backend = backend
+    def set_screening_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
+        """设置 Layer 1 筛查智能体使用的后端"""
+        self._config.screening.backend = backend
 
-    def set_judgment_backend(self, backend: BackendType = BackendType.OPENAI) -> None:
-        """设置研判智能体使用的后端"""
-        self._config.judgment.backend = backend
+    def set_backtrack_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
+        """设置 Layer 2 回溯智能体使用的后端"""
+        self._config.backtrack.backend = backend
 
-    def set_feedback_backend(self, backend: BackendType = BackendType.LMSTUDIO) -> None:
+    def set_adjudication_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
+        """设置 Layer 3 研判智能体使用的后端"""
+        self._config.adjudication.backend = backend
+
+    def set_feedback_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
         """设置反馈智能体使用的后端"""
         self._config.feedback.backend = backend
 
@@ -193,10 +203,7 @@ class MultiAgentSystem:
         return await self._orchestrator.analyze_flow(flow)
 
     def analyze_sync(self, flow: FlowEvent) -> ThreatVerdict:
-        """
-        同步分析流量（线程安全）。
-        自动处理事件循环创建。
-        """
+        """同步分析流量（线程安全）"""
         self._ensure_started()
         return self._orchestrator.analyze_flow_sync(flow)
 
@@ -243,44 +250,6 @@ class MultiAgentSystem:
         """获取系统统计"""
         return self._orchestrator.get_statistics()
 
-    # --- DeepSeek 后端配置 ---
-
-    def add_deepseek_backend(
-        self,
-        api_key: str,
-        api_base: str = "https://api.deepseek.com",
-        model_name: str = "deepseek-v4-flash",
-        timeout: float = 120.0,
-        max_retries: int = 5,
-        thinking_enabled: Optional[bool] = None,
-        reasoning_effort: Optional[str] = None,
-        include_reasoning: bool = False,
-    ) -> None:
-        """
-        添加 DeepSeek V4 API 后端。
-
-        Args:
-            api_key: DeepSeek API 密钥（sk- 开头）
-            api_base: API 地址（默认 https://api.deepseek.com）
-            model_name: 模型名称（"deepseek-v4-flash" 或 "deepseek-v4-pro"）
-            timeout: 请求超时秒数（推理模型建议 >= 120s）
-            max_retries: 最大重试次数
-            thinking_enabled: 思考模式开关（True/False），None 表示不显式设置
-            reasoning_effort: 推理强度 "high" | "max"（None 表示不启用）
-            include_reasoning: 是否在回复中包含思考过程
-        """
-        self._config.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
-            backend_type=BackendType.DEEPSEEK,
-            api_base=api_base,
-            api_key=api_key,
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=max_retries,
-            thinking_enabled=thinking_enabled,
-            reasoning_effort=reasoning_effort,
-            include_reasoning=include_reasoning,
-        )
-
 
 __all__ = [
     # 主类
@@ -289,9 +258,9 @@ __all__ = [
     # 配置
     "OrchestratorConfig",
     "LLMBackendConfig",
-    "DetectionAgentConfig",
-    "CorrelationAgentConfig",
-    "JudgmentAgentConfig",
+    "ScreeningAgentConfig",
+    "BacktrackAgentConfig",
+    "AdjudicationAgentConfig",
     "FeedbackAgentConfig",
     "BackendType",
     # 数据结构
@@ -303,9 +272,9 @@ __all__ = [
     "OpenAIBackend",
     "LMStudioBackend",
     # 智能体
-    "DetectionAgent",
-    "CorrelationAgent",
-    "JudgmentAgent",
+    "ScreeningAgent",
+    "BacktrackAgent",
+    "AdjudicationAgent",
     "FeedbackAgent",
     "AdminFeedback",
 ]

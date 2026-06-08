@@ -20,12 +20,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config.schema import (  # noqa: F401, E402
     BackendType,
     LLMBackendConfig,
-    DetectionAgentConfig,
-    CorrelationAgentConfig,
-    JudgmentAgentConfig,
+    ScreeningAgentConfig,
+    BacktrackAgentConfig,
+    AdjudicationAgentConfig,
     FeedbackAgentConfig,
-    BaselineProfilingAgentConfig,
-    TemporalAnomalyAgentConfig,
-    DeepAnalysisConfig,
     OrchestratorConfig,
 )

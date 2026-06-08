@@ -10,10 +10,11 @@
     - pynng 子线程：监听 P4 交换机上报的实时行为特征
     - 定时器线程：每 100 秒通过 Thrift 拉取 P4 寄存器并重置
 
-  Layer 2 — 多智能体系统 — 基于 LLM 的异步分析与研判
-    - 多智能体编排器：检测/关联/研判/反馈全流程
+  Layer 2 — 多智能体系统 — 基于 LLM 的三层智能体架构
+    - Layer 1 筛查: 多线程逐条分析，危险→前端, 安全→丢弃, 可疑→L2
+    - Layer 2 回溯: DB查询相似记录，LLM过滤关联度
+    - Layer 3 研判: 结合回溯数据最终判定，可疑→循环回溯
     - LiveScanOrchestrator：逐条分析队列扫描（从DB拉取逐一分析）
-    - DeepAnalysisOrchestrator：基线画像 / 时序异常 / 长周期深度分析
     - 本地 LLM (LM Studio) 或云端 API (OpenAI / DeepSeek) 后端
 
   Layer 3 — 数据网关 (data_gateway)
@@ -26,17 +27,16 @@
     - 前后端分离架构
 
   使用方式：
-       python main.py                        # 全量启动
-       python main.py --no-slow-brain        # 跳过深度分析子模块
-       python main.py --no-live-scan         # 禁用逐条分析扫描
-       python main.py --no-llm               # 禁用多智能体系统（仅 P4 + 数据网关 + 前端）
-       python main.py --dry-run              # 仅打印启动信息，不实际运行
+        python main.py                        # 全量启动
+        python main.py --no-live-scan         # 禁用逐条分析扫描
+        python main.py --no-llm               # 禁用多智能体系统（仅 P4 + 数据网关 + 前端）
+        python main.py --dry-run              # 仅打印启动信息，不实际运行
 
   依赖安装：
-       pip install -r requirements.txt
+        pip install -r requirements.txt
 
   MySQL 初始化：
-       登录 MySQL 后执行: source database/create_database.sql
+        登录 MySQL 后执行: source database/create_database.sql
 ================================================================================
 """
 
@@ -107,8 +107,6 @@ _global_state = {
     "data_bridge": None,
     "bridge_thread": None,
     "multi_agent_system": None,
-    "deep_analysis": None,
-    "deep_analysis_task": None,
     "db_stop_event": None,
     "p4_controller_ready": threading.Event(),
     "shutdown_requested": threading.Event(),
@@ -129,10 +127,10 @@ def print_banner():
 |              守藏 — 基于P4的异构多智能体反泄密平台  启动中...                       |
 |                                                                            |
 |  Layer 1  P4 硬件层        -> pynng 监听 + Flask(:5000) + 遥测              |
-|  Layer 2  多智能体系统       -> 检测/关联/研判/反馈管线 + 基线画像 + 时序异常   |
+|  Layer 2  多智能体系统       -> L1筛查 → L2回溯 ⇄ L3研判 三层管线             |
 |  Layer 3  数据网关          -> DataBridge UDP:9999 + MySQL 攒批写入          |
 |  WebUI    前端可视化         -> FastAPI(:8080) 仪表盘 / REST API / 静态资源   |
-|  跨层联动                   -> 深度分析生成策略 -> P4 流表下发 / 检测阈值更新   |
+|  跨层联动                   -> 研判结果生成策略 -> P4 流表下发 / 检测阈值更新   |
 +============================================================================+
 """
     print(banner)
@@ -261,7 +259,7 @@ def _patch_control_timer():
 
 
 # ============================================================
-# Layer 2: 多智能体系统（慢脑）启动
+# Layer 2: 多智能体系统（三层架构）启动
 # ============================================================
 async def start_multi_agent_system(
     enable_llm: bool = True,
@@ -294,28 +292,34 @@ async def start_multi_agent_system(
         _global_state["multi_agent_system"] = system
         _logger.info(_green("[Layer 2] 多智能体系统已启动 [OK]"))
         _logger.info(
-            f"[Layer 2]   检测: {config.detection.backend.value}/{config.detection.model_name}"
+            f"[Layer 2]   L1-筛查: {config.screening.backend.value}/{config.screening.model_name}"
         )
         _logger.info(
-            f"[Layer 2]   关联: {config.correlation.backend.value}/{config.correlation.model_name}"
+            f"[Layer 2]   L2-回溯: {config.backtrack.backend.value}/{config.backtrack.model_name}"
         )
         _logger.info(
-            f"[Layer 2]   研判: {config.judgment.backend.value}/{config.judgment.model_name}"
+            f"[Layer 2]   L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}"
         )
 
-        # ---- 注入告警回调：慢脑高危判定 → 前端告警缓冲区 ----
-        def _slowbrain_alert_callback(verdict, flow):
-            """将慢脑分析产生的高危/可疑判定推送到前端告警缓冲"""
+        # ---- 注入告警回调：研判结果 → 前端告警缓冲区 ----
+        def _alert_callback(verdict, flow):
+            """将研判产生的高危/可疑判定推送到前端告警缓冲"""
             try:
                 from backend.api_server import push_alert
 
                 src_ip = flow.src_ip if flow else ""
+                bt_depth = verdict.extra.get("backtrack_depth", 0) if verdict.extra else 0
+                label_parts = [
+                    f"[L3-研判] {verdict.threat_type}",
+                    f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%}",
+                ]
+                if bt_depth > 0:
+                    label_parts[-1] += f", 回溯{bt_depth}次"
+                label_parts[-1] += ")"
+
                 push_alert(
                     ip=src_ip,
-                    label=(
-                        f"[慢脑] {verdict.threat_type} "
-                        f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%})"
-                    ),
+                    label=" ".join(label_parts),
                     details={
                         "verdict": verdict.verdict.value,
                         "severity": verdict.severity.value,
@@ -325,6 +329,7 @@ async def start_multi_agent_system(
                         "src_ip": src_ip,
                         "dst_ip": flow.dst_ip if flow else "",
                         "recommended_action": verdict.recommended_action,
+                        "backtrack_depth": bt_depth,
                     },
                 )
                 _logger.debug(
@@ -334,8 +339,8 @@ async def start_multi_agent_system(
             except Exception as e:
                 _logger.warning(_yellow(f"[Layer 2] 告警推送前端失败: {e}"))
 
-        system._orchestrator.alert_callback = _slowbrain_alert_callback
-        _logger.info(_green("[Layer 2]   告警回调已注入 (慢脑 → 前端)"))
+        system._orchestrator.alert_callback = _alert_callback
+        _logger.info(_green("[Layer 2]   告警回调已注入 (研判 → 前端)"))
 
         # ---- 启动 LiveScanOrchestrator（逐条分析队列扫描） ----
         if enable_live_scan:
@@ -395,49 +400,6 @@ async def stop_multi_agent_system():
             _logger.info(_green("[Layer 2] 多智能体系统已停止"))
         except Exception as e:
             _logger.warning(_yellow(f"[Layer 2] 多智能体停止时出错: {e}"))
-
-
-# ============================================================
-# 深度分析子模块：基线画像 + 时序异常检测
-# ============================================================
-async def start_deep_analysis(enable_llm: bool = True) -> bool:
-    """启动深度分析子模块（基线画像 + 时序异常）"""
-    if not enable_llm:
-        _logger.info(_yellow("[Layer 3] 深度分析子模块已跳过"))
-        return False
-
-    _logger.info(_cyan("[Layer 3] 启动深度分析子模块..."))
-    try:
-        from config.loader import load_config
-        from multi_agent_system.orchestrators.deep_analysis_orchestrator import (
-            DeepAnalysisOrchestrator,
-        )
-
-        _deep_cfg = load_config(
-            str(Path(__file__).parent / "config" / "config_user.json")
-            if (Path(__file__).parent / "config" / "config_user.json").exists()
-            else None
-        )
-
-        # 工厂方法封装了所有 agent/backend 组装逻辑
-        deep_analysis = DeepAnalysisOrchestrator.from_config(_deep_cfg)
-
-        _global_state["deep_analysis"] = deep_analysis
-        _logger.info(_green("[Layer 3] 深度分析子模块已就绪 [OK]"))
-        _logger.info(
-            "[Layer 3]   分析周期: %dh",
-            _deep_cfg.deep_analysis.analysis_interval_hours,
-        )
-        return True
-
-    except Exception as e:
-        _logger.error(_red(f"[Layer 3] 深度分析子模块启动失败: {e}"))
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-# (后台循环已内迁至各模块，由 async_main 直接调用)
 
 
 # ============================================================
@@ -556,7 +518,6 @@ def health_check_loop():
             "p4_controller": _global_state["p4_controller_ready"].is_set(),
             "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
-            "deep_analysis": _global_state.get("deep_analysis") is not None,
             "data_gateway": _global_state.get("data_bridge") is not None,
             "backend": _global_state.get("backend_thread") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
@@ -570,7 +531,6 @@ def health_check_loop():
             f"P4={_ok(status['p4_controller'])} "
             f"多智能体={_ok(status['multi_agent'])} "
             f"逐条扫描={_ok(status['live_scanner'])} "
-            f"深度分析={_ok(status['deep_analysis'])} "
             f"数据网关={_ok(status['data_gateway'])} "
             f"前端={_ok(status['backend'])} "
             f"| 运行 {status['uptime']:.0f}s"
@@ -633,37 +593,22 @@ async def async_main(args: argparse.Namespace):
     else:
         _logger.info(_yellow("[Layer 1] P4 控制器已跳过 (--no-p4)"))
 
-    # 4. 多智能体系统（慢脑）
+    # 4. 多智能体系统（三层架构）
     multi_agent_ready = await start_multi_agent_system(
         enable_llm=not args.no_llm,
         enable_live_scan=not args.no_live_scan,
     )
 
-    # 5. 深度分析子模块（基线画像 + 时序异常）
-    deep_analysis_ready = await start_deep_analysis(
-        enable_llm=not args.no_llm and not args.no_slow_brain
-    )
-
-    # 6. 启动健康检查线程
+    # 5. 启动健康检查线程
     health_thread = threading.Thread(
         target=health_check_loop, daemon=True, name="HealthCheck"
     )
     health_thread.start()
 
-    # 7. GeoIP 自动更新定时线程
+    # 6. GeoIP 自动更新定时线程
     _start_geoip_auto_update_thread(args)
 
-    # 8. 启动慢脑后台循环
-    deep_analysis_task = None
-    if deep_analysis_ready:
-        _da = _global_state.get("deep_analysis")
-        if _da is not None:
-            deep_analysis_task = asyncio.create_task(
-                _da.run_background_loop(_global_state["shutdown_requested"])
-            )
-            _global_state["deep_analysis_task"] = deep_analysis_task
-
-    # 9. 启动自适应定时任务 (Loop 2: 小时聚类, Loop 3: 周度LLM提取)
+    # 7. 启动自适应定时任务 (Loop 2: 小时聚类, Loop 3: 周度LLM提取)
     from multi_agent_system.memory.evolution import run_evolution_loop
     evolution_task = asyncio.create_task(
         run_evolution_loop(_global_state["shutdown_requested"])
@@ -697,9 +642,6 @@ async def async_main(args: argparse.Namespace):
         f"  逐条分析扫描     {_status(live_scan_running) : <40}"
     )
     print(
-        f"  深度分析子模块   {_status(deep_analysis_ready) : <40}"
-    )
-    print(
         f"  数据网关         {_status(not args.no_data_gateway) : <40}"
     )
     print("  健康检查         [OK] 每 30s")
@@ -728,16 +670,7 @@ async def async_main(args: argparse.Namespace):
     _logger.info(_yellow("=" * 60))
     _logger.info(_yellow("正在执行优雅关闭流程..."))
 
-    # 1. 取消慢脑后台任务
-    if deep_analysis_task is not None:
-        deep_analysis_task.cancel()
-        try:
-            await deep_analysis_task
-        except asyncio.CancelledError:
-            pass
-        _logger.info(_green("[Layer 3] 深度分析后台上报循环已停止"))
-
-    # 1.5 停止自适应后台任务
+    # 1. 停止自适应后台任务
     evolution_task.cancel()
     try:
         await evolution_task
@@ -784,27 +717,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用示例:
-  python main.py                          # 全量启动 (所有4层 + 逐条扫描 + 前端)
-  python main.py --no-llm                 # 跳过 LLM 智能体 (仅 P4 + 数据网关 + 前端)
-  python main.py --no-slow-brain          # 跳过深度分析子模块（基线画像+时序异常）
-  python main.py --no-live-scan           # 跳过逐条分析队列扫描
-  python main.py --no-p4                  # 跳过 P4 控制器
-  python main.py --no-data-gateway        # 跳过数据网关
-  python main.py --no-frontend            # 跳过前端服务器
-  python main.py --frontend-port 3000     # 前端使用端口 3000
-  python main.py --no-p4 --no-data-gateway  # 仅启动智能体系统
-  python main.py --dry-run                # 仅打印启动信息，不实际运行
+  python main.py                        # 全量启动 (所有层 + 逐条扫描 + 前端)
+  python main.py --no-llm               # 跳过 LLM 智能体 (仅 P4 + 数据网关 + 前端)
+  python main.py --no-live-scan         # 跳过逐条分析队列扫描
+  python main.py --no-p4                # 跳过 P4 控制器
+  python main.py --no-data-gateway      # 跳过数据网关
+  python main.py --no-frontend          # 跳过前端服务器
+  python main.py --frontend-port 3000   # 前端使用端口 3000
+  python main.py --dry-run              # 仅打印启动信息，不实际运行
         """,
     )
     parser.add_argument(
         "--no-llm",
         action="store_true",
-        help="禁用 LLM 智能体系统（多智能体系统 + 深度分析子模块）",
-    )
-    parser.add_argument(
-        "--no-slow-brain",
-        action="store_true",
-        help="仅禁用深度分析子模块（基线画像+时序异常）",
+        help="禁用 LLM 智能体系统（多智能体系统）",
     )
     parser.add_argument(
         "--no-live-scan",
@@ -880,17 +806,10 @@ def main():
             f"  逐条分析扫描:     {'[OK]' if not args.no_llm and not args.no_live_scan else '[--]'}"
         )
         print(
-            f"  深度分析子模块:   {'[OK]' if not args.no_llm and not args.no_slow_brain else '[--]'}"
-        )
-        print(
-            f"  数据网关:           {'[OK]' if not args.no_data_gateway else '[--] (--no-data-gateway)'}"
+            f"  数据网关:         {'[OK]' if not args.no_data_gateway else '[--] (--no-data-gateway)'}"
         )
         print("\n实际启动请移除 --dry-run 参数。")
         return
-
-    # 处理 --no-llm 同时禁用整个多智能体系统和深度分析子模块的语义
-    if args.no_llm:
-        args.no_slow_brain = True
 
     # ---- 安装 uvicorn 提示 ----
     try:

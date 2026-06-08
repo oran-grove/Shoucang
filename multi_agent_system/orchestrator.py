@@ -1,14 +1,19 @@
 """
-多智能体编排器
-=============
+多智能体编排器 — 三层架构
+==========================
 Orchestrator 是整个系统的入口。
 - 根据配置创建 LLM 后端实例
-- 初始化所有智能体并注入后端
-- 提供同步/异步的流量分析入口
-- 管理完整的分析管线（检测 → 关联 → 研判 → 反馈）
+- 初始化三层智能体并注入后端
+- 管理完整的分析管线（筛查 → 回溯 ⇄ 研判循环）
+
+三层管线:
+  Layer 1 — ScreeningAgent: 初步筛查，dangerous→前端, safe→丢弃, suspicious→L2
+  Layer 2 — BacktrackAgent: 历史回溯，查询DB相似记录，LLM过滤关联度
+  Layer 3 — AdjudicationAgent: 最终研判，safe→丢弃, dangerous→前端, suspicious→L2扩展窗口
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, cast
 from uuid import uuid4
 
@@ -16,14 +21,14 @@ from .config import (
     BackendType,
     OrchestratorConfig,
 )
-from .backends.base import LoadModelConfig, ModelInfo
+from .backends.base import LoadModelConfig
 from .core.message import (
     FlowEvent, ThreatVerdict, TrafficVerdict,
 )
 from .backends import OpenAIBackend, LMStudioBackend, DeepSeekBackend, BaseLLMBackend
-from .agents.detection_agent import DetectionAgent
-from .agents.correlation_agent import CorrelationAgent
-from .agents.judgment_agent import JudgmentAgent
+from .agents.screening_agent import ScreeningAgent
+from .agents.backtrack_agent import BacktrackAgent
+from .agents.adjudication_agent import AdjudicationAgent
 from .agents.feedback_agent import FeedbackAgent, AdminFeedback
 
 logger = logging.getLogger(__name__)
@@ -43,9 +48,6 @@ class Orchestrator:
         # 管理员反馈
         fb_result = await orchestrator.admin_feedback(feedback)
 
-        # 获取同步到 P4 的规则列表
-        rules = orchestrator.get_sync_rules()
-
         await orchestrator.stop()
     """
 
@@ -53,22 +55,23 @@ class Orchestrator:
         self,
         config: Optional[OrchestratorConfig] = None,
         alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = None,
+        db_query_callback: Optional[Callable[[str, int, int, int], list[dict]]] = None,
     ):
         self.config = config or OrchestratorConfig()
         self._backends: dict[BackendType, BaseLLMBackend] = {}
         self._agents: dict[str, object] = {}
         self._running = False
-        self._correlation_id_counter = 0
-        # 告警回调：当产生高危判定时调用，用于推送前端
         self.alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = alert_callback
+        # DB查询回调：供 Layer 2 查询历史相似记录
+        # 签名: (src_ip: str, lookback_hours: int, max_records: int, min_similarity: float) -> list[dict]
+        self._db_query_callback: Optional[Callable[..., list[dict]]] = db_query_callback
 
     # ========== 初始化 ==========
 
     def _init_backends(self) -> None:
         """根据配置创建 LLM 后端实例"""
         for backend_type, backend_cfg in self.config.default_backends.items():
-            # ── 云端后端需要 API Key，若为空则跳过 ──
-            if backend_type in (BackendType.OPENAI, BackendType.DEEPSEEK):  # type: ignore[attr-defined]
+            if backend_type in (BackendType.OPENAI, BackendType.DEEPSEEK):
                 if not backend_cfg.api_key or not backend_cfg.api_key.strip():
                     logger.warning(
                         "后端 [%s] 缺少 API Key，跳过初始化。"
@@ -85,8 +88,7 @@ class Orchestrator:
                     max_retries=backend_cfg.max_retries,
                     default_model=backend_cfg.model_name,
                 )
-            elif backend_type == BackendType.LMSTUDIO:  # type: ignore[attr-defined]  # cSpell:disable-line
-                # 从 load_config 字典提取加载参数
+            elif backend_type == BackendType.LMSTUDIO:
                 lc = backend_cfg.load_config
                 default_load_config = LoadModelConfig(
                     model=backend_cfg.model_name,
@@ -106,7 +108,7 @@ class Orchestrator:
                     auto_load=backend_cfg.auto_load,
                     default_load_config=default_load_config,
                 )
-            elif backend_type == BackendType.DEEPSEEK:  # type: ignore[attr-defined]
+            elif backend_type == BackendType.DEEPSEEK:
                 backend = DeepSeekBackend(
                     api_base=backend_cfg.api_base,
                     api_key=backend_cfg.api_key,
@@ -123,46 +125,46 @@ class Orchestrator:
             logger.info("后端注册: %s -> %s", backend_type.value, backend_cfg.model_name)
 
     def _init_agents(self) -> None:
-        """创建智能体并注入依赖"""
-        # --- 检测智能体 ---
-        det_cfg = self.config.detection
-        detection_agent = DetectionAgent(
-            name="DetectionAgent",
-            system_prompt=det_cfg.system_prompt,
-            model_name=det_cfg.model_name,
-            temperature=det_cfg.temperature,
-            max_tokens=det_cfg.max_tokens,
-            confidence_threshold_malicious=det_cfg.confidence_threshold_malicious,
-            confidence_threshold_suspect=det_cfg.confidence_threshold_suspect,
-        )
-        self._inject_agent_deps(detection_agent, det_cfg.backend)
-        self._agents["detection"] = detection_agent
+        """创建三层智能体并注入依赖"""
 
-        # --- 关联智能体 ---
-        corr_cfg = self.config.correlation
-        correlation_agent = CorrelationAgent(
-            name="CorrelationAgent",
-            system_prompt=corr_cfg.system_prompt,
-            model_name=corr_cfg.model_name,
-            temperature=corr_cfg.temperature,
-            max_tokens=corr_cfg.max_tokens,
-            correlation_window_minutes=corr_cfg.correlation_window_minutes,
-            min_records_to_correlate=corr_cfg.min_records_to_correlate,
+        # --- Layer 1: 筛查智能体 ---
+        scr_cfg = self.config.screening
+        screening_agent = ScreeningAgent(
+            name="ScreeningAgent",
+            system_prompt=scr_cfg.system_prompt,
+            model_name=scr_cfg.model_name,
+            temperature=scr_cfg.temperature,
+            max_tokens=scr_cfg.max_tokens,
+            confidence_threshold_dangerous=scr_cfg.confidence_threshold_dangerous,
+            confidence_threshold_suspicious=scr_cfg.confidence_threshold_suspicious,
         )
-        self._inject_agent_deps(correlation_agent, corr_cfg.backend)
-        self._agents["correlation"] = correlation_agent
+        self._inject_agent_deps(screening_agent, scr_cfg.backend)
+        self._agents["screening"] = screening_agent
 
-        # --- 研判智能体 ---
-        judgment_cfg = self.config.judgment
-        judgment_agent = JudgmentAgent(
-            name="JudgmentAgent",
-            system_prompt=judgment_cfg.system_prompt,
-            model_name=judgment_cfg.model_name,
-            temperature=judgment_cfg.temperature,
-            max_tokens=judgment_cfg.max_tokens,
+        # --- Layer 2: 回溯智能体 ---
+        bk_cfg = self.config.backtrack
+        backtrack_agent = BacktrackAgent(
+            name="BacktrackAgent",
+            system_prompt=bk_cfg.system_prompt,
+            model_name=bk_cfg.model_name,
+            temperature=bk_cfg.temperature,
+            max_tokens=bk_cfg.max_tokens,
+            relevance_threshold=bk_cfg.relevance_threshold,
         )
-        self._inject_agent_deps(judgment_agent, judgment_cfg.backend)
-        self._agents["judgment"] = judgment_agent
+        self._inject_agent_deps(backtrack_agent, bk_cfg.backend)
+        self._agents["backtrack"] = backtrack_agent
+
+        # --- Layer 3: 研判智能体 ---
+        adj_cfg = self.config.adjudication
+        adjudication_agent = AdjudicationAgent(
+            name="AdjudicationAgent",
+            system_prompt=adj_cfg.system_prompt,
+            model_name=adj_cfg.model_name,
+            temperature=adj_cfg.temperature,
+            max_tokens=adj_cfg.max_tokens,
+        )
+        self._inject_agent_deps(adjudication_agent, adj_cfg.backend)
+        self._agents["adjudication"] = adjudication_agent
 
         # --- 反馈智能体 ---
         fb_cfg = self.config.feedback
@@ -206,12 +208,6 @@ class Orchestrator:
         logger.info("Orchestrator 启动中...")
         self._init_backends()
         self._init_agents()
-
-        # 启动关联智能体后台任务
-        corr_agent = cast(CorrelationAgent, self._agents.get("correlation"))
-        if corr_agent and self.config.correlation.enabled:
-            await corr_agent.start_background_cleanup()
-
         self._running = True
         logger.info("Orchestrator 启动完成，智能体: %s", list(self._agents.keys()))
 
@@ -220,118 +216,170 @@ class Orchestrator:
         logger.info("Orchestrator 停止中...")
         self._running = False
 
-        corr_agent = cast(CorrelationAgent, self._agents.get("correlation"))
-        if corr_agent:
-            await corr_agent.stop_background_cleanup()
-
-        # 关闭后端连接
         for backend in self._backends.values():
             if hasattr(backend, "close"):
-                backend.close()  # type: ignore[attr-defined]
+                backend.close()
             if hasattr(backend, "aclose"):
                 try:
-                    await backend.aclose()  # type: ignore[attr-defined]
+                    await backend.aclose()
                 except Exception:
                     pass
         logger.info("Orchestrator 已停止")
 
-    # ========== 核心分析管线 ==========
+    # ========== 核心三层分析管线 ==========
 
     async def analyze_flow(self, flow: FlowEvent) -> ThreatVerdict:
         """
-        分析单条流量，执行完整管线：
-        检测 → 关联分析 → 综合研判 → 反馈记录 → 记忆系统写入。
+        三层分析管线:
+          Layer 1: 初步筛查
+            - dangerous → 告警回调 + 返回
+            - safe → 直接返回（丢弃）
+            - suspicious → 进入 Layer 2
+          Layer 2: 历史回溯 (查询DB相似记录 + LLM过滤关联度)
+          Layer 3: 最终研判
+            - dangerous → 告警回调 + 返回
+            - safe → 返回（丢弃）
+            - suspicious → 若未超过最大回溯次数，扩展窗口回到 Layer 2
+                          若已达上限，降级告警 + 返回
 
         Args:
-            flow: 从 P4 交换机获取的流量元数据
+            flow: 待分析的流量事件
 
         Returns:
-            ThreatVerdict: 综合威胁判定
+            ThreatVerdict: 最终威胁判定
         """
         if not self._running:
             raise RuntimeError("Orchestrator 未启动")
 
-        correlation_id = f"pipe-{uuid4().hex[:8]}"
+        pipeline_id = f"pipe-{uuid4().hex[:8]}"
         logger.info(
-            "开始分析管线 [%s]: %s:%d -> %s:%d",
-            correlation_id, flow.src_ip, flow.src_port,
+            "[%s] 开始三层分析: %s:%d -> %s:%d",
+            pipeline_id, flow.src_ip, flow.src_port,
             flow.dst_ip, flow.dst_port,
         )
 
-        # ---- 阶段1: 检测 ----
-        detection_agent = cast(DetectionAgent, self._agents["detection"])
-        detection_result = await detection_agent.process(flow)
+        # ========== Layer 1: 初步筛查 ==========
+        screening_agent = cast(ScreeningAgent, self._agents["screening"])
+        screening_result = await screening_agent.process(flow)
         logger.info(
-            "[%s] 检测结果: %s (置信度: %.2f)",
-            correlation_id, detection_result.verdict.value,
-            detection_result.confidence,
+            "[%s] L1-筛查: %s (置信度: %.2f)",
+            pipeline_id, screening_result.verdict.value,
+            screening_result.confidence,
         )
 
-        # 明确安全 → 快速返回
-        if detection_result.verdict == TrafficVerdict.SAFE:
-            return detection_result
+        # 使用阈值校准
+        calibrated = screening_agent.classify_threshold(screening_result)
 
-        # ---- 阶段2: 关联分析 ----
-        correlation_result: Optional[ThreatVerdict] = None
-        corr_agent = cast(CorrelationAgent, self._agents["correlation"])
-        if self.config.correlation.enabled and detection_result.verdict in (
-            TrafficVerdict.SUSPICIOUS, TrafficVerdict.MALICIOUS
-        ):
-            triggered = corr_agent.add_flow(flow, detection_result)
-            if triggered:
-                group_key = flow.src_ip or flow.dst_ip
-                correlation_result = await corr_agent.process_group(group_key)
-                if correlation_result:
-                    logger.info(
-                        "[%s] 关联结果: %s (置信度: %.2f)",
-                        correlation_id,
-                        correlation_result.verdict.value,
-                        correlation_result.confidence,
-                    )
+        if calibrated == "safe":
+            logger.info("[%s] L1 判定安全，丢弃", pipeline_id)
+            return screening_result
 
-        # ---- 阶段3: 综合研判 ----
-        judgment_agent = cast(JudgmentAgent, self._agents["judgment"])
-        if self.config.judgment.enabled:
-            final_verdict = await judgment_agent.process(
-                detection_result=detection_result,
-                correlation_result=correlation_result,
-                _correlation_id=correlation_id,
+        if calibrated == "dangerous":
+            logger.info("[%s] L1 判定危险，直接上报", pipeline_id)
+            self._alert_if_needed(screening_result, flow, pipeline_id)
+            self._record_to_memory(screening_result, flow)
+            return screening_result
+
+        # calibrated == "suspicious" — 进入 Layer 2/3 循环
+        logger.info("[%s] L1 判定可疑，进入 L2 历史回溯...", pipeline_id)
+
+        # ========== Layer 2 ⇄ Layer 3 循环 ==========
+        backtrack_cfg = self.config.backtrack
+        max_backtrack = backtrack_cfg.max_backtrack_count
+        lookback_hours = backtrack_cfg.initial_lookback_hours
+        multipler = backtrack_cfg.lookback_multiplier
+
+        backtrack_depth = 0
+        all_related_records: list[dict] = []
+        final_adjudication: Optional[ThreatVerdict] = None
+
+        while backtrack_depth < max_backtrack:
+            backtrack_depth += 1
+            logger.info(
+                "[%s] L2-回溯 第%d/%d次 窗口=%dh",
+                pipeline_id, backtrack_depth, max_backtrack, lookback_hours,
             )
-        else:
-            final_verdict = detection_result
 
-        logger.info(
-            "[%s] 最终判定: %s | 严重度: %s | 置信度: %.2f | 动作: %s",
-            correlation_id,
-            final_verdict.verdict.value,
-            final_verdict.severity.value,
-            final_verdict.confidence,
-            final_verdict.recommended_action,
-        )
+            # ---- Layer 2: 历史回溯 ----
+            similar_records = self._query_similar_flows(
+                flow_src_ip=flow.src_ip,
+                lookback_hours=lookback_hours,
+                max_records=backtrack_cfg.max_similar_records,
+            )
 
-        # ---- 阶段4: 反馈记录 ----
-        feedback_agent = cast(FeedbackAgent, self._agents.get("feedback"))
-        if feedback_agent and self.config.feedback.enabled:
-            await feedback_agent.process(verdict=final_verdict)
+            if not similar_records:
+                logger.info("[%s] L2 未找到相似历史记录", pipeline_id)
+            else:
+                backtrack_agent = cast(BacktrackAgent, self._agents["backtrack"])
+                backtrack_result = await backtrack_agent.process(flow, similar_records)
 
-        # ---- 阶段5: 推送高危告警到前端 (管理员审批链路入口) ----
-        if self.alert_callback and final_verdict.verdict in (
-            TrafficVerdict.MALICIOUS, TrafficVerdict.SUSPICIOUS,
-        ):
-            try:
-                self.alert_callback(final_verdict, flow)
-            except Exception:
-                logger.exception("[%s] 告警回调异常", correlation_id)
+                matched = backtrack_result.get("matched_records", [])
+                logger.info(
+                    "[%s] L2-回溯结果: 总相似=%d → 高关联=%d (阈值=%.2f)",
+                    pipeline_id, len(similar_records), len(matched),
+                    backtrack_cfg.relevance_threshold,
+                )
 
-        # ---- 阶段6: 写入记忆系统 (自适应) ----
-        self._record_to_memory(final_verdict, flow)
+                all_related_records.extend(matched)
 
-        return final_verdict
+            # ---- Layer 3: 最终研判 ----
+            adjudication_agent = cast(AdjudicationAgent, self._agents["adjudication"])
+            final_adjudication = await adjudication_agent.process(
+                flow=flow,
+                related_context=all_related_records,
+                backtrack_depth=backtrack_depth,
+                screening_result=screening_result,
+            )
+
+            logger.info(
+                "[%s] L3-研判 第%d次: %s | 严重度: %s | 置信度: %.2f",
+                pipeline_id, backtrack_depth,
+                final_adjudication.verdict.value,
+                final_adjudication.severity.value,
+                final_adjudication.confidence,
+            )
+
+            # safe → 停止循环，丢弃
+            if final_adjudication.verdict == TrafficVerdict.SAFE:
+                logger.info("[%s] L3 判定安全，停止回溯", pipeline_id)
+                break
+
+            # dangerous → 停止循环，上报
+            if final_adjudication.verdict == TrafficVerdict.MALICIOUS:
+                logger.info("[%s] L3 判定危险，上报前端", pipeline_id)
+                self._alert_if_needed(final_adjudication, flow, pipeline_id)
+                break
+
+            # suspicious → 扩展窗口继续回溯
+            if backtrack_depth < max_backtrack:
+                lookback_hours = int(lookback_hours * multipler)
+                logger.info(
+                    "[%s] L3 仍可疑，扩展回溯窗口至 %dh 继续...",
+                    pipeline_id, lookback_hours,
+                )
+            else:
+                logger.info(
+                    "[%s] L3 已达最大回溯次数(%d)，降级上报告警",
+                    pipeline_id, max_backtrack,
+                )
+
+        # ---- 循环结束后的处理 ----
+        if final_adjudication is None:
+            final_adjudication = screening_result
+
+        # 若最终仍是可疑且达到最大次数，告警
+        if (final_adjudication.verdict == TrafficVerdict.SUSPICIOUS
+                and backtrack_depth >= max_backtrack):
+            self._alert_if_needed(final_adjudication, flow, pipeline_id)
+
+        # 写入记忆系统
+        if final_adjudication.verdict in (TrafficVerdict.MALICIOUS, TrafficVerdict.SUSPICIOUS):
+            self._record_to_memory(final_adjudication, flow)
+
+        return final_adjudication
 
     def analyze_flow_sync(self, flow: FlowEvent) -> ThreatVerdict:
-        """
-        同步版本的流量分析（用于非异步环境）。
-        """
+        """同步版本的流量分析"""
         import asyncio
         try:
             asyncio.get_running_loop()
@@ -341,6 +389,65 @@ class Orchestrator:
             raise RuntimeError(
                 "在已有事件循环中无法使用同步方法，请使用 await orchestrator.analyze_flow()"
             )
+
+    # ========== 历史相似流量查询 ==========
+
+    def _query_similar_flows(
+        self,
+        flow_src_ip: str,
+        lookback_hours: int,
+        max_records: int = 20,
+    ) -> list[dict]:
+        """
+        从数据库查询与当前流量相似的历史记录。
+
+        查询策略：
+        - 同源IP的记录
+        - 在 lookback_hours 时间窗口内
+        - 排除当前记录自身
+        - 按时间降序排列（最近的优先）
+
+        Args:
+            flow_src_ip: 源IP
+            lookback_hours: 回溯时间窗口（小时）
+            max_records: 最大返回记录数
+
+        Returns:
+            list[dict]: 相似历史记录列表
+        """
+        if self._db_query_callback:
+            return self._db_query_callback(flow_src_ip, lookback_hours, max_records)
+
+        # 内置 DB 查询降级方案
+        try:
+            import sys
+            from pathlib import Path
+            _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+            if str(_PROJECT_ROOT) not in sys.path:
+                sys.path.insert(0, str(_PROJECT_ROOT))
+            from config.shared_config import DB_CONFIG
+            import pymysql
+
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+            conn = pymysql.connect(**DB_CONFIG, connect_timeout=5)
+            try:
+                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                    sql = (
+                        "SELECT id, src_ip, dst_ip, src_port, dst_port, protocol, "
+                        "traffic_size, department, entropy, created_at, packet_time "
+                        "FROM traffic_log "
+                        "WHERE src_ip = %s AND created_at >= %s "
+                        "ORDER BY created_at DESC "
+                        "LIMIT %s"
+                    )
+                    cursor.execute(sql, (flow_src_ip, cutoff, max_records))
+                    rows = cursor.fetchall()
+                    return list(rows) if rows else []
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("[Orchestrator] 查询历史相似流量失败")
+            return []
 
     # ========== 管理员反馈 ==========
 
@@ -352,19 +459,7 @@ class Orchestrator:
         verdict_id: str = "",
         admin_note: str = "",
     ) -> dict:
-        """
-        管理员标记反馈。
-
-        Args:
-            feedback_type: 'false_positive' / 'false_negative' / 'confirm_malicious'
-            src_ip: 源 IP
-            dst_ip: 目的 IP
-            verdict_id: 关联的判定 ID
-            admin_note: 管理员备注
-
-        Returns:
-            dict: 规则变更结果
-        """
+        """管理员标记反馈"""
         feedback = AdminFeedback(
             verdict_id=verdict_id,
             feedback_type=feedback_type,
@@ -416,14 +511,25 @@ class Orchestrator:
             "feedback_stats": feedback_agent.get_statistics() if feedback_agent else {},
         }
 
+    # ========== 内部辅助 ==========
+
+    def _alert_if_needed(self, verdict: ThreatVerdict, flow: FlowEvent, pipeline_id: str) -> None:
+        """推送高危/可疑告警到前端"""
+        if self.alert_callback and verdict.verdict in (
+            TrafficVerdict.MALICIOUS, TrafficVerdict.SUSPICIOUS,
+        ):
+            try:
+                self.alert_callback(verdict, flow)
+            except Exception:
+                logger.exception("[%s] 告警回调异常", pipeline_id)
+
     def _record_to_memory(self, verdict: ThreatVerdict, flow: FlowEvent) -> None:
-        """将判定结果写入记忆系统（自适应 Tier 0 案例记录）"""
+        """将判定结果写入记忆系统"""
         try:
             from .memory import get_store, get_index
             store = get_store()
             index = get_index()
 
-            # 查询当时匹配的模式卡片
             features = {
                 "department": getattr(flow, "department", ""),
                 "protocol": getattr(flow, "protocol", "TCP"),
@@ -441,8 +547,8 @@ class Orchestrator:
                 ai_confidence=verdict.confidence,
                 ai_reasoning=verdict.reasoning[:500],
                 ai_threat_type=verdict.threat_type,
-                admins_action="",      # 尚未经管理员确认
-                ai_correct=False,      # 默认为 False，等管理员反馈后更正
+                admins_action="",
+                ai_correct=False,
                 admin_note="",
                 src_ip=flow.src_ip,
                 dst_ip=flow.dst_ip,
@@ -461,6 +567,7 @@ class Orchestrator:
                 matched_pattern_ids=matched_ids,
             )
         except Exception:
-            pass  # 记忆系统不可用不影响研判
+            pass
+
 
 __all__ = ["Orchestrator"]

@@ -1,8 +1,13 @@
 """
 多智能体系统配置数据模型
 ========================
-定义 LLM 后端配置、智能体配置、规则库配置等数据结构。
+定义 LLM 后端配置、智能体配置等数据结构。
 支持在线 API 和 LM Studio 本地 AI 两种后端。
+
+三层智能体架构:
+  Layer 1 — ScreeningAgent: 初步筛查，多线程逐条分析
+  Layer 2 — BacktrackAgent: 历史回溯，查找相似数据并过滤关联度
+  Layer 3 — AdjudicationAgent: 最终研判，结合回溯数据二次判定
 
 本模块是纯数据模型定义，不涉及文件 I/O。
 文件 I/O 由 config/loader.py 负责。
@@ -50,61 +55,97 @@ class LLMBackendConfig:
     include_reasoning: bool = False           # 是否在回复中包含思考过程
 
 
+# ============================================================
+# 三层智能体配置
+# ============================================================
+
+
 @dataclass
-class DetectionAgentConfig:
-    """检测智能体配置"""
+class ScreeningAgentConfig:
+    """Layer 1 — 初步筛查智能体配置"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
     system_prompt: str = (
-        "你是一个网络安全流量分析专家。请根据提供的流量元数据，判断该流量是否为恶意。"
-        "回复格式：{ verdict: 'malicious'|'suspicious'|'safe', "
-        "confidence: 0.0-1.0, reasoning: '简短理由', "
-        "threat_type: '数据泄露'|'C2通信'|'扫描'|'正常'|'未知' }"
+        "你是一个内部威胁检测专家，专门识别组织内部人员的隐蔽数据泄露行为。"
+        "请根据提供的流量元数据，判断该流量是否存在内部泄密风险。\n\n"
+        "## 核心检测维度\n"
+        "1. **数据外传特征**：非标准端口的大流量TLS、异常DNS查询(TXT/MX记录过长)、ICMP隧道、非工作时段的数据传输\n"
+        "2. **频率隐蔽性**：单次数据量刻意控制在正常范围内(<10MB)，但加密熵极高(>7.5)\n"
+        "3. **协议异常**：非标准应用层协议、伪装成HTTP/HTTPS/DNS的隐蔽信道\n"
+        "4. **数据敏感性**：访问非授权的高密级数据\n"
+        "5. **时段异常**：非工作时段(22:00-06:00)或周末/节假日的异常访问\n"
+        "6. **行为基线偏离**：当前行为与该用户/设备历史基线有显著偏差(Z-score > 2.0)\n\n"
+        "## 判定标准\n"
+        "- 若多个维度同时异常或涉及高密级数据外传 → dangerous\n"
+        "- 若仅有1-2个弱信号但可疑 → suspicious\n"
+        "- 若完全符合正常行为模式 → safe\n\n"
+        "回复格式：{ \"verdict\": \"dangerous\"|\"suspicious\"|\"safe\", "
+        "\"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", "
+        "\"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"未授权访问\"|\"正常\"|\"未知\", "
+        "\"insider_threat_indicators\": [\"指标1\", \"指标2\"] }"
     )
     temperature: float = 0.3
     max_tokens: int = 1024
     max_context_tokens: int = 4096
-    confidence_threshold_malicious: float = 0.85
-    confidence_threshold_suspect: float = 0.50
+    confidence_threshold_dangerous: float = 0.85
+    confidence_threshold_suspicious: float = 0.50
 
 
 @dataclass
-class CorrelationAgentConfig:
-    """关联智能体配置"""
+class BacktrackAgentConfig:
+    """Layer 2 — 历史回溯智能体配置"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
     system_prompt: str = (
-        "你是一个网络安全关联分析专家。给定一组来自同一源IP或同类特征的流量记录，"
-        "请判断它们之间是否存在关联的恶意行为模式。"
-        "回复格式：{ is_correlated: true|false, "
-        "correlation_type: '数据外传'|'横向移动'|'C2心跳'|'无关联', "
-        "confidence: 0.0-1.0, reasoning: '分析逻辑' }"
+        "你是一个历史流量关联分析专家。给定当前可疑流量和一批来自相同源IP/部门的"
+        "历史流量记录，请逐条判断每条历史记录与当前流量的关联度（0.0-1.0），"
+        "只保留关联度 >= 设定阈值的记录。\n\n"
+        "## 关联度判定维度\n"
+        "1. **目标相似度**：目的IP/端口/协议是否与当前流量一致或相似\n"
+        "2. **行为模式相似度**：传输数据量、加密熵、时段模式是否相似\n"
+        "3. **时序关联**：时间上是否呈现规则间隔或渐进变化\n"
+        "4. **部门/角色关联**：是否同一部门、同一角色的相似行为\n\n"
+        "回复格式：{ \"relevant_records\": ["
+        "{\"record_id\": 整数, \"relevance\": 0.0-1.0, \"reason\": \"简短理由\"}, ...], "
+        "\"summary\": \"整体回溯发现总结\" }"
     )
     temperature: float = 0.3
     max_tokens: int = 2048
-    correlation_window_minutes: int = 30
-    min_records_to_correlate: int = 5
-    max_buffer_per_src: int = 100
-    cleanup_interval_seconds: int = 60
+    initial_lookback_hours: int = 24          # 首次回溯窗口（小时）
+    max_backtrack_count: int = 3               # 最大回溯循环次数
+    lookback_multiplier: float = 7.0           # 每次扩展倍数（1d→7d→49d）
+    relevance_threshold: float = 0.6           # 关联度阈值（低于此值丢弃）
+    max_similar_records: int = 20              # 每次回溯最多拉取相似记录数
 
 
 @dataclass
-class JudgmentAgentConfig:
-    """研判智能体配置"""
+class AdjudicationAgentConfig:
+    """Layer 3 — 最终研判智能体配置"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
     system_prompt: str = (
-        "你是一个网络安全威胁研判专家。请综合单流检测结果和关联分析结果，"
-        "给出最终的威胁判定和处置建议。"
-        "回复格式：{ verdict: 'malicious'|'suspicious'|'safe', "
-        "severity: 'critical'|'high'|'medium'|'low'|'info', "
-        "confidence: 0.0-1.0, "
-        "recommended_action: 'block'|'monitor'|'allow'|'quarantine', "
-        "reasoning: '综合研判逻辑', "
-        "evidence_summary: ['证据1', '证据2'] }"
+        "你是一个内部威胁最终研判专家。请结合原始可疑流量及其历史关联数据，"
+        "进行最终的威胁判定。\n\n"
+        "## 研判核心原则\n"
+        "1. **弱信号聚合**：单一维度可疑不足为据，但多个弱信号叠加可能构成明确威胁\n"
+        "2. **长周期视角**：结合历史回溯数据判断是否存在持续性模式\n"
+        "3. **关联度加权**：高关联度历史记录更有研判价值\n"
+        "4. **误报宽容度**：内部威胁检测宁可多报不可漏报，但需合理标注置信度\n\n"
+        "## 严重度判定标准\n"
+        "- **critical**: 确认高密级数据外传，或累计外传>100MB，或持续>30天\n"
+        "- **high**: 疑似数据外传+多个弱信号(4+)，或累计外传>50MB，或持续>7天\n"
+        "- **medium**: 可疑行为+2-3个弱信号，或短期异常但无明显数据泄露证据\n"
+        "- **low**: 仅有1个弱信号，或轻微异常，需持续观察\n"
+        "- **info**: 单次异常但无规律，降级观察\n\n"
+        "回复格式：{ \"verdict\": \"dangerous\"|\"suspicious\"|\"safe\", "
+        "\"severity\": \"critical\"|\"high\"|\"medium\"|\"low\"|\"info\", "
+        "\"confidence\": 0.0-1.0, "
+        "\"recommended_action\": \"block\"|\"monitor\"|\"allow\"|\"quarantine\", "
+        "\"reasoning\": \"综合研判逻辑\", "
+        "\"evidence_summary\": [\"证据1\", \"证据2\"] }"
     )
     temperature: float = 0.3
     max_tokens: int = 2048
@@ -134,75 +175,8 @@ class FeedbackAgentConfig:
 
 
 @dataclass
-class BaselineProfilingAgentConfig:
-    """行为基线画像智能体配置"""
-    enabled: bool = True
-    backend: BackendType = BackendType.DEEPSEEK
-    model_name: str = "deepseek-v4-flash"
-    system_prompt: str = (
-        "你是一个用户行为基线分析专家。请根据用户的长期历史流量记录，"
-        "构建正常行为画像并识别异常偏离。\n\n"
-        "## 分析维度\n"
-        "1. **频率基线**：该用户/部门在不同时段的正常网络请求频率\n"
-        "2. **数据量基线**：正常的数据传输量分布（单次/每小时/每天）\n"
-        "3. **协议习惯**：通常使用的网络协议和应用类型\n"
-        "4. **目标资产画像**：正常访问的服务器类型和频率\n"
-        "5. **数据密级访问模式**：与角色关联的数据密级\n"
-        "6. **周期性模式**：按小时/天/周的行为规律\n\n"
-        "回复格式：{ \"baseline_summary\": \"基线总结\", "
-        "\"anomaly_detected\": true|false, "
-        "\"anomaly_details\": [\"异常点描述\"], "
-        "\"baseline_shift_detected\": true|false, "
-        "\"confidence\": 0.0-1.0 }"
-    )
-    temperature: float = 0.2
-    max_tokens: int = 2048
-    update_interval_hours: int = 24
-    max_baseline_age_days: int = 90
-
-
-@dataclass
-class TemporalAnomalyAgentConfig:
-    """时序异常智能体配置"""
-    enabled: bool = True
-    backend: BackendType = BackendType.DEEPSEEK
-    model_name: str = "deepseek-v4-flash"
-    system_prompt: str = (
-        "你是一个时序异常分析专家，专门从长时间窗口（7天-90天）的网络日志中，"
-        "识别隐蔽的内部威胁行为模式。\n\n"
-        "## 重点检测的时序模式\n"
-        "1. **周期性低频传输**：每天/每周固定时间的小量数据传输（<5MB），间隔稳定\n"
-        "2. **渐进式递增**：每日数据传输量呈稳步上升趋势，表明攻击者逐渐试探监控阈值\n"
-        "3. **信标/心跳**：严格定间隔的极小包（<1KB），如每15min/每1h/每24h\n"
-        "4. **静默-活跃交替**：活动几天后突然静默数日再恢复\n"
-        "5. **目标切换模式**：目标IP/端口周期性地轮换，使用分段外传策略\n"
-        "6. **衰减模式**：活动频率逐渐降低但每次传输数据量增加\n"
-        "7. **突发后静默**：一次性大量数据传输后长期无活动\n\n"
-        "回复格式：{ \"temporal_anomaly_detected\": true|false, "
-        "\"pattern_type\": \"周期性低频\"|\"渐进递增\"|\"信标心跳\"|\"静默交替\"|"
-        "\"目标轮换\"|\"衰减收尾\"|\"突发后静默\"|\"无异常\", "
-        "\"confidence\": 0.0-1.0, "
-        "\"reasoning\": \"时序分析逻辑（请引用具体的时间窗口和数据点）\", "
-        "\"period_estimated_minutes\": 0, "
-        "\"trend_description\": \"趋势描述\" }"
-    )
-    temperature: float = 0.3
-    max_tokens: int = 2048
-    default_window_days: int = 30
-    slice_size_hours: int = 6
-
-
-@dataclass
-class DeepAnalysisConfig:
-    """深度分析层配置"""
-    analysis_interval_hours: int = 24
-    baseline_profiling: BaselineProfilingAgentConfig = field(default_factory=BaselineProfilingAgentConfig)
-    temporal_anomaly: TemporalAnomalyAgentConfig = field(default_factory=TemporalAnomalyAgentConfig)
-
-
-@dataclass
 class LiveScanAgentConfig:
-    """第一类智能体：逐条评判队列扫描配置"""
+    """逐条评判队列扫描配置"""
     enabled: bool = True                        # 管理员开关
     scan_interval_seconds: float = 5.0          # 每条之间的扫描间隔（节流）
     batch_size: int = 50                        # 每次从 DB 拉取的批量大小
@@ -211,25 +185,13 @@ class LiveScanAgentConfig:
 
 
 @dataclass
-class RetrospectiveScanAgentConfig:
-    """第二类智能体：长周期回溯检查配置"""
-    enabled: bool = True                        # 管理员开关
-    frequency_minutes: int = 60                 # 运行频次（分钟），默认每小时
-    lookback_days: int = 30                     # 回溯天数
-    entities_per_cycle: int = 10                # 每次检查的员工数
-    slice_hours: int = 6                        # 时序切片粒度（小时）
-
-
-@dataclass
 class OrchestratorConfig:
-    """编排器总配置"""
-    detection: DetectionAgentConfig = field(default_factory=DetectionAgentConfig)
-    correlation: CorrelationAgentConfig = field(default_factory=CorrelationAgentConfig)
-    judgment: JudgmentAgentConfig = field(default_factory=JudgmentAgentConfig)
+    """编排器总配置 — 三层智能体架构"""
+    screening: ScreeningAgentConfig = field(default_factory=ScreeningAgentConfig)
+    backtrack: BacktrackAgentConfig = field(default_factory=BacktrackAgentConfig)
+    adjudication: AdjudicationAgentConfig = field(default_factory=AdjudicationAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
-    deep_analysis: DeepAnalysisConfig = field(default_factory=DeepAnalysisConfig)
     live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
-    retrospective_scan: RetrospectiveScanAgentConfig = field(default_factory=RetrospectiveScanAgentConfig)
     # 全局后端连接池配置
     default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
 

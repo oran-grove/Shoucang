@@ -16,13 +16,10 @@
 from .schema import (
     BackendType,
     LLMBackendConfig,
-    DetectionAgentConfig,
-    CorrelationAgentConfig,
-    JudgmentAgentConfig,
+    ScreeningAgentConfig,
+    BacktrackAgentConfig,
+    AdjudicationAgentConfig,
     FeedbackAgentConfig,
-    BaselineProfilingAgentConfig,
-    TemporalAnomalyAgentConfig,
-    DeepAnalysisConfig,
     OrchestratorConfig,
 )
 
@@ -40,13 +37,10 @@ __all__ = [
     # 数据模型
     "BackendType",
     "LLMBackendConfig",
-    "DetectionAgentConfig",
-    "CorrelationAgentConfig",
-    "JudgmentAgentConfig",
+    "ScreeningAgentConfig",
+    "BacktrackAgentConfig",
+    "AdjudicationAgentConfig",
     "FeedbackAgentConfig",
-    "BaselineProfilingAgentConfig",
-    "TemporalAnomalyAgentConfig",
-    "DeepAnalysisConfig",
     "OrchestratorConfig",
     # 加载器
     "load_config",

@@ -3,7 +3,6 @@
 多智能体编排器包
 ================
 - LiveScanOrchestrator: 逐条分析队列扫描
-- DeepAnalysisOrchestrator: 基线画像 / 时序异常 / 长周期深度分析
 - row_to_flow_event(): 将 traffic_log 数据库行转为 FlowEvent（共享工具函数）
 """
 
@@ -14,7 +13,7 @@ def row_to_flow_event(row: dict) -> FlowEvent:
     """
     将 traffic_log 数据库行转换为 FlowEvent。
 
-    供 LiveScanOrchestrator 和 DeepAnalysisOrchestrator 共用，
+    供 LiveScanOrchestrator 使用，
     避免重复的 DB row → FlowEvent 转换逻辑。
 
     traffic_log 表字段:

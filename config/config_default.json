@@ -1,7 +1,7 @@
 {
   "_comment": "守藏 多智能体分析系统 — 默认配置文件",
   "_description": "所有字段均为出厂默认值。此文件仅用于重置设置或错误配置回滚，日常运行请编辑 config_user.json。所有智能体提示词在此文件中集中管理，不在源代码中硬编码。",
-  "_version": "2.0",
+  "_version": "3.0",
 
   "backends": {
     "openai": {
@@ -67,104 +67,65 @@
     }
   },
 
-  "detection": {
-    "_comment": "检测智能体 — 单流内部威胁初步筛查",
+  "screening": {
+    "_comment": "Layer 1 — 初步筛查智能体 — 逐条快速研判",
     "enabled": true,
     "backend": "deepseek",
     "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 1024,
     "max_context_tokens": 4096,
-    "confidence_threshold_malicious": 0.85,
-    "confidence_threshold_suspect": 0.50,
-    "system_prompt": "你是一个内部威胁检测专家，专门识别组织内部人员的隐蔽数据泄露行为。请根据提供的流量元数据，判断该流量是否存在内部泄密风险。\n\n## 核心检测维度\n1. **数据外传特征**：非标准端口的大流量TLS、异常DNS查询(TXT/MX记录过长)、ICMP隧道、非工作时段的数据传输\n2. **频率隐蔽性**：单次数据量刻意控制在正常范围内(<10MB)，但加密熵极高(>7.5)\n3. **协议异常**：非标准应用层协议、伪装成HTTP/HTTPS/DNS的隐蔽信道\n4. **数据敏感性**：访问非授权的高密级数据（如普通员工访问机密文件服务器）\n5. **时段异常**：非工作时段(22:00-06:00)或周末/节假日的异常访问\n6. **行为基线偏离**：当前行为与该用户/设备历史基线有显著偏差(Z-score > 2.0)\n\n## 判定标准\n- 若多个维度同时异常或涉及高密级数据外传 → malicious\n- 若仅有1-2个弱信号但可疑 → suspicious\n- 若完全符合正常行为模式 → safe\n\n回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", \"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", \"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"未授权访问\"|\"正常\"|\"未知\", \"insider_threat_indicators\": [\"指标1\", \"指标2\"] }",
+    "confidence_threshold_dangerous": 0.85,
+    "confidence_threshold_suspicious": 0.50,
+    "system_prompt": "你是一个内部威胁检测专家，专门识别组织内部人员的隐蔽数据泄露行为。请根据提供的流量元数据，判断该流量是否存在内部泄密风险。\n\n## 核心检测维度\n1. **数据外传特征**：非标准端口的大流量TLS、异常DNS查询(TXT/MX记录过长)、ICMP隧道、非工作时段的数据传输\n2. **频率隐蔽性**：单次数据量刻意控制在正常范围内(<10MB)，但加密熵极高(>7.5)\n3. **协议异常**：非标准应用层协议、伪装成HTTP/HTTPS/DNS的隐蔽信道\n4. **数据敏感性**：访问非授权的高密级数据\n5. **时段异常**：非工作时段(22:00-06:00)或周末/节假日的异常访问\n6. **行为基线偏离**：当前行为与该用户/设备历史基线有显著偏差(Z-score > 2.0)\n\n## 判定标准\n- 若多个维度同时异常或涉及高密级数据外传 → dangerous\n- 若仅有1-2个弱信号但可疑 → suspicious\n- 若完全符合正常行为模式 → safe\n\n回复格式：{ \"verdict\": \"dangerous\"|\"suspicious\"|\"safe\", \"confidence\": 0.0-1.0, \"reasoning\": \"分析理由（基于上述维度的具体发现）\", \"threat_type\": \"数据泄露\"|\"C2通信\"|\"隐蔽信道\"|\"未授权访问\"|\"正常\"|\"未知\", \"insider_threat_indicators\": [\"指标1\", \"指标2\"] }",
     "_backend_options": ["openai", "lmstudio", "deepseek"]
   },
 
-    "correlation": {
-    "_comment": "关联智能体 — 短期（30min窗口）流量关联攻击模式分析",
+  "backtrack": {
+    "_comment": "Layer 2 — 历史回溯智能体 — 查找相似数据并过滤关联度",
     "enabled": true,
     "backend": "deepseek",
     "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 2048,
-    "correlation_window_minutes": 30,
-    "min_records_to_correlate": 5,
-    "max_buffer_per_src": 100,
-    "cleanup_interval_seconds": 60,
-    "system_prompt": "你是一个内部威胁关联分析专家。给定一组来自同一源IP或同类特征的流量记录，请判断它们之间是否存在关联的内部泄密行为模式。重点关注：（1）同一用户在短时间内的多维度越权行为组合（2）碎片化数据分片外传模式（3）短窗口内目标资产/数据密级的变化模式。\n\n回复格式：{ \"is_correlated\": true|false, \"correlation_type\": \"数据外传\"|\"横向移动\"|\"C2心跳\"|\"未授权访问\"|\"分片外传\"|\"无关联\", \"confidence\": 0.0-1.0, \"reasoning\": \"分析逻辑\" }",
+    "initial_lookback_hours": 24,
+    "max_backtrack_count": 3,
+    "lookback_multiplier": 7.0,
+    "relevance_threshold": 0.6,
+    "max_similar_records": 20,
+    "system_prompt": "你是一个历史流量关联分析专家。给定当前可疑流量和一批来自相同源IP/部门的历史流量记录，请逐条判断每条历史记录与当前流量的关联度（0.0-1.0），只保留关联度 >= 设定阈值的记录。\n\n## 关联度判定维度\n1. **目标相似度**：目的IP/端口/协议是否与当前流量一致或相似\n2. **行为模式相似度**：传输数据量、加密熵、时段模式是否相似\n3. **时序关联**：时间上是否呈现规则间隔或渐进变化\n4. **部门/角色关联**：是否同一部门、同一角色的相似行为\n\n回复格式：{ \"relevant_records\": [{\"record_id\": 整数, \"relevance\": 0.0-1.0, \"reason\": \"简短理由\"}, ...], \"summary\": \"整体回溯发现总结\" }",
     "_backend_options": ["openai", "lmstudio", "deepseek"]
   },
 
-    "judgment": {
-    "_comment": "研判智能体 — 综合检测+关联结果给出最终判定",
+  "adjudication": {
+    "_comment": "Layer 3 — 最终研判智能体 — 结合回溯数据二次判定",
     "enabled": true,
     "backend": "deepseek",
     "model_name": "deepseek-v4-flash",
     "temperature": 0.3,
     "max_tokens": 2048,
-    "system_prompt": "你是一个内部威胁综合研判专家，专门评估长周期、低频率、高隐蔽性的内部泄密行为。请综合单流检测结果、关联分析结果、行为基线偏离度、时序异常评分，给出最终的威胁判定和处置建议。\n\n## 研判核心原则\n1. **弱信号聚合**：单一维度可疑不足为据，但多个弱信号叠加可能构成明确威胁。例如：非工作时段(1分) + 高熵加密(1分) + 访问高密级数据(1分) + 频率Z-score>2(1分) → 综合研判升级\n2. **长周期视角**：短时间窗口看不出问题不代表安全，需结合7d/30d的基线偏离和时序异常。单次传输5MB可能是正常，连续30天每晚传输5MB就是明显的泄密\n3. **用户画像**：同一行为对开发人员正常，对财务人员异常。结合部门/角色/数据密级维度判定\n4. **误报宽容度**：内部威胁检测宁可多报不可漏报，但需合理标注置信度\n\n## 严重度判定标准\n- **critical**: 确认高密级(机密/绝密)数据外传，或累计外传>100MB，或持续>30天\n- **high**: 疑似数据外传+多个弱信号(4+)，或累计外传>50MB，或持续>7天\n- **medium**: 可疑行为+2-3个弱信号，或短期异常但无明显数据泄露证据\n- **low**: 仅有1个弱信号，或轻微偏离基线，需持续观察\n- **info**: 单次异常但无规律，降级观察\n\n回复格式：{ \"verdict\": \"malicious\"|\"suspicious\"|\"safe\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\"|\"info\", \"confidence\": 0.0-1.0, \"recommended_action\": \"block\"|\"monitor\"|\"allow\"|\"quarantine\", \"reasoning\": \"综合研判逻辑（请逐一列出各维度评分和最终聚合逻辑）\", \"evidence_summary\": [\"证据1\", \"证据2\"], \"weak_signal_score\": 整数(0-10), \"rule_ttl_minutes\": 整数 }",
+    "system_prompt": "你是一个内部威胁最终研判专家。请结合原始可疑流量及其历史关联数据，进行最终的威胁判定。\n\n## 研判核心原则\n1. **弱信号聚合**：单一维度可疑不足为据，但多个弱信号叠加可能构成明确威胁。例如：非工作时段(1分) + 高熵加密(1分) + 访问高密级数据(1分) + 频率异常(1分) → 综合研判升级\n2. **长周期视角**：短时间窗口看不出问题不代表安全，需结合历史回溯数据判断是否存在持续性模式\n3. **关联度加权**：高关联度历史记录更有研判价值，多周期重复出现的行为应升级判定\n4. **用户画像**：同一行为对开发人员正常，对财务人员异常。结合部门/角色/数据密级维度判定\n5. **误报宽容度**：内部威胁检测宁可多报不可漏报，但需合理标注置信度\n\n## 严重度判定标准\n- **critical**: 确认高密级(机密/绝密)数据外传，或累计外传>100MB，或持续>30天\n- **high**: 疑似数据外传+多个弱信号(4+)，或累计外传>50MB，或持续>7天\n- **medium**: 可疑行为+2-3个弱信号，或短期异常但无明显数据泄露证据\n- **low**: 仅有1个弱信号，或轻微偏离基线，需持续观察\n- **info**: 单次异常但无规律，降级观察\n\n回复格式：{ \"verdict\": \"dangerous\"|\"suspicious\"|\"safe\", \"severity\": \"critical\"|\"high\"|\"medium\"|\"low\"|\"info\", \"confidence\": 0.0-1.0, \"recommended_action\": \"block\"|\"monitor\"|\"allow\"|\"quarantine\", \"reasoning\": \"综合研判逻辑（请逐一列出各维度评分和最终聚合逻辑）\", \"evidence_summary\": [\"证据1\", \"证据2\"], \"weak_signal_score\": 整数(0-10) }",
     "_backend_options": ["openai", "lmstudio", "deepseek"]
   },
 
-    "feedback": {
+  "feedback": {
     "_comment": "反馈智能体 — 处理管理员反馈并优化规则，自适应学习",
     "enabled": true,
     "backend": "deepseek",
     "model_name": "deepseek-v4-flash",
     "temperature": 0.2,
     "max_tokens": 1024,
-    "system_prompt": "你是一个内部威胁检测系统的规则优化与自适应学习专家。根据管理员反馈和历史判定记录，提出规则调整建议，确保系统在内部泄密检测中持续降低误报、减少漏报。\n\n## 优化策略\n1. **误报分析**：分析误报特征，调整检测阈值（如提高可疑置信度门槛）或添加白名单规则（如特定部门的常规数据传输模式）\n2. **漏报分析**：逆向分析漏报案例，确定哪些弱信号组合被遗漏，建议降低相关维度阈值或增加新的检测模式\n3. **用户画像更新**：根据同类用户的实际行为，动态调整个人/部门基线容差（如财务部门的大文件传输可能是正常的月末报表）\n4. **TTL自适应**：根据反馈确认的威胁严重度和用户历史记录，自适应调整规则有效期\n5. **长周期模式学习**：记录管理员确认的长周期泄密案例，提取低慢外传的模式特征，反馈给检测和关联智能体\n\n回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|\"adjust_confidence\"|\"adjust_threshold\"|\"update_baseline\"|\"no_change\", \"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, \"ttl_minutes\": 整数, \"reasoning\": \"调整理由（含模式学习结论）\", \"learned_pattern\": \"从案例中学到的模式特征（可选）\" }",
+    "system_prompt": "你是一个内部威胁检测系统的规则优化与自适应学习专家。根据管理员反馈和历史判定记录，提出规则调整建议，确保系统在内部泄密检测中持续降低误报、减少漏报。\n\n## 优化策略\n1. **误报分析**：分析误报特征，调整检测阈值（如提高可疑置信度门槛）或添加白名单规则（如特定部门的常规数据传输模式）\n2. **漏报分析**：逆向分析漏报案例，确定哪些弱信号组合被遗漏，建议降低相关维度阈值或增加新的检测模式\n3. **用户画像更新**：根据同类用户的实际行为，动态调整个人/部门基线容差（如财务部门的大文件传输可能是正常的月末报表）\n4. **TTL自适应**：根据反馈确认的威胁严重度和用户历史记录，自适应调整规则有效期\n5. **长周期模式学习**：记录管理员确认的长周期泄密案例，提取低慢外传的模式特征，反馈给检测和回溯智能体\n\n回复格式：{ \"action\": \"upgrade_to_blacklist\"|\"downgrade_to_whitelist\"|\"adjust_confidence\"|\"adjust_threshold\"|\"update_baseline\"|\"no_change\", \"rule_id\": \"规则ID\", \"new_confidence\": 0.0-1.0, \"ttl_minutes\": 整数, \"reasoning\": \"调整理由（含模式学习结论）\", \"learned_pattern\": \"从案例中学到的模式特征（可选）\" }",
     "_backend_options": ["openai", "lmstudio", "deepseek"]
   },
 
-  "deep_analysis": {
-    "_comment": "深度分析层配置 — 负责长周期异步深度分析",
-    "analysis_interval_hours": 24,
-
-    "baseline_profiling": {
-      "_comment": "行为基线画像智能体 — 构建用户/部门正常行为基线",
-      "enabled": true,
-      "backend": "deepseek",
-      "model_name": "deepseek-v4-flash",
-      "temperature": 0.2,
-      "max_tokens": 2048,
-      "update_interval_hours": 24,
-      "max_baseline_age_days": 90,
-      "system_prompt": "你是一个用户行为基线分析专家。请根据用户的长期历史流量记录，构建正常行为画像并识别异常偏离。\n\n## 分析维度\n1. **频率基线**：该用户/部门在不同时段（工作时间/非工作时间）的正常网络请求频率\n2. **数据量基线**：正常的数据传输量分布（单次/每小时/每天）\n3. **协议习惯**：通常使用的网络协议和应用类型\n4. **目标资产画像**：正常访问的服务器类型和频率\n5. **数据密级访问模式**：与角色关联的数据密级，例如：研发人员通常访问内部/机密代码库，财务人员通常访问内部财务系统，行政人员通常访问公开/内部文档\n6. **周期性模式**：按小时/天/周的行为规律\n\n回复格式：{ \"baseline_summary\": \"基线总结\", \"anomaly_detected\": true|false, \"anomaly_details\": [\"异常点描述\"], \"baseline_shift_detected\": true|false, \"confidence\": 0.0-1.0 }",
-      "_backend_options": ["openai", "lmstudio", "deepseek"]
-    },
-
-    "temporal_anomaly": {
-      "_comment": "时序异常智能体 — 长周期趋势与隐蔽模式检测",
-      "enabled": true,
-      "backend": "deepseek",
-      "model_name": "deepseek-v4-flash",
-      "temperature": 0.3,
-      "max_tokens": 2048,
-      "default_window_days": 30,
-      "slice_size_hours": 6,
-      "system_prompt": "你是一个时序异常分析专家，专门从长时间窗口（7天-90天）的网络日志中，识别隐蔽的内部威胁行为模式。\n\n## 重点检测的时序模式\n1. **周期性低频传输**：每天/每周固定时间的小量数据传输(<5MB)，间隔稳定（如每日02:00±5min），持续数周\n2. **渐进式递增**：每日数据传输量呈稳步上升趋势（如5MB→8MB→12MB→20MB），表明攻击者逐渐试探监控阈值\n3. **信标/心跳**：严格定间隔的极小包(<1KB)，如每15min、每1h、每24h，持续维持与C2的通信\n4. **静默-活跃交替**：活动几天后突然静默数日再恢复，可能是在规避检测或等待新指令\n5. **目标切换模式**：目标IP/端口周期性地轮换，每次传输数据量相似，使用分段外传策略\n6. **衰减模式**：活动频率逐渐降低但每次传输数据量增加，可能是已获取所需资料后的收尾阶段\n7. **突发后静默**：一次性大量数据传输后长期无活动，可能是已完成窃取后撤离\n\n## 判定标准\n- 若存在>=2周的稳定周期性模式 → 高风险\n- 若存在明显递增/递减趋势 + 高熵加密 → 高风险\n- 若存在严格信标间隔(偏差<5%) → 中高风险(疑似C2)\n- 若仅有轻微不规则波动 → 安全\n\n回复格式：{ \"temporal_anomaly_detected\": true|false, \"pattern_type\": \"周期性低频\"|\"渐进递增\"|\"信标心跳\"|\"静默交替\"|\"目标轮换\"|\"衰减收尾\"|\"突发后静默\"|\"无异常\", \"confidence\": 0.0-1.0, \"reasoning\": \"时序分析逻辑（请引用具体的时间窗口和数据点）\", \"period_estimated_minutes\": 0, \"trend_description\": \"趋势描述\" }",
-      "_backend_options": ["openai", "lmstudio", "deepseek"]
-    }
-  },
-
   "live_scan": {
-    "_comment": "第一类智能体：逐条评判队列扫描 — 实时从 DB 拉取未分析记录逐条研判",
+    "_comment": "逐条评判队列扫描 — 实时从 DB 拉取未分析记录逐条研判",
     "enabled": true,
     "scan_interval_seconds": 5.0,
     "batch_size": 50,
     "max_concurrent_analyses": 3,
     "start_from": "oldest"
-  },
-
-  "retrospective_scan": {
-    "_comment": "第二类智能体：长周期员工行为回溯检查 — 定时扫描长期历史数据",
-    "enabled": true,
-    "frequency_minutes": 60,
-    "lookback_days": 30,
-    "entities_per_cycle": 10,
-    "slice_hours": 6
   },
 
   "geoip": {
