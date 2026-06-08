@@ -1,34 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-冷表处理器：从共享内存双缓冲读取原代码发送的冷/热表，
-遍历冷表解析第六位 P4 寄存器原始数据，与热表合并后写入数据库。
+流量数据处理器：从 UDP 9999 接收流量数据 JSON，
+遍历未分析流解析第六位 P4 寄存器原始数据，与已分析流合并后写入数据库。
 内置零拷贝写入：queue.Queue → DB背景攒批线程，无JSON序列化，无内存拷贝。
 独立于原代码运行，不修改任何原有文件。
 
-合并规则（冷表 hash_idx 在热表中存在）：
-  - 五元组、资产标签：保持不变（取自热表）
-  - 历史总累计包   = 热表[8]  + 冷表.pkts
-  - 历史总累计字节 = 热表[9]  + 冷表.bytes
+合并规则（未分析流 hash_idx 在已分析流中存在）：
+  - 五元组、资产标签：保持不变（取自已分析流）
+  - 历史总累计包   = 已分析流[8]  + 未分析流.pkts
+  - 历史总累计字节 = 已分析流[9]  + 未分析流.bytes
   - 全局PPS        = 更新后总包 // 100
   - 全局BPS        = 更新后总字节 // 100
-  - 历史均熵       = (热表均熵 * 热表总包 + 冷表均熵 * 冷表总包) / 更新后总包
-  - 历史最高熵     = max(热表[17], 冷表.max_e)
-  - 历史最低熵     = min(热表[18], 冷表.min_e)
+  - 历史均熵       = (已分析流均熵 * 已分析流总包 + 未分析流均熵 * 未分析流总包) / 更新后总包
+  - 历史最高熵     = max(已分析流[17], 未分析流.max_e)
+  - 历史最低熵     = min(已分析流[18], 未分析流.min_e)
   - 删除：初始时钟[10]、上次时钟[11]、瞬时PPS[12]、瞬时BPS[14]、reason[19]、Normal[20]
 
-不在热表中：
-  - 五元组取自冷表，资产标签默认 5，其余取冷表解析值
+不在已分析流中：
+  - 五元组取自未分析流，资产标签默认 5，其余取未分析流解析值
 """
 
-import logging
+import socket
+import json
 import threading
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 # ============================================================
 # 0. 可配置参数
 # ============================================================
+UDP_LISTEN_IP = "127.0.0.1"
+UDP_LISTEN_PORT = 9999
 
 # GeoIP 数据库路径（MaxMind GeoLite2-City.mmdb）
 # 优先使用 shared_config 中的常量，如果未设置则回退到本地硬编码默认值
@@ -44,7 +45,7 @@ GEOIP_GZ_TEMP = GEOIP_DB_PATH + ".gz"
 
 
 # ============================================================
-# 1. P4 寄存器原始数据解析（冷表第六位）
+# 1. P4 寄存器原始数据解析
 # ============================================================
 def parse_raw_p4_hex(hex_str: str) -> dict:
     """
@@ -91,13 +92,13 @@ def _init_geoip():
     try:
         import maxminddb
         _geoip_reader = maxminddb.open_database(GEOIP_DB_PATH)
-        logger.info("GeoIP 数据库已加载: %s", GEOIP_DB_PATH)
+        print(f"🌍 GeoIP 数据库已加载: {GEOIP_DB_PATH}")
     except ImportError:
-        logger.warning("maxminddb 未安装，请执行: pip install maxminddb")
+        print("⚠️ maxminddb 未安装，请执行: pip install maxminddb")
     except FileNotFoundError:
-        logger.warning("GeoIP 数据库文件未找到: %s", GEOIP_DB_PATH)
+        print(f"⚠️ GeoIP 数据库文件未找到: {GEOIP_DB_PATH}")
     except Exception as e:
-        logger.warning("GeoIP 初始化失败: %s", e)
+        print(f"⚠️ GeoIP 初始化失败: {e}")
 
 
 def lookup_country(ip: str) -> str:
@@ -140,35 +141,57 @@ def update_geoip_db():
     import shutil
     from urllib.request import urlopen
 
-    logger.info("正在下载 GeoIP 数据库: %s", GEOIP_DOWNLOAD_URL)
+    print(f"⬇️ 正在下载 GeoIP 数据库: {GEOIP_DOWNLOAD_URL}")
     try:
         resp = urlopen(GEOIP_DOWNLOAD_URL, timeout=120)
         with open(GEOIP_GZ_TEMP, "wb") as f:
             shutil.copyfileobj(resp, f)
         resp.close()
     except Exception as e:
-        logger.error("GeoIP 下载失败: %s", e)
+        print(f"❌ 下载失败: {e}")
         return False
 
-    logger.info("正在解压 GeoIP 数据库...")
+    # 先释放当前 GeoIP reader 的文件句柄（Windows 上 mmdb 文件被 mmap 锁定）
+    _close_geoip()
+
+    print("📦 正在解压...")
+    new_path = GEOIP_DB_PATH + ".new"
     try:
-        with gzip.open(GEOIP_GZ_TEMP, "rb") as f_in, \
-             open(GEOIP_DB_PATH, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        logger.info("GeoIP 数据库已更新: %s", GEOIP_DB_PATH)
+        # 将下载内容读入内存
+        with open(GEOIP_GZ_TEMP, "rb") as f:
+            raw = f.read()
+
+        # 检测是否为 gzip 格式（magic: 0x1f 0x8b）
+        # urllib 可能已透明解压 Content-Encoding，导致存下来的是裸 mmdb
+        if raw[:2] == b'\x1f\x8b':
+            print("   检测到 gzip 格式，正在解压...")
+            raw = gzip.decompress(raw)
+        else:
+            print("   数据已解压，直接写入...")
+
+        # 先写入临时文件，再 os.replace 原子替换，避免 Windows mmap 残留锁
+        with open(new_path, "wb") as f_out:
+            f_out.write(raw)
+        import os as _os
+        _os.replace(new_path, GEOIP_DB_PATH)
+        print(f"✅ GeoIP 数据库已更新: {GEOIP_DB_PATH}")
     except Exception as e:
-        logger.error("GeoIP 解压失败: %s", e)
-        return False
-    finally:
+        print(f"❌ 解压失败: {e}")
+        # 清理失败的临时文件
         try:
-            import os as _os
-            _os.remove(GEOIP_GZ_TEMP)
+            import os as _os2
+            _os2.remove(new_path)
         except Exception:
             pass
-
-    # 替换 reader
-    _close_geoip()
-    _init_geoip()
+        return False
+    finally:
+        # 重新加载 reader
+        _init_geoip()
+        try:
+            import os as _os3
+            _os3.remove(GEOIP_GZ_TEMP)
+        except Exception:
+            pass
     return True
 
 
@@ -191,7 +214,7 @@ def refresh_employee_cache() -> dict:
 
 
 # ============================================================
-# 4. 核心：遍历冷表，与热表合并（增加 GeoIP + 员工信息丰富）
+# 4. 核心：遍历未分析流，与已分析流合并（增加 GeoIP + 员工信息丰富）
 # ============================================================
 def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
               src_tag, sp_tag, dp_tag,
@@ -225,8 +248,8 @@ def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
 
 def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
     """
-    遍历冷表，解析第六位原数据，与热表合并后返回新结果表。
-    冷表和热表均只读，不做任何修改。
+    遍历未分析流，解析第六位原数据，与已分析流合并后返回新结果表。
+    未分析流和已分析流均只读，不做任何修改。
     """
     result_table = {}
 
@@ -245,7 +268,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 
         if hot is not None:
             # ============================================
-            # 情况 A：热表中存在 —— 冷热合并
+            # 情况 A：已分析流中存在 —— 流合并
             # ============================================
             new_pkts = hot[8] + cold["pkts"]
             new_bytes = hot[9] + cold["bytes"]
@@ -273,7 +296,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 
         else:
             # ============================================
-            # 情况 B：热表中不存在 —— 纯冷表数据
+            # 情况 B：已分析流中不存在 —— 纯未分析流数据
             # ============================================
             src_ip, dst_ip, sp, dp, proto = cold_entry[0:5]
 
@@ -303,7 +326,9 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 # ============================================================
 # 5. 数据库写入（零拷贝：queue.Queue + 后台攒批线程）
 # ============================================================
-# 数据流: 共享内存 → ColdTableProcessor → queue.Queue → DB写入线程 → MySQL
+# 旧版的共享内存方案（SHM_NAME/MAX_PACKETS/PACKET_SIZE/HEADER_SIZE）
+# 已被移除，改为进程内 queue.Queue 直传 dict。
+# 数据流: DataBridge → queue.Queue → DB写入线程 → MySQL
 # dict 直接引用传递，无 JSON 序列化，无内存拷贝。
 # 详见 database/writer.py
 
@@ -311,12 +336,14 @@ from database.writer import start_db_writer, stop_db_writer
 
 
 # ============================================================
-# 6. 共享内存接收与主循环（替代 UDP）
+# 6. UDP 接收与主循环
 # ============================================================
-class ColdTableProcessor:
-    """通过共享内存双缓冲接收冷/热表，合并后写入数据库（零拷贝 queue.Queue）。"""
+class DataBridge:
+    """UDP 数据桥：接收流量数据，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
 
     def __init__(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(5.0)
         self.running = True
         self.lock = threading.Lock()
         self._last_employee_refresh = 0
@@ -324,64 +351,70 @@ class ColdTableProcessor:
         # 启动后台数据库写入线程（零拷贝 queue.Queue）
         self.write_queue, self.stop_event = start_db_writer()
 
-    def handle_payload(self, unanalyzed: dict, analyzed: dict):
-        cold_count = len(unanalyzed)
-        hot_count = len(analyzed)
-        logger.info("收到冷表 %d 条, 热表 %d 条", cold_count, hot_count)
+    def handle_payload(self, data: bytes):
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 解析失败: {e}")
+            return
+
+        unanalyzed = payload.get("unanalyzed_data", {})
+        analyzed = payload.get("analyzed_data", {})
+
+        print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
 
         with self.lock:
             result = process_tables(unanalyzed, analyzed)
             if result:
+                # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
                 for row in result.values():
                     self.write_queue.put(row)
-                logger.info("已入队 %d 条 (queue.Queue → DB攒批写入)", len(result))
+                print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
 
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
-            logger.info("输出 %d 条记录 (含 GeoIP/员工信息: %d 条)", len(result), enriched)
+            print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
 
     def run(self):
+        try:
+            self.sock.bind((UDP_LISTEN_IP, UDP_LISTEN_PORT))
+        except OSError as e:
+            print(f"❌ 绑定 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT} 失败: {e}")
+            return
+
         # 预加载 GeoIP
         _init_geoip()
         # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
         refresh_employee_cache()
 
-        # 🌟 打开共享内存消费者
-        from shared_pools import SharedPoolConsumer
-        consumer = SharedPoolConsumer()
-
-        logger.info("共享内存双缓冲消费者已就绪")
-        logger.info("  读取方式: 共享内存轮询（零网络开销）")
-        logger.info("  写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
-        logger.info("  员工库: MySQL ip_dept_map (通过 database 模块)")
+        print(f"[数据桥] 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
+        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
+        print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
 
         import time
         while self.running:
             try:
-                # 阻塞等待直到生产者写入新数据（超时 105 秒 > 100 秒周期）
-                unanalyzed, analyzed = consumer.get(timeout=105.0)
-
-                if unanalyzed or analyzed:
-                    self.handle_payload(unanalyzed, analyzed)
-
+                data, addr = self.sock.recvfrom(65535)
+                print(f"[数据桥] 收到来自 {addr}，{len(data)} 字节")
+                self.handle_payload(data)
+            except socket.timeout:
                 # 每 10 分钟刷新员工缓存
                 now = time.time()
                 if now - self._last_employee_refresh > 600:
                     refresh_employee_cache()
                     self._last_employee_refresh = now
-
+                continue
             except Exception as e:
-                logger.warning("冷表处理异常: %s", e)
-                time.sleep(1)
+                print(f"⚠️ 异常: {e}")
 
-        consumer.close()
+        self.sock.close()
         stop_db_writer(self.stop_event)
-        logger.info("冷表处理器已停止")
+        print("🛑 已停止")
 
 
 if __name__ == "__main__":
-    processor = ColdTableProcessor()
+    bridge = DataBridge()
     try:
-        processor.run()
+        bridge.run()
     except KeyboardInterrupt:
-        processor.running = False
-        logger.info("收到中断信号，退出...")
+        bridge.running = False
+        print("\n🛑 收到中断信号，退出...")

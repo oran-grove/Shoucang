@@ -1,0 +1,44 @@
+# ============================================================
+# 守藏 — 完整 Python 依赖
+# ============================================================
+# 安装: pip install -r requirements.txt
+# ============================================================
+
+# ---- 统一后端 (backend/) ----
+fastapi>=0.109.0            # FastAPI REST API 框架 (替代 PHP)
+uvicorn>=0.27.0             # ASGI 服务器 (运行 FastAPI)
+pydantic>=2.5.0             # 数据验证模型
+
+# ---- P4 控制面 (p4_controller/) ----
+pynng>=0.8.0              # 与P4交换机的NNG IPC收发 (control.py)
+requests>=2.31.0          # 向前端推送实时告警 (control.py)
+flask>=3.0.0              # 控制面REST API服务 (control.py)
+paramiko>=3.4.0           # SSH远程注入P4流表规则 (add_ip.py)
+thrift>=0.16.0            # Thrift直连BMv2交换机 (control.py telemetry_job / reset_switch_on_startup)
+
+# ---- 多智能体系统 (multi_agent_system/) ----
+httpx>=0.27.0             # 实时/深度分析智能体异步HTTP调用LLM (openai/lmstudio/deepseek_backend.py)
+json5>=0.9.0              # JSON5解析 (core/agent.py)，支持注释/尾逗号等宽松格式
+
+# ---- 数据网关与持久化 (data_gateway/ & database/) ----
+pymysql>=1.1.0            # MySQL数据库连接 (writer.py, shared_memory_consumer.py)
+maxminddb>=2.5.0          # GeoIP2地理定位 (cold_table_processor.py)，可选，缺失时自动跳过
+psutil>=5.9.0             # 系统资源监控 (CPU/RAM/网络)，前端仪表盘 /api/status 使用
+
+# ---- 统一配置管理 (config/) ----
+# 无额外依赖（仅使用标准库 dataclasses / enum / json / pathlib / copy / typing）
+
+# ---- 数据库批量写入 (database/) ----
+# pymysql 已在上方声明
+
+# ---- 前端相关 ----
+# 前端为纯静态文件 (HTML/CSS/JS/LayUI)，无需额外 pip 包
+# FastAPI 统一托管前端静态资源，不再需要 PHP / Nginx / Apache
+
+# ============================================================
+# 标准库（无需安装，已内置）：
+#   asyncio, abc, collections, copy, dataclasses, datetime, enum,
+#   gzip, json, logging, multiprocessing, os, pathlib, queue, re,
+#   shutil, socket, statistics, struct, subprocess, sys, threading,
+#   time, traceback, typing, urllib, uuid, warnings
+# ============================================================

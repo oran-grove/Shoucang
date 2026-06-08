@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>新增黑名单</title>
+    <meta name="renderer" content="webkit">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="../../lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="../../css/public.css" media="all">
+    <style>
+        body {
+            background-color: #ffffff;
+        }
+        .layui-form-label {
+            float: none;
+            display: block;
+            width: auto;
+            text-align: left;
+            padding: 9px 0 5px 0;
+        }
+        .layui-input-block {
+            margin-left: 0;
+        }
+    </style>
+</head>
+<body>
+<div class="layui-form layuimini-form">
+    <div class="layui-form-item">
+        <label class="layui-form-label required">IP地址</label>
+        <div class="layui-input-block">
+            <input type="text" name="ip" lay-verify="required|ip" value="" class="layui-input" placeholder="例如: 192.168.1.100">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">威胁等级</label>
+        <div class="layui-input-block">
+          <select name="threat_level" lay-filter="threatLevel">
+            <option value=""></option>
+            <option value="低">低</option>
+            <option value="中">中</option>
+            <option value="高" selected>高</option>
+          </select>
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label required">拉黑原因</label>
+        <div class="layui-input-block">
+            <input type="text" name="reason" lay-verify="required" value="手动添加" class="layui-input">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <div class="layui-input-block">
+            <button class="layui-btn layui-btn-normal" lay-submit lay-filter="saveBtn">确认保存</button>
+        </div>
+    </div>
+</div>
+<script src="../../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+<script>
+        var apiUrl = '/api/blacklist';
+
+        layui.use(['form'], function () {
+            var form = layui.form,
+                layer = layui.layer;
+
+            form.on('submit(saveBtn)', function (data) {
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data.field)
+                })
+                .then(function(response) {
+                    if (!response.ok) throw new Error('网络响应错误');
+                    return response.json();
+                })
+                .then(function(result) {
+                    layer.msg(result.msg || '保存成功', { icon: 1 }, function () {
+                        var iframeIndex = parent.layer.getFrameIndex(window.name);
+                        parent.layer.close(iframeIndex);
+                        parent.location.reload();
+                    });
+                })
+                .catch(function(error) {
+                    console.error('提交失败:', error);
+                    layer.msg('提交失败: ' + error.message, { icon: 2 });
+                });
+
+                return false;
+            });
+        });
+    </script>
+</body>
+</html>
