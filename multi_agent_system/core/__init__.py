@@ -1,13 +1,10 @@
-from .message import AgentMessage, FlowEvent, ThreatVerdict, RuleEntry, RuleAction
-from .knowledge import KnowledgeBase
+from .message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel
 from .agent import BaseAgent
 
 __all__ = [
-    "AgentMessage",
     "FlowEvent",
     "ThreatVerdict",
-    "RuleEntry",
-    "KnowledgeBase",
-    "RuleAction",
+    "TrafficVerdict",
+    "SeverityLevel",
     "BaseAgent",
 ]

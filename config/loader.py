@@ -39,7 +39,6 @@ from .schema import (
     BaselineProfilingAgentConfig,
     TemporalAnomalyAgentConfig,
     DeepAnalysisConfig,
-    KnowledgeBaseConfig,
     OrchestratorConfig,
 )
 
@@ -241,17 +240,6 @@ def _build_deep_analysis_config(d: dict) -> DeepAnalysisConfig:
     )
 
 
-def _build_knowledge_base_config(d: dict) -> KnowledgeBaseConfig:
-    return KnowledgeBaseConfig(
-        max_rules=d.get("max_rules", 100000),
-        blacklist_default_ttl_minutes=d.get("blacklist_default_ttl_minutes", 1440),
-        whitelist_default_ttl_minutes=d.get("whitelist_default_ttl_minutes", 10080),
-        cleanup_interval_seconds=d.get("cleanup_interval_seconds", 300),
-        confidence_threshold_block=d.get("confidence_threshold_block", 0.85),
-        confidence_threshold_suspect=d.get("confidence_threshold_suspect", 0.50),
-    )
-
-
 def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
     """
     加载配置，返回 OrchestratorConfig。
@@ -322,9 +310,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         judgment=_build_judgment_config(merged.get("judgment", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
         deep_analysis=_build_deep_analysis_config(merged.get("deep_analysis", {})),
-        knowledge_base=_build_knowledge_base_config(merged.get("knowledge_base", {})),
         default_backends=default_backends,
-        max_queue_size=merged.get("max_queue_size", 10000),
     )
 
 
@@ -420,15 +406,6 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "temperature": config.feedback.temperature,
             "max_tokens": config.feedback.max_tokens,
         },
-        "knowledge_base": {
-            "max_rules": config.knowledge_base.max_rules,
-            "blacklist_default_ttl_minutes": config.knowledge_base.blacklist_default_ttl_minutes,
-            "whitelist_default_ttl_minutes": config.knowledge_base.whitelist_default_ttl_minutes,
-            "cleanup_interval_seconds": config.knowledge_base.cleanup_interval_seconds,
-            "confidence_threshold_block": config.knowledge_base.confidence_threshold_block,
-            "confidence_threshold_suspect": config.knowledge_base.confidence_threshold_suspect,
-        },
-        "max_queue_size": config.max_queue_size,
     }
 
 
@@ -582,9 +559,6 @@ if __name__ == "__main__":
         print(f"  关联: backend={config.correlation.backend.value}, model={config.correlation.model_name}")
         print(f"  研判: backend={config.judgment.backend.value}, model={config.judgment.model_name}")
         print(f"  反馈: backend={config.feedback.backend.value}, model={config.feedback.model_name}")
-        print(f"\n知识库: threshold_block={config.knowledge_base.confidence_threshold_block}, "
-              f"threshold_suspect={config.knowledge_base.confidence_threshold_suspect}")
-        print(f"队列: max_queue_size={config.max_queue_size}")
 
         # DeepSeek 特殊配置
         ds = config.default_backends[BackendType.DEEPSEEK]

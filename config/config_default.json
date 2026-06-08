@@ -149,16 +149,6 @@
     }
   },
 
-  "knowledge_base": {
-    "_comment": "知识库 / 规则引擎配置",
-    "max_rules": 100000,
-    "blacklist_default_ttl_minutes": 1440,
-    "whitelist_default_ttl_minutes": 10080,
-    "cleanup_interval_seconds": 300,
-    "confidence_threshold_block": 0.85,
-    "confidence_threshold_suspect": 0.50
-  },
-
   "live_scan": {
     "_comment": "第一类智能体：逐条评判队列扫描 — 实时从 DB 拉取未分析记录逐条研判",
     "enabled": true,
@@ -176,8 +166,6 @@
     "entities_per_cycle": 10,
     "slice_hours": 6
   },
-
-  "max_queue_size": 10000,
 
   "geoip": {
     "_comment": "GeoIP 数据库自动更新配置",

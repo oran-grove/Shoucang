@@ -11,21 +11,6 @@ from typing import Any, Optional
 from uuid import uuid4
 
 
-class MessageType(Enum):
-    """消息类型"""
-    FLOW_EVENT = "flow_event"
-    DETECTION_RESULT = "detection_result"
-    CORRELATION_REQUEST = "correlation_request"
-    CORRELATION_RESULT = "correlation_result"
-    JUDGMENT_REQUEST = "judgment_request"
-    THREAT_VERDICT = "threat_verdict"
-    FEEDBACK_REQUEST = "feedback_request"
-    RULE_UPDATE = "rule_update"
-    ADMIN_FEEDBACK = "admin_feedback"
-    SYSTEM_ALERT = "system_alert"
-    HEARTBEAT = "heartbeat"
-
-
 class TrafficVerdict(Enum):
     """流量判定"""
     MALICIOUS = "malicious"
@@ -42,14 +27,6 @@ class SeverityLevel(Enum):
     MEDIUM = "medium"
     LOW = "low"
     INFO = "info"
-
-
-class RuleAction(Enum):
-    """规则动作"""
-    BLOCK = "block"
-    ALLOW = "allow"
-    MIRROR = "mirror"
-    THROTTLE = "throttle"
 
 
 @dataclass
@@ -152,56 +129,9 @@ class ThreatVerdict:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class RuleEntry:
-    """
-    黑白名单规则条目。
-    """
-    rule_id: str = field(default_factory=lambda: uuid4().hex[:8])
-    src_ip: str = ""
-    dst_ip: str = ""
-    src_port: int = 0
-    dst_port: int = 0
-    protocol: str = ""
-    action: RuleAction = RuleAction.BLOCK
-    confidence: float = 0.0
-    source: str = "auto"              # auto / manual / admin_feedback
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_hit_at: Optional[datetime] = None
-    hit_count: int = 0
-    ttl_minutes: int = 1440           # 过期时间（分钟）
-    comment: str = ""
-
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
-        if now is None:
-            now = datetime.now(timezone.utc)
-        if self.ttl_minutes <= 0:
-            return False
-        elapsed = (now - self.created_at).total_seconds() / 60.0
-        return elapsed > self.ttl_minutes
-
-
-@dataclass
-class AgentMessage:
-    """
-    智能体间通信的通用消息封装。
-    """
-    msg_id: str = field(default_factory=lambda: uuid4().hex[:8])
-    msg_type: MessageType = MessageType.FLOW_EVENT
-    sender: str = ""                  # 发送方智能体名称
-    recipient: str = ""              # 接收方智能体名称（空 = 广播）
-    payload: Any = None
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    correlation_id: str = ""         # 关联同一分析管线的ID
-
-
 __all__ = [
-    "MessageType",
     "TrafficVerdict",
     "SeverityLevel",
-    "RuleAction",
     "FlowEvent",
     "ThreatVerdict",
-    "RuleEntry",
-    "AgentMessage",
 ]

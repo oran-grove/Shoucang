@@ -10,7 +10,7 @@ from typing import Optional
 
 from ..core.agent import BaseAgent
 from ..core.message import (
-    AgentMessage, FlowEvent, MessageType, ThreatVerdict,
+    FlowEvent, ThreatVerdict,
     TrafficVerdict, SeverityLevel,
 )
 
@@ -21,9 +21,9 @@ class DetectionAgent(BaseAgent):
     """
     检测智能体：
     - 接收 FlowEvent
-    - 调用 LLM 做单流分类
-    - 输出 DETECTION_RESULT 消息
-    - 已知黑名单命中时直接返回恶意（不走 LLM）
+    - 注入记忆系统模式上下文
+    - 调用 LLM 做单流深度分类
+    - 输出 ThreatVerdict
     """
 
     def __init__(
@@ -70,42 +70,7 @@ class DetectionAgent(BaseAgent):
         """
         处理单条流量事件，返回 ThreatVerdict。
         """
-        # 1. 先查知识库
-        if self._knowledge_base:
-            rule = self._knowledge_base.match(
-                src_ip=flow_event.src_ip,
-                dst_ip=flow_event.dst_ip,
-                src_port=flow_event.src_port,
-                dst_port=flow_event.dst_port,
-                protocol=flow_event.protocol,
-            )
-            if rule is not None:
-                from ..core.message import RuleAction
-                self._knowledge_base.update_rule_hit(rule.rule_id)
-                if rule.action == RuleAction.BLOCK:
-                    return ThreatVerdict(
-                        flow_ids=[flow_event.flow_id],
-                        verdict=TrafficVerdict.MALICIOUS,
-                        severity=SeverityLevel.HIGH,
-                        confidence=rule.confidence,
-                        threat_type="已知黑名单命中",
-                        reasoning=f"匹配规则 {rule.rule_id}: {rule.comment}",
-                        recommended_action="block",
-                        detection_result_id=self.name,
-                    )
-                elif rule.action == RuleAction.ALLOW:
-                    return ThreatVerdict(
-                        flow_ids=[flow_event.flow_id],
-                        verdict=TrafficVerdict.SAFE,
-                        severity=SeverityLevel.INFO,
-                        confidence=rule.confidence,
-                        threat_type="已知白名单",
-                        reasoning=f"匹配规则 {rule.rule_id}: {rule.comment}",
-                        recommended_action="allow",
-                        detection_result_id=self.name,
-                    )
-
-        # 2. 注入系统学习到的模式上下文（Tier 1 激活卡片）
+        # 1. 注入系统学习到的模式上下文（Tier 1 激活卡片）
         pattern_context = ""
         try:
             from ..memory import get_index
@@ -119,7 +84,7 @@ class DetectionAgent(BaseAgent):
         except Exception:
             pass  # 记忆系统不可用不影响检测
 
-        # 3. 调用 LLM 分析
+        # 2. 调用 LLM 分析
         prompt = f"请分析以下流量：\n{flow_event.to_prompt_text()}{pattern_context}"
         try:
             response = await self.call_llm(prompt)
@@ -136,7 +101,7 @@ class DetectionAgent(BaseAgent):
                 detection_result_id=self.name,
             )
 
-        # 4. 解析 LLM 回复
+        # 3. 解析 LLM 回复
         parsed = self.extract_json_from_response(response)
         raw_verdict = parsed.get("verdict", "unknown")
         confidence = float(parsed.get("confidence", 0.0))

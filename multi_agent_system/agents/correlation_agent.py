@@ -20,7 +20,7 @@ from typing import Optional
 
 from ..core.agent import BaseAgent
 from ..core.message import (
-    AgentMessage, FlowEvent, MessageType, ThreatVerdict,
+    FlowEvent, ThreatVerdict,
     TrafficVerdict, SeverityLevel,
 )
 
@@ -326,21 +326,12 @@ class CorrelationAgent(BaseAgent):
             correlation_result_id=self.name,
         )
 
-    async def process(self, event: AgentMessage) -> Optional[ThreatVerdict]:
+    async def process(self, *args, **kwargs) -> Optional[ThreatVerdict]:
         """
-        接收 FlowEvent 或 DetectionResult，做缓冲后触发关联分析。
+        BaseAgent 抽象方法实现。
+        编排器通过 add_flow() + process_group() 直接调用，
+        此方法作为消息总线兼容入口保留。
         """
-        if event.msg_type == MessageType.FLOW_EVENT:
-            flow = event.payload
-            temp_v = ThreatVerdict(verdict=TrafficVerdict.SUSPICIOUS, confidence=0.5)
-            triggered, key = self.add_flow(flow, temp_v)
-            if triggered:
-                return await self.process_group(key)
-        elif event.msg_type == MessageType.DETECTION_RESULT:
-            verdict: ThreatVerdict = event.payload
-            if verdict.flow_ids and verdict.verdict in (TrafficVerdict.SUSPICIOUS,
-                                                        TrafficVerdict.MALICIOUS):
-                pass
         return None
 
 

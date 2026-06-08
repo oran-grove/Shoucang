@@ -27,6 +27,5 @@ from config.schema import (  # noqa: F401, E402
     BaselineProfilingAgentConfig,
     TemporalAnomalyAgentConfig,
     DeepAnalysisConfig,
-    KnowledgeBaseConfig,
     OrchestratorConfig,
 )

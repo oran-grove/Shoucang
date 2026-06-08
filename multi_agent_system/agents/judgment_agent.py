@@ -11,7 +11,7 @@ from typing import Optional, cast
 from ..core.agent import BaseAgent
 from ..core.message import (
     FlowEvent, ThreatVerdict,
-    TrafficVerdict, SeverityLevel, RuleEntry, RuleAction,
+    TrafficVerdict, SeverityLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 class JudgmentAgent(BaseAgent):
     """
     研判智能体：
-    - 接收 DETECTION_RESULT + CORRELATION_RESULT
-    - 综合判定威胁等级
-    - 生成 RuleEntry 写入知识库
-    - 输出最终的 THREAT_VERDICT
+    - 接收检测结果 + 关联分析结果
+    - 综合判定威胁等级和严重度
+    - 注入记忆系统模式上下文辅助决策
+    - 输出最终的综合威胁判定
     """
 
     def __init__(
@@ -245,36 +245,6 @@ class JudgmentAgent(BaseAgent):
                 recommended_action="monitor",
             )
         return detection
-
-    def create_rule_from_verdict(
-        self,
-        verdict: ThreatVerdict,
-        flow: Optional[FlowEvent] = None,
-    ) -> Optional[RuleEntry]:
-        """
-        将研判结果转换为知识库规则。
-        只有置信度足够的恶意判定才生成黑名单规则。
-        """
-        if verdict.verdict != TrafficVerdict.MALICIOUS:
-            return None
-        if verdict.confidence < 0.70:
-            return None
-        if not flow:
-            return None
-        ttl = int(verdict.extra.get("suggested_ttl", 1440)) if verdict.extra else 1440
-        return RuleEntry(
-            src_ip=flow.src_ip,
-            dst_ip=flow.dst_ip,
-            src_port=flow.src_port if flow.src_port else 0,
-            dst_port=flow.dst_port if flow.dst_port else 0,
-            protocol=flow.protocol,
-            action=RuleAction.BLOCK,
-            confidence=verdict.confidence,
-            source="auto",
-            ttl_minutes=ttl,
-            comment=f"研判生成: {verdict.threat_type} | {verdict.reasoning[:200]}",
-        )
-
 
 def _extract_features_from_verdicts(
     detection: "ThreatVerdict",

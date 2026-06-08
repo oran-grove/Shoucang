@@ -213,7 +213,7 @@ class TemporalAnomalyAgent(BaseAgent):
 
         slope = numerator / denominator
 
-        # 用 R² 评估趋势强度
+        # 用 R^2 评估趋势强度
         y_mean = mean(bytes_values)
         ss_res = sum((y - (slope * x + (mean_y - slope * mean_x))) ** 2 for x, y in zip(indices, bytes_values))
         ss_tot = sum((y - y_mean) ** 2 for y in bytes_values)
@@ -222,9 +222,9 @@ class TemporalAnomalyAgent(BaseAgent):
         threshold = mean_y * 0.1  # 10% 的均值变化才算显著
         if abs(slope * n) > threshold and r_squared > 0.5:
             direction = "递增" if slope > 0 else "递减"
-            return direction, min(r_squared, 0.9), f"检测到数据量{direction}趋势 (R²={r_squared:.3f})"
+            return direction, min(r_squared, 0.9), f"检测到数据量{direction}趋势 (R^2={r_squared:.3f})"
 
-        return "stable", 0.0, f"数据量无明显趋势 (R²={r_squared:.3f})"
+        return "stable", 0.0, f"数据量无明显趋势 (R^2={r_squared:.3f})"
 
     def build_analysis_prompt(
         self,

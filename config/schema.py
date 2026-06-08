@@ -117,19 +117,17 @@ class FeedbackAgentConfig:
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
     system_prompt: str = (
-        "你是一个内部威胁检测系统的规则优化与自适应学习专家。根据管理员反馈和历史判定记录，"
-        "提出规则调整建议，确保系统在内部泄密检测中持续降低误报、减少漏报。\n\n"
-        "## 优化策略\n"
-        "1. **误报分析**：分析误报特征，调整检测阈值或添加白名单规则\n"
+        "你是一个内部威胁检测系统的自适应学习专家。根据管理员反馈和历史判定记录，"
+        "分析误报/漏报的模式特征，帮助系统持续降低误报、减少漏报。\n\n"
+        "## 分析策略\n"
+        "1. **误报分析**：分析误报特征，识别容易被误判为恶意的正常行为模式\n"
         "2. **漏报分析**：逆向分析漏报案例，确定哪些弱信号组合被遗漏\n"
-        "3. **用户画像更新**：根据同类用户的实际行为，动态调整个人/部门基线容差\n"
-        "4. **TTL自适应**：根据反馈确认的威胁严重度，自适应调整规则有效期\n"
-        "5. **长周期模式学习**：记录管理员确认的长周期泄密案例，提取低慢外传的模式特征\n\n"
-        "回复格式：{ action: 'upgrade_to_blacklist'|'downgrade_to_whitelist'|"
-        "'adjust_confidence'|'adjust_threshold'|'update_baseline'|'no_change', "
-        "rule_id: '规则ID', new_confidence: 0.0-1.0, "
-        "ttl_minutes: 整数, reasoning: '调整理由（含模式学习结论）', "
-        "learned_pattern: '从案例中学到的模式特征（可选）' }"
+        "3. **用户画像更新**：根据同类用户的实际行为，理解部门/角色的正常行为容差\n"
+        "4. **长周期模式学习**：记录管理员确认的长周期泄密案例，提取低慢外传的模式特征\n\n"
+        "回复格式：{ \"pattern_insight\": \"模式洞察\", "
+        "\"confidence\": 0.0-1.0, "
+        "\"reasoning\": \"分析理由（含模式学习结论）\", "
+        "\"learned_pattern\": \"从案例中学到的模式特征（可选）\" }"
     )
     temperature: float = 0.2
     max_tokens: int = 1024
@@ -223,17 +221,6 @@ class RetrospectiveScanAgentConfig:
 
 
 @dataclass
-class KnowledgeBaseConfig:
-    """知识库配置"""
-    max_rules: int = 100000
-    blacklist_default_ttl_minutes: int = 1440   # 黑名单默认 24h
-    whitelist_default_ttl_minutes: int = 10080  # 白名单默认 7 天
-    cleanup_interval_seconds: int = 300         # 清理间隔
-    confidence_threshold_block: float = 0.85    # 超过此置信度自动阻断
-    confidence_threshold_suspect: float = 0.50  # 低于此为安全
-
-
-@dataclass
 class OrchestratorConfig:
     """编排器总配置"""
     detection: DetectionAgentConfig = field(default_factory=DetectionAgentConfig)
@@ -241,13 +228,10 @@ class OrchestratorConfig:
     judgment: JudgmentAgentConfig = field(default_factory=JudgmentAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
     deep_analysis: DeepAnalysisConfig = field(default_factory=DeepAnalysisConfig)
-    knowledge_base: KnowledgeBaseConfig = field(default_factory=KnowledgeBaseConfig)
     live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
     retrospective_scan: RetrospectiveScanAgentConfig = field(default_factory=RetrospectiveScanAgentConfig)
     # 全局后端连接池配置
     default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
-    # 消息队列配置
-    max_queue_size: int = 10000
 
     def __post_init__(self):
         if BackendType.OPENAI not in self.default_backends:
