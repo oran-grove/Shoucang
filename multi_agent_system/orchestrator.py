@@ -297,6 +297,7 @@ class Orchestrator:
         lookback_windows = list(backtrack_cfg.lookback_windows)
         total_windows = len(lookback_windows)
         all_related_records: list[dict] = []
+        seen_record_ids: set = set()  # 已见过的记录ID，用于判定本轮是否有新增数据
         final_adjudication: Optional[ThreatVerdict] = None
 
         for win_idx, lookback_hours in enumerate(lookback_windows):
@@ -313,6 +314,7 @@ class Orchestrator:
                 max_records=backtrack_cfg.max_similar_records,
             )
 
+            new_matched: list[dict] = []
             if not similar_records:
                 logger.info("[%s] L2 窗口=%s 内未找到相似记录", pipeline_id, window_label)
             else:
@@ -322,13 +324,38 @@ class Orchestrator:
                 )
 
                 matched = backtrack_result.get("matched_records", [])
+                new_matched = [m for m in matched if m.get("id") not in seen_record_ids]
+                for m in matched:
+                    record_id = m.get("id")
+                    if record_id is not None:
+                        seen_record_ids.add(record_id)
+                all_related_records.extend(matched)
+
                 logger.info(
-                    "[%s] L2-回溯结果(窗口=%s): 总相似=%d → 高关联=%d (阈值=%.2f)",
+                    "[%s] L2-回溯结果(窗口=%s): 总相似=%d → 高关联=%d (新增%d, 阈值=%.2f)",
                     pipeline_id, window_label, len(similar_records), len(matched),
-                    backtrack_cfg.relevance_threshold,
+                    len(new_matched), backtrack_cfg.relevance_threshold,
                 )
 
-                all_related_records.extend(matched)
+            # 本轮无新增关联数据 → 跳过 L3，直接进入下一轮更长窗口回溯
+            if win_idx > 0 and not new_matched:
+                logger.info(
+                    "[%s] 窗口=%s 无新增关联记录，跳过 L3 研判，扩展窗口继续",
+                    pipeline_id, window_label,
+                )
+                if win_idx < total_windows - 1:
+                    next_label = _fmt_window(lookback_windows[win_idx + 1])
+                    logger.info(
+                        "[%s] 回溯窗口 %s → %s (无新增数据)",
+                        pipeline_id, window_label, next_label,
+                    )
+                else:
+                    logger.info(
+                        "[%s] 已遍历全部回溯窗口(最大=%s)且无新增，"
+                        "降级上报告警将在管线结束后处理",
+                        pipeline_id, _fmt_window(lookback_windows[-1]),
+                    )
+                continue
 
             # ---- Layer 3: 最终研判 ----
             adjudication_agent = cast(AdjudicationAgent, self._agents["adjudication"])
