@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>LM Studio 配置</title>
+    <meta name="renderer" content="webkit">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="../../lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="../../css/public.css" media="all">
+    <style>
+        body {
+            background-color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+<div class="layui-form layuimini-form">
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">模型名称</label>
+        <div class="layui-input-block">
+            <input type="text" name="model_name" lay-verify="required" class="layui-input">
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">API地址</label>
+        <div class="layui-input-block">
+            <input type="text" name="api_base" lay-verify="required" class="layui-input">
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">API密钥</label>
+        <div class="layui-input-block">
+            <input type="text" name="api_key" lay-verify="required" class="layui-input">
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">自动加载</label>
+        <div class="layui-input-block">
+            <select name="auto_load">
+                <option value="true">是</option>
+                <option value="false">否</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">上下文长度</label>
+        <div class="layui-input-block">
+            <input type="number" name="context_length" lay-verify="required" class="layui-input">
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <label class="layui-form-label required">闪存注意力</label>
+        <div class="layui-input-block">
+            <select name="flash_attention">
+                <option value="true">是</option>
+                <option value="false">否</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="layui-form-item">
+        <div class="layui-input-block">
+            <button class="layui-btn layui-btn-normal" lay-submit lay-filter="saveBtn">确认保存</button>
+        </div>
+    </div>
+
+</div>
+<script src="../../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+<script>
+    layui.use(['form'], function () {
+        var form = layui.form,
+            layer = layui.layer,
+            $ = layui.$;
+
+        // 加载当前 LM Studio 配置并回填表单
+        $.getJSON('/api/config', function (resp) {
+            var config = resp.data || resp;
+            if (config.backends && config.backends.lmstudio) {
+                var c = config.backends.lmstudio;
+                $('input[name="model_name"]').val(c.model_name || '');
+                $('input[name="api_base"]').val(c.api_base || '');
+                $('input[name="api_key"]').val(c.api_key || '');
+                $('select[name="auto_load"]').val(c.auto_load ? 'true' : 'false');
+                $('input[name="context_length"]').val((c.load_config && c.load_config.context_length) || '');
+                $('select[name="flash_attention"]').val((c.load_config && c.load_config.flash_attention) ? 'true' : 'false');
+                form.render();
+            }
+        }).fail(function () {
+            layer.msg('加载配置失败', { icon: 2 });
+        });
+
+        // 监听提交
+        form.on('submit(saveBtn)', function (data) {
+            var payload = {
+                backend: 'lmstudio',
+                api_key: data.field.api_key,
+                api_base: data.field.api_base,
+                model_name: data.field.model_name,
+                auto_load: data.field.auto_load === 'true',
+                context_length: parseInt(data.field.context_length) || 0,
+                flash_attention: data.field.flash_attention === 'true'
+            };
+            $.ajax({
+                url: '/api/config/backend',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify(payload),
+                success: function (res) {
+                    if (res.code === 0) {
+                        layer.msg('保存成功', { icon: 1 }, function () {
+                            var iframeIndex = parent.layer.getFrameIndex(window.name);
+                            parent.layer.close(iframeIndex);
+                            parent.location.reload();
+                        });
+                    } else {
+                        layer.msg(res.msg || '保存失败', { icon: 2 });
+                    }
+                },
+                error: function () {
+                    layer.msg('请求失败', { icon: 2 });
+                }
+            });
+            return false;
+        });
+
+    });
+</script>
+</body>
+</html>

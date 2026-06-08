@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>黑名单管理</title>
+    <meta name="renderer" content="webkit">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="../lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="../css/public.css" media="all">
+    <style>
+        .container {
+            max-width: 1100px;
+            margin: 30px auto;
+            padding: 20px;
+        }
+        .toolbar {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="toolbar">
+            <button id="insertBtn" class="layui-btn" onclick="openInsertForm()">
+                <i class="layui-icon">&#xe654;</i> 新增黑名单
+            </button>
+        </div>
+        <table id="blacklistTable" lay-filter="blacklistTable"></table>
+    </div>
+
+    <script type="text/html" id="toolbar">
+        <button class="layui-btn layui-btn-danger layui-btn-xs" lay-event="delete">删除</button>
+    </script>
+
+    <script src="../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+    <script src="../js/lay-config.js?v=1.0.4" charset="utf-8"></script>
+    <script>
+        var tableIns;
+        var apiUrl = '/api/blacklist';
+        var layer;
+
+        layui.use(['table', 'layer'], function() {
+            var table = layui.table;
+            layer = layui.layer;
+
+            tableIns = table.render({
+                elem: '#blacklistTable',
+                url: apiUrl,
+                method: 'GET',
+                cellMinWidth: 80,
+                cols: [[
+                    {field: 'ip_address', title: 'IP地址', width: 150},
+                    {field: 'port', title: '端口', width: 100},
+                    {field: 'threat_level', title: '威胁等级', width: 110},
+                    {field: 'attack_type', title: '攻击类型', width: 110},
+                    {field: 'reason', title: '拉黑原因', width: 190},
+                    {title: '操作', width: 80, toolbar: '#toolbar', fixed: 'right'}
+                ]],
+                page: true,
+                limit: 10,
+                limits: [10, 20, 30],
+                text: { none: '暂无数据' },
+                response: { statusCode: 0 },
+                parseData: function(res) {
+                    return {
+                        "code": res.code,
+                        "msg": res.msg,
+                        "count": res.count,
+                        "data": res.data
+                    };
+                }
+            });
+
+            table.on('tool(blacklistTable)', function(obj) {
+                if (obj.event === 'delete') {
+                    layer.confirm('确定要删除这条黑名单记录吗？', {
+                        btn: ['确定', '取消']
+                    }, function() {
+                        fetch(apiUrl + '/' + obj.data.id, { method: 'DELETE' })
+                        .then(function(response) {
+                            if (!response.ok) throw new Error('网络响应错误');
+                            return response.json();
+                        })
+                        .then(function() {
+                            tableIns.reload();
+                            layer.msg('删除成功', {icon: 1});
+                        })
+                        .catch(function(error) {
+                            console.error('删除失败:', error);
+                            layer.msg('删除失败: ' + error.message, {icon: 2});
+                        });
+                    });
+                }
+            });
+        });
+
+        function openInsertForm() {
+            if (!layer) return;
+
+            layer.open({
+                type: 2,
+                title: '新增黑名单',
+                content: 'table/insert_blacklist.html',
+                area: ['500px', '350px'],
+                shade: 0.3
+            });
+        }
+    </script>
+</body>
+</html>

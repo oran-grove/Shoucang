@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>系统管理终端</title>
+    <link rel="icon" href="images/favicon.ico">
+    <link rel="stylesheet" href="lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="css/layuimini.css?v=2.0.4.2" media="all">
+    <link rel="stylesheet" href="css/themes/default.css" media="all">
+    <link rel="stylesheet" href="lib/font-awesome-4.7.0/css/font-awesome.min.css" media="all">
+    <!--[if lt IE 9]>
+    <script src="https://cdn.staticfile.org/html5shiv/r29/html5.min.js"></script>
+    <script src="https://cdn.staticfile.org/respond.js/1.4.2/respond.min.js"></script>
+    <![endif]-->
+    <style id="layuimini-bg-color">
+    </style>
+    <style>
+        .server-dashboard { padding: 20px; }
+        .server-header { display: flex; align-items: center; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #e6e6e6; }
+        .server-header h2 { margin: 0; font-size: 20px; color: #333; }
+        .status-badge { display: inline-block; margin-left: 15px; padding: 4px 14px; border-radius: 20px; font-size: 12px; color: #fff; }
+        .status-badge.running { background: #5fb878; }
+        .status-badge.stopped { background: #ff5722; }
+        .status-badge.unknown { background: #999; }
+        .server-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+        .server-card { background: #fff; border-radius: 8px; padding: 20px; display: flex; align-items: center; flex-wrap: wrap; box-shadow: 0 1px 6px rgba(0,0,0,.08); transition: box-shadow .2s; }
+        .server-card:hover { box-shadow: 0 3px 12px rgba(0,0,0,.12); }
+        .card-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; color: #fff; margin-right: 15px; flex-shrink: 0; }
+        .cpu-icon { background: linear-gradient(135deg, #ff9a56, #ff6b6b); }
+        .ram-icon { background: linear-gradient(135deg, #5b9bd5, #3b7dd8); }
+        .up-icon  { background: linear-gradient(135deg, #5fb878, #3d9b5c); }
+        .down-icon { background: linear-gradient(135deg, #a78bfa, #7c5ce7); }
+        .card-info { flex: 1; min-width: 80px; }
+        .card-label { font-size: 13px; color: #999; margin-bottom: 4px; }
+        .card-value { font-size: 22px; font-weight: 600; color: #333; }
+        .card-bar { width: 100%; height: 4px; background: #f0f0f0; border-radius: 2px; margin-top: 12px; }
+        .card-bar-fill { height: 100%; border-radius: 2px; transition: width .4s ease; }
+        .cpu-bar { background: #ff6b6b; }
+        .ram-bar { background: #3b7dd8; }
+    </style>
+</head>
+<body class="layui-layout-body layuimini-all">
+<div class="layui-layout layui-layout-admin">
+
+    <div class="layui-header header">
+        <div class="layui-logo layuimini-logo"></div>
+
+        <div class="layuimini-header-content">
+            <a>
+                <div class="layuimini-tool"><i title="展开" class="fa fa-outdent" data-side-fold="1"></i></div>
+            </a>
+
+            <!--电脑端头部菜单-->
+            
+            <ul class="layui-nav layui-layout-right">
+
+                <li class="layui-nav-item" lay-unselect>
+                    <a href="javascript:;" data-refresh="刷新"><i class="fa fa-refresh"></i></a>
+                </li>
+                <li class="layui-nav-item" lay-unselect>
+                    <a href="javascript:;" data-clear="清理" class="layuimini-clear"><i class="fa fa-trash-o"></i></a>
+                </li>
+                <li class="layui-nav-item mobile layui-hide-xs" lay-unselect>
+                    <a href="javascript:;" data-check-screen="full"><i class="fa fa-arrows-alt"></i></a>
+                </li>
+                <li class="layui-nav-item layuimini-setting">
+                    <a href="javascript:;">管理员</a>
+                    <dl class="layui-nav-child">
+                        <dd>
+                            <a href="javascript:;" layuimini-content-href="page/user-setting.html" data-title="基本资料" data-icon="fa fa-gears">基本资料<span class="layui-badge-dot"></span></a>
+                        </dd>
+                        <dd>
+                            <a href="javascript:;" layuimini-content-href="page/user-password.html" data-title="修改密码" data-icon="fa fa-gears">修改密码</a>
+                        </dd>
+                        <dd>
+                            <hr>
+                        </dd>
+                        <dd>
+                            <a href="javascript:;" class="login-out">退出登录</a>
+                        </dd>
+                    </dl>
+                </li>
+                <li class="layui-nav-item layuimini-select-bgcolor" lay-unselect>
+                    <a href="javascript:;" data-bgcolor="配色方案"><i class="fa fa-ellipsis-v"></i></a>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <!--无限极左侧菜单-->
+    <div class="layui-side layui-bg-black layuimini-menu-left">
+    </div>
+
+    <!--初始化加载层-->
+    <div class="layuimini-loader">
+        <div class="layuimini-loader-inner"></div>
+    </div>
+
+    <!--手机端遮罩层-->
+    <div class="layuimini-make"></div>
+
+    <!-- 移动导航 -->
+    <div class="layuimini-site-mobile"><i class="layui-icon"></i></div>
+
+    <div class="layui-body">
+
+        <div class="layuimini-tab layui-tab-rollTool layui-tab" lay-filter="layuiminiTab" lay-allowclose="true">
+            <ul class="layui-tab-title">
+                <li class="layui-this" id="layuiminiHomeTabId" lay-id=""></li>
+            </ul>
+
+            <div class="layui-tab-content">
+                <div id="layuiminiHomeTabIframe" class="layui-tab-item layui-show"></div>
+            </div>
+        </div>
+
+    </div>
+</div>
+<script src="lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+<script src="js/lay-config.js?v=2.0.0" charset="utf-8"></script>
+<script>
+    layui.use(['jquery', 'layer', 'miniAdmin','miniTongji'], function () {
+        var $ = layui.jquery,
+            layer = layui.layer,
+            miniAdmin = layui.miniAdmin,
+            miniTongji = layui.miniTongji;
+
+        var options = {
+            iniUrl: "api/init.json",    // 初始化接口
+            clearUrl: "api/clear",      // 缓存清理接口
+            urlHashLocation: true,      // 是否打开hash定位
+            bgColorDefault: false,      // 主题默认配置
+            multiModule: true,          // 是否开启多模块
+            menuChildOpen: false,       // 是否默认展开菜单
+            loadingTime: 0,             // 初始化加载时间
+            pageAnim: true,             // iframe窗口动画
+            maxTabNum: 20,              // 最大的tab打开数量
+        };
+        miniAdmin.render(options);
+        ;
+
+        $('.login-out').on("click", function () {
+            layer.msg('退出登录成功', function () {
+                window.location = 'page/login.html';
+            });
+        });
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>API 管理</title>
+    <meta name="renderer" content="webkit">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="../lib/layui-v2.6.3/css/layui.css" media="all">
+    <link rel="stylesheet" href="../css/public.css" media="all">
+    <style>
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        .status-dot.configured { background: #5FB878; }
+        .status-dot.unconfigured { background: #FFB800; }
+        .status-dot.error { background: #FF5722; }
+    </style>
+</head>
+<body>
+<div class="layuimini-container">
+    <div class="layuimini-main">
+
+        <blockquote class="layui-elem-quote layui-text">
+            <i class="layui-icon layui-icon-tips"></i> 管理已配置的 AI 后端（DeepSeek / OpenAI / LM Studio），点击操作列按钮编辑 API 密钥与模型参数。
+        </blockquote>
+
+        <table class="layui-hide" id="apiTable" lay-filter="apiTableFilter"></table>
+
+        <script type="text/html" id="apiTableBar">
+            <a class="layui-btn layui-btn-normal layui-btn-xs" lay-event="edit">编辑</a>
+            <a class="layui-btn layui-btn-xs layui-btn-warm" lay-event="test">测试连接</a>
+        </script>
+
+    </div>
+</div>
+<script src="../lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
+<script>
+    layui.use(['table', 'layer'], function () {
+        var table = layui.table,
+            layer = layui.layer,
+            $ = layui.$;
+
+        // 后端名称 → 编辑页面映射
+        var EDIT_PAGES = {
+            'deepseek': '/page/table/edit_deepseek.html',
+            'openai':   '/page/table/edit_gpt.html',
+            'lmstudio': '/page/table/edit_lmstudio.html'
+        };
+
+        var DISPLAY_NAMES = {
+            'deepseek': 'DeepSeek',
+            'openai':   'OpenAI (ChatGPT)',
+            'lmstudio': 'LM Studio'
+        };
+
+        var API_ICONS = {
+            'deepseek': '#4F46E5',
+            'openai':   '#10A37F',
+            'lmstudio': '#7C3AED'
+        };
+
+        /**
+         * 从 /api/config 拉取配置，构建表格数据
+         */
+        function loadApiTable() {
+            $.getJSON('/api/config', function (resp) {
+                var config = resp.data || resp;
+                var backends = config.backends || {};
+                var rows = [];
+
+                ['deepseek', 'openai', 'lmstudio'].forEach(function (key) {
+                    var cfg = backends[key] || {};
+                    var hasApiKey = !!(cfg.api_key && cfg.api_key.trim().length > 0);
+                    var hasModel  = !!(cfg.model_name && cfg.model_name.trim().length > 0);
+                    var isConfigured = hasApiKey && hasModel;
+
+                    var statusHtml;
+                    if (isConfigured) {
+                        statusHtml = '<span class="status-dot configured"></span>已配置';
+                    } else if (hasApiKey || hasModel) {
+                        statusHtml = '<span class="status-dot unconfigured"></span>部分配置';
+                    } else {
+                        statusHtml = '<span class="status-dot unconfigured"></span>未配置';
+                    }
+
+                    rows.push({
+                        backend:     key,
+                        displayName: DISPLAY_NAMES[key] || key,
+                        status:      statusHtml,
+                        isConfigured: isConfigured,
+                        api_key:     cfg.api_key ? (cfg.api_key.substring(0, 8) + '...' + cfg.api_key.substring(cfg.api_key.length - 4)) : '',
+                        model_name:  cfg.model_name || '',
+                        api_base:    cfg.api_base || '',
+                        icon:        API_ICONS[key] || '#666'
+                    });
+                });
+
+                table.render({
+                    elem: '#apiTable',
+                    data: rows,
+                    cols: [[
+                        {field: 'displayName', title: '后端名称', width: 180, templet: function(d) {
+                            return '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + d.icon + ';margin-right:8px;vertical-align:middle;"></span>' + d.displayName;
+                        }},
+                        {field: 'status', title: '配置状态', width: 120, templet: function(d) { return d.status; }},
+                        {field: 'model_name', title: '模型名称', width: 200},
+                        {field: 'api_key', title: 'API 密钥', width: 200},
+                        {field: 'api_base', title: 'API 地址', width: 260},
+                        {title: '操作', width: 220, toolbar: '#apiTableBar', align: 'center'}
+                    ]],
+                    page: false,
+                    skin: 'line'
+                });
+            }).fail(function () {
+                layer.msg('加载配置失败', { icon: 2 });
+            });
+        }
+
+        // 初始加载
+        loadApiTable();
+
+        // 监听工具条
+        table.on('tool(apiTableFilter)', function (obj) {
+            var data = obj.data;
+            var backendKey = data.backend;
+
+            if (obj.event === 'edit') {
+                var editUrl = EDIT_PAGES[backendKey];
+                if (!editUrl) {
+                    layer.msg('未找到编辑页面: ' + backendKey, { icon: 2 });
+                    return;
+                }
+                layer.open({
+                    title: '编辑 ' + (DISPLAY_NAMES[backendKey] || backendKey),
+                    type: 2,
+                    shade: 0.2,
+                    maxmin: true,
+                    shadeClose: true,
+                    area: ['700px', '480px'],
+                    content: editUrl,
+                    end: function () {
+                        // 编辑窗口关闭后刷新表格
+                        loadApiTable();
+                    }
+                });
+            } else if (obj.event === 'test') {
+                // 测试连接
+                var loadIdx = layer.load(1, { shade: [0.3, '#000'] });
+                var testPayload = { backend: backendKey };
+                $.ajax({
+                    url: '/api/config/backend/test',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(testPayload),
+                    timeout: 15000,
+                    success: function (res) {
+                        layer.close(loadIdx);
+                        if (res.code === 0) {
+                            layer.msg('✓ ' + (DISPLAY_NAMES[backendKey] || backendKey) + ' 连接成功', { icon: 1 });
+                        } else {
+                            layer.msg('✗ ' + (res.msg || '连接失败'), { icon: 2 });
+                        }
+                    },
+                    error: function (xhr) {
+                        layer.close(loadIdx);
+                        var msg = '连接测试失败';
+                        try {
+                            var resp = JSON.parse(xhr.responseText);
+                            msg = resp.msg || resp.detail || msg;
+                        } catch (e) {}
+                        layer.msg('✗ ' + msg, { icon: 2 });
+                    }
+                });
+            }
+        });
+    });
+</script>
+</body>
+</html>
