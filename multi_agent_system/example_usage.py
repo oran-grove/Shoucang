@@ -615,7 +615,14 @@ def test_status(config: OrchestratorConfig):
     _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
     _info(f"反馈:   {config.feedback.backend.value}/{config.feedback.model_name}")
 
-    _info(f"回溯配置: 窗口序列={[f'{w}h' if w < 24 else f'{w // 24}d' for w in config.backtrack.lookback_windows]}, ")
+    def _fmt(w: float) -> str:
+        if w < 1:
+            return f"{int(w * 60)}m"
+        if w < 24:
+            return f"{w:.0f}h"
+        return f"{int(w // 24)}d"
+
+    _info(f"回溯配置: 窗口序列={[_fmt(w) for w in config.backtrack.lookback_windows]}, ")
     _info(f"实时扫描: {'启用' if config.live_scan.enabled else '禁用'} "
           f"(间隔={config.live_scan.scan_interval_seconds}s)")
 

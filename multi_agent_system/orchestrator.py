@@ -34,13 +34,17 @@ from .agents.feedback_agent import FeedbackAgent, AdminFeedback
 logger = logging.getLogger(__name__)
 
 
-def _fmt_window(hours: int) -> str:
-    """格式化回溯窗口为人类可读字符串 (e.g. 24→1d, 168→7d, 720→30d)"""
+def _fmt_window(hours: float) -> str:
+    """格式化回溯窗口为人类可读字符串 (e.g. 0.5→30m, 24→1d, 168→7d)"""
+    if hours < 1:
+        return f"{int(hours * 60)}m"
     if hours < 24:
-        return f"{hours}h"
+        return f"{hours:.0f}h"
     if hours % 24 == 0:
-        return f"{hours // 24}d"
-    return f"{hours // 24}d{hours % 24}h"
+        return f"{hours // 24:.0f}d"
+    d = int(hours // 24)
+    h = int(hours % 24)
+    return f"{d}d{h}h"
 
 
 class Orchestrator:

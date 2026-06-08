@@ -113,7 +113,7 @@ class BacktrackAgentConfig:
     )
     temperature: float = 0.3
     max_tokens: int = 2048
-    lookback_windows: list[int] = field(default_factory=lambda: [24, 168, 720, 2160])  # 1d, 7d, 30d, 90d
+    lookback_windows: list[float] = field(default_factory=lambda: [0.5, 24, 168, 720, 2160])  # 30m, 1d, 7d, 30d, 90d
     relevance_threshold: float = 0.6           # 关联度阈值（低于此值丢弃）
     max_similar_records: int = 20              # 每次回溯最多拉取相似记录数
 

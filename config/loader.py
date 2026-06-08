@@ -160,7 +160,7 @@ def _build_backtrack_config(d: dict) -> BacktrackAgentConfig:
         ),
         temperature=d.get("temperature", 0.3),
         max_tokens=d.get("max_tokens", 2048),
-        lookback_windows=d.get("lookback_windows", [24, 168, 720, 2160]),
+        lookback_windows=d.get("lookback_windows", [0.5, 24, 168, 720, 2160]),
         relevance_threshold=d.get("relevance_threshold", 0.6),
         max_similar_records=d.get("max_similar_records", 20),
     )

@@ -142,12 +142,16 @@ class BacktrackAgent(BaseAgent):
         return "\n".join(lines)
 
     @staticmethod
-    def _fmt_window(hours: int) -> str:
+    def _fmt_window(hours: float) -> str:
+        if hours < 1:
+            return f"{int(hours * 60)}m"
         if hours < 24:
-            return f"{hours}h"
+            return f"{hours:.0f}h"
         if hours % 24 == 0:
-            return f"{hours // 24}d"
-        return f"{hours // 24}d{hours % 24}h"
+            return f"{hours // 24:.0f}d"
+        d = int(hours // 24)
+        h = int(hours % 24)
+        return f"{d}d{h}h"
 
 
 __all__ = ["BacktrackAgent"]
