@@ -189,10 +189,18 @@ async def test_pipeline(config: OrchestratorConfig):
         try:
             verdict = await system.analyze(flow)
             results.append(verdict)
-            bt_depth = verdict.extra.get("backtrack_depth", 0) if verdict.extra else 0
+            lw = verdict.extra.get("lookback_window_hours", 0) if verdict.extra else 0
+            window_label = ""
+            if lw > 0:
+                if lw < 24:
+                    window_label = f"{lw}h"
+                elif lw % 24 == 0:
+                    window_label = f"{lw // 24}d"
+                else:
+                    window_label = f"{lw // 24}d{lw % 24}h"
+            depth_info = f" (回溯窗口{window_label})" if lw > 0 else ""
             verdict_icon = {"malicious": "!!", "suspicious": " ?", "safe": "  ", "unknown": ".."}.get(
                 verdict.verdict.value, "??")
-            depth_info = f" (回溯{bt_depth}次)" if bt_depth > 0 else ""
             _ok(f"[{verdict_icon}] {verdict.verdict.value.upper()}{depth_info} | "
                 f"严重度={verdict.severity.value} | 置信度={verdict.confidence:.0%}")
             _info(f"威胁类型: {verdict.threat_type}")
@@ -381,7 +389,7 @@ async def test_agents_standalone(config: OrchestratorConfig):
         adj_result = await adjudication.process(
             flow=flow,
             related_context=matched,
-            backtrack_depth=1,
+            lookback_window_hours=24,
         )
         _ok(f"研判结果: {adj_result.verdict.value} | "
             f"严重度={adj_result.severity.value} | 置信度={adj_result.confidence:.0%}")
@@ -607,9 +615,7 @@ def test_status(config: OrchestratorConfig):
     _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
     _info(f"反馈:   {config.feedback.backend.value}/{config.feedback.model_name}")
 
-    _info(f"回溯配置: 初始窗口={config.backtrack.initial_lookback_hours}h, "
-          f"最大次数={config.backtrack.max_backtrack_count}, "
-          f"扩展倍数={config.backtrack.lookback_multiplier}x")
+    _info(f"回溯配置: 窗口序列={[f'{w}h' if w < 24 else f'{w // 24}d' for w in config.backtrack.lookback_windows]}, "
     _info(f"实时扫描: {'启用' if config.live_scan.enabled else '禁用'} "
           f"(间隔={config.live_scan.scan_interval_seconds}s)")
 

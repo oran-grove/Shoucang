@@ -308,13 +308,22 @@ async def start_multi_agent_system(
                 from backend.api_server import push_alert
 
                 src_ip = flow.src_ip if flow else ""
-                bt_depth = verdict.extra.get("backtrack_depth", 0) if verdict.extra else 0
+                lookback_hours = (
+                    verdict.extra.get("lookback_window_hours", 0)
+                    if verdict.extra else 0
+                )
                 label_parts = [
                     f"[L3-研判] {verdict.threat_type}",
                     f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%}",
                 ]
-                if bt_depth > 0:
-                    label_parts[-1] += f", 回溯{bt_depth}次"
+                if lookback_hours > 0:
+                    if lookback_hours < 24:
+                        win_label = f"{lookback_hours}h"
+                    elif lookback_hours % 24 == 0:
+                        win_label = f"{lookback_hours // 24}d"
+                    else:
+                        win_label = f"{lookback_hours // 24}d{lookback_hours % 24}h"
+                    label_parts[-1] += f", 回溯窗口{win_label}"
                 label_parts[-1] += ")"
 
                 push_alert(
@@ -329,7 +338,7 @@ async def start_multi_agent_system(
                         "src_ip": src_ip,
                         "dst_ip": flow.dst_ip if flow else "",
                         "recommended_action": verdict.recommended_action,
-                        "backtrack_depth": bt_depth,
+                        "lookback_window_hours": lookback_hours,
                     },
                 )
                 _logger.debug(
