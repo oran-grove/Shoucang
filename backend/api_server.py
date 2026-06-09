@@ -734,13 +734,16 @@ async def api_traffic_action(payload: TrafficAction):
 
     target_ip = None
 
+    ai_verdict = "unknown"
+    ai_confidence = 0.0
     if action == "拉黑" and item_id:
-        # 找到该事件的源 IP
+        # 找到该事件的源 IP 和 AI 判定信息
         try:
             rows = _db("lists_manager", "get_traffic_logs", 200, 0)
             for row in rows:
                 if row.get("id") == item_id:
                     target_ip = row.get("src_ip")
+                    ai_verdict = row.get("ai_verdict", "unknown") or "unknown"
                     break
         except Exception:
             pass
@@ -763,7 +766,8 @@ async def api_traffic_action(payload: TrafficAction):
             pass
 
     # -- 写入多智能体记忆系统 (自适应 Tier 0) --
-    _record_to_memory_from_admin(item_id, action, reason, target_ip)
+    _record_to_memory_from_admin(item_id, action, reason, target_ip,
+                                 ai_verdict, ai_confidence)
 
     return JSONResponse({"code": 0, "msg": f"操作成功: {action}"})
 
@@ -969,6 +973,7 @@ def start(host: str = "0.0.0.0", port: int = 8080, **kwargs):
 
 def _record_to_memory_from_admin(
     traffic_id: Optional[int], action: str, reason: str, target_ip: Optional[str],
+    ai_verdict: str = "unknown", ai_confidence: float = 0.0,
 ) -> None:
     """将管理员操作写入多智能体记忆系统"""
     try:
@@ -977,11 +982,10 @@ def _record_to_memory_from_admin(
         # 推断 AI 是否正确（基于管理员动作）
         # 拉黑 → 管理员确认有异常；忽视 → 管理员认为是误报
         ai_correct = action == "拉黑"
-        category_map = {"拉黑": "tp", "忽视": "fp"}
 
         get_store().record_feedback(
-            ai_verdict="unknown",  # 后端 API 层没有 AI 判定信息
-            ai_confidence=0.0,
+            ai_verdict=ai_verdict,
+            ai_confidence=ai_confidence,
             admins_action=action,
             ai_correct=ai_correct,
             admin_note=reason,

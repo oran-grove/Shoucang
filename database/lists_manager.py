@@ -327,7 +327,8 @@ def get_traffic_logs(limit: int = 200,
 
             cursor.execute(
                 f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy "
+                "protocol, packet_time, traffic_size, is_blocked, entropy, "
+                "ai_analyzed, ai_verdict "
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
                 params + [limit, offset],
             )

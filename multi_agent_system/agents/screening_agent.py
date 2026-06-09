@@ -74,7 +74,15 @@ class ScreeningAgent(BaseAgent):
         Returns:
             ThreatVerdict: 威胁判定结果
         """
+        # 查询记忆系统中的匹配模式，注入提示词
+        pattern_context = self._get_pattern_context(flow)
         user_prompt = f"请分析以下流量：\n{flow.to_prompt_text()}"
+        if pattern_context:
+            user_prompt = (
+                f"=== 历史模式参考（来自自适应学习系统） ===\n"
+                f"{pattern_context}\n\n"
+                f"{user_prompt}"
+            )
         try:
             raw = await self.call_llm(user_prompt)
             parsed = self.extract_json_from_response(raw)
@@ -136,6 +144,26 @@ class ScreeningAgent(BaseAgent):
         if verdict.confidence >= self.confidence_threshold_suspicious:
             return "suspicious"
         return "safe"
+
+    @staticmethod
+    def _get_pattern_context(flow: FlowEvent) -> str:
+        """从记忆系统查询匹配的历史模式，返回提示词注入文本。"""
+        try:
+            from ..memory import get_index
+            index = get_index()
+            features = {
+                "department": getattr(flow, "department", ""),
+                "protocol": getattr(flow, "protocol", "TCP"),
+                "direction": (
+                    "internal" if getattr(flow, "dst_ip", "").startswith(
+                        ("10.", "192.168.", "172.")
+                    ) else "outbound"
+                ),
+                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
+            }
+            return index.format_context(features)
+        except Exception:
+            return ""
 
 
 __all__ = ["ScreeningAgent"]

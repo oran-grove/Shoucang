@@ -138,12 +138,18 @@ class AdjudicationAgent(BaseAgent):
         else:
             context_lines.append("未经过历史回溯（L1直接判断为可疑）")
 
+        pattern_context = self._get_pattern_context(flow)
         user_prompt = (
             f"=== 原始流量 ===\n"
             f"{flow.to_prompt_text()}\n\n"
-            f"=== 研判背景 ===\n" + "\n".join(context_lines) + "\n\n"
-            f"请结合以上信息给出最终威胁研判。"
+            f"=== 研判背景 ===\n" + "\n".join(context_lines) + "\n"
         )
+        if pattern_context:
+            user_prompt += (
+                f"\n=== 历史模式参考（来自自适应学习系统） ===\n"
+                f"{pattern_context}\n"
+            )
+        user_prompt += "\n请结合以上信息给出最终威胁研判。"
 
         try:
             raw = await self.call_llm(user_prompt)
@@ -203,6 +209,26 @@ class AdjudicationAgent(BaseAgent):
             reasoning=reason,
             recommended_action="monitor",
         )
+
+    @staticmethod
+    def _get_pattern_context(flow: FlowEvent) -> str:
+        """从记忆系统查询匹配的历史模式，返回提示词注入文本。"""
+        try:
+            from ..memory import get_index
+            index = get_index()
+            features = {
+                "department": getattr(flow, "department", ""),
+                "protocol": getattr(flow, "protocol", "TCP"),
+                "direction": (
+                    "internal" if getattr(flow, "dst_ip", "").startswith(
+                        ("10.", "192.168.", "172.")
+                    ) else "outbound"
+                ),
+                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
+            }
+            return index.format_context(features)
+        except Exception:
+            return ""
 
 
 __all__ = ["AdjudicationAgent"]
