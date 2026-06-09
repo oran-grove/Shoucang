@@ -375,7 +375,8 @@ async def start_multi_agent_system(
                     _green(
                         "[Layer 2]   逐条分析扫描已启动 "
                         f"(起始ID={live_scanner._last_processed_id}, "
-                        f"间隔={config.live_scan.scan_interval_seconds}s)"
+                        f"空闲探询={config.live_scan.idle_poll_interval_seconds}s, "
+                        f"并发={config.live_scan.max_concurrent_analyses})"
                     )
                 )
             else:
@@ -589,7 +590,7 @@ async def async_main(args: argparse.Namespace):
         _logger.warning(_yellow(f"[数据库] 黑白名单初始化失败 (非致命): {e}"))
 
     # ---- 启动判定结果批量写入器 ----
-    from database.verdict_writer import start_verdict_writer, stop_verdict_writer as _stop_vw
+    from database.writer import start_verdict_writer, stop_verdict_writer as _stop_vw
     _vq, _ve = start_verdict_writer()
     _global_state["verdict_write_queue"] = _vq
     _global_state["verdict_stop_event"] = _ve
@@ -706,7 +707,7 @@ async def async_main(args: argparse.Namespace):
     # 2.5 停止判定批量写入器（在多智能体之后、数据网关之前）
     _ve = _global_state.get("verdict_stop_event")
     if _ve is not None:
-        from database.verdict_writer import stop_verdict_writer as _stop_vw
+        from database.writer import stop_verdict_writer as _stop_vw
         _stop_vw(_ve)
         _logger.info(_green("[数据库] 判定批量写入器已停止"))
 

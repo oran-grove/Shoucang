@@ -118,11 +118,11 @@
   },
 
   "live_scan": {
-    "_comment": "逐条评判队列扫描 — 实时从 DB 拉取未分析记录逐条研判",
+    "_comment": "逐条评判队列扫描 — 定时触发(10min) + 链式连续消费(直到清空)",
     "enabled": true,
-    "scan_interval_seconds": 5.0,
-    "batch_size": 50,
-    "max_concurrent_analyses": 3,
+    "idle_poll_interval_seconds": 600.0,
+    "batch_size_multiplier": 6.0,
+    "max_concurrent_analyses": 8,
     "start_from": "oldest"
   },
 

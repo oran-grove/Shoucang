@@ -174,12 +174,18 @@ class FeedbackAgentConfig:
 
 @dataclass
 class LiveScanAgentConfig:
-    """逐条评判队列扫描配置"""
+    """逐条评判队列扫描配置 — 定时触发 + 链式连续消费"""
     enabled: bool = True                        # 管理员开关
-    scan_interval_seconds: float = 5.0          # 每条之间的扫描间隔（节流）
-    batch_size: int = 50                        # 每次从 DB 拉取的批量大小
-    max_concurrent_analyses: int = 3            # 最大并发分析数
+    idle_poll_interval_seconds: float = 600.0   # 空闲轮询间隔（默认 10 分钟）
+    batch_size_multiplier: float = 6.0          # 批次大小 = 并发数 × 倍数
+    max_concurrent_analyses: int = 8            # 最大并发分析数
     start_from: str = "oldest"                  # "oldest" | "newest" | "last_id:N"
+
+    @property
+    def batch_size(self) -> int:
+        """动态计算批次大小 = 并发数 × 倍数（至少为并发数，确保每线程至少 1 条）"""
+        return max(self.max_concurrent_analyses,
+                   int(self.max_concurrent_analyses * self.batch_size_multiplier))
 
 
 @dataclass
