@@ -20,7 +20,15 @@ from .schema import (
     BacktrackAgentConfig,
     AdjudicationAgentConfig,
     FeedbackAgentConfig,
+    GeoipConfig,
+    LiveScanAgentConfig,
     OrchestratorConfig,
+)
+
+from .active import (
+    get_active_config,
+    set_active_config,
+    is_config_loaded,
 )
 
 from .loader import (
@@ -41,6 +49,8 @@ __all__ = [
     "BacktrackAgentConfig",
     "AdjudicationAgentConfig",
     "FeedbackAgentConfig",
+    "GeoipConfig",
+    "LiveScanAgentConfig",
     "OrchestratorConfig",
     # 加载器
     "load_config",
@@ -50,4 +60,8 @@ __all__ = [
     "save_config_dict",
     "quick_all_local",
     "quick_all_deepseek",
+    # 活跃配置单例
+    "get_active_config",
+    "set_active_config",
+    "is_config_loaded",
 ]

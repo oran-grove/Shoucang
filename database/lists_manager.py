@@ -418,7 +418,7 @@ def get_traffic_max_id() -> int:
 
 def get_similar_flows_by_src_ip(
     src_ip: str,
-    lookback_hours: int,
+    lookback_hours: float,
     max_records: int = 20,
 ) -> list:
     """查询同源 IP 的历史记录（供 Layer 2 回溯使用）。"""

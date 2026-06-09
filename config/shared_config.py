@@ -38,15 +38,14 @@ DB_CONFIG: DbConfig = {
 # config/ 的父目录，必须在其他路径常量之前定义
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
-# ==================== GeoIP 数据库更新配置 ====================
-# MaxMind GeoLite2-City.mmdb 自动更新间隔（小时）
-# 设为 0 表示禁用自动更新
-GEOIP_UPDATE_INTERVAL_HOURS = 168  # 7 天
+# ==================== GeoIP 数据库路径常量 ====================
+# 更新间隔 / 启用开关等可配置项请通过 config.geoip (OrchestratorConfig) 读取
+# 以下为项目级固定路径常量（非配置项）
 
 # GeoIP 数据库文件绝对路径
 GEOIP_DB_PATH = str(PROJECT_ROOT / "data_gateway" / "GeoLite2-City.mmdb")
 
-# GeoIP 下载源
+# GeoIP 下载源（固定基础设施常量，非用户可配置项）
 GEOIP_DOWNLOAD_URL = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
 
 

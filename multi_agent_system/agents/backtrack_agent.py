@@ -73,7 +73,7 @@ class BacktrackAgent(BaseAgent):
         self,
         flow: FlowEvent,
         similar_records: list[dict],
-        lookback_window_hours: int = 24,
+        lookback_window_hours: float = 24,
     ) -> dict[str, Any]:
         """
         分批反向筛选：自动编号 → 分批 → LLM 返回低关联编号 → 剔除。

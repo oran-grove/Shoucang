@@ -288,6 +288,10 @@ async def start_multi_agent_system(
             )
             config = load_config()
 
+        # 写入全局活跃配置单例
+        from config.active import set_active_config
+        set_active_config(config)
+
         system = MultiAgentSystem(orchestrator_config=config)
         await system.start()
 
@@ -480,15 +484,14 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
     """启动 GeoIP 数据库定期自动更新线程"""
     interval_hours = args.geoip_update_interval
     if interval_hours is None:
-        # 从配置文件读取（通过统一 config 加载器）
+        # 从全局活跃配置读取
         try:
-            from config.loader import load_config_dict
-            user_cfg = load_config_dict()
-            geoip_cfg = user_cfg.get("geoip", {})
-            if not geoip_cfg.get("enabled", True):
+            from config.active import get_active_config
+            geoip_cfg = get_active_config().geoip
+            if not geoip_cfg.enabled:
                 _logger.info("[GeoIP] 配置文件中已禁用自动更新")
                 return
-            interval_hours = geoip_cfg.get("update_interval_hours", 168)
+            interval_hours = geoip_cfg.update_interval_hours
         except Exception:
             interval_hours = 168
 

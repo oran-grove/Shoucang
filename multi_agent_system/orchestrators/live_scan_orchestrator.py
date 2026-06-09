@@ -34,22 +34,16 @@ import asyncio
 import json
 import logging
 import queue
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
+from config.shared_config import PROJECT_ROOT
 from ..core.message import FlowEvent
 from . import row_to_flow_event  # 共享的 DB row → FlowEvent 转换
 
 logger = logging.getLogger(__name__)
 
-# 确保项目根目录在 sys.path 中
-_PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-_CHECKPOINT_FILE = _PROJECT_ROOT / ".live_scan_checkpoint.json"
+_CHECKPOINT_FILE = PROJECT_ROOT / ".live_scan_checkpoint.json"
 
 
 class LiveScanOrchestrator:

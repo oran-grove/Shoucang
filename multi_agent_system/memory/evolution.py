@@ -69,9 +69,9 @@ async def run_evolution_loop(shutdown_event: threading.Event):
                         "[Evolution:Loop3] 执行周度 LLM 模式提取..."
                     )
                     try:
-                        from config.loader import load_config
+                        from config.active import get_active_config
                         from ..config import BackendType
-                        cfg = load_config()
+                        cfg = get_active_config()
                         ds_cfg = cfg.default_backends.get(BackendType.DEEPSEEK)
                         if ds_cfg and ds_cfg.api_key:
                             from ..backends.deepseek_backend import (

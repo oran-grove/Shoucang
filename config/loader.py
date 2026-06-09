@@ -37,6 +37,7 @@ from .schema import (
     AdjudicationAgentConfig,
     FeedbackAgentConfig,
     LiveScanAgentConfig,
+    GeoipConfig,
     OrchestratorConfig,
 )
 
@@ -207,6 +208,19 @@ def _build_live_scan_config(d: dict) -> LiveScanAgentConfig:
     )
 
 
+def _build_geoip_config(d: dict) -> GeoipConfig:
+    """从字典构建 GeoipConfig"""
+    return GeoipConfig(
+        enabled=d.get("enabled", True),
+        update_interval_hours=d.get("update_interval_hours", 168),
+        download_url=d.get(
+            "download_url",
+            "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
+        ),
+        db_path=d.get("db_path", "data_gateway/GeoLite2-City.mmdb"),
+    )
+
+
 def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
     """
     加载配置，返回 OrchestratorConfig。
@@ -276,6 +290,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         adjudication=_build_adjudication_config(merged.get("adjudication", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
         live_scan=_build_live_scan_config(merged.get("live_scan", {})),
+        geoip=_build_geoip_config(merged.get("geoip", {})),
         default_backends=default_backends,
     )
 
@@ -378,6 +393,12 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "batch_size_multiplier": config.live_scan.batch_size_multiplier,
             "max_concurrent_analyses": config.live_scan.max_concurrent_analyses,
             "start_from": config.live_scan.start_from,
+        },
+        "geoip": {
+            "enabled": config.geoip.enabled,
+            "update_interval_hours": config.geoip.update_interval_hours,
+            "download_url": config.geoip.download_url,
+            "db_path": config.geoip.db_path,
         },
     }
 

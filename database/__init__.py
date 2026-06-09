@@ -22,14 +22,6 @@
     from database import get_ip_dept_map, lookup_employee
 """
 
-import sys
-from pathlib import Path
-
-# 确保项目根目录在 sys.path 中
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
 from .writer import (
     start_db_writer,
     stop_db_writer,

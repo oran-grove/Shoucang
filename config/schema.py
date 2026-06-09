@@ -190,6 +190,17 @@ class LiveScanAgentConfig:
 
 
 @dataclass
+class GeoipConfig:
+    """GeoIP 数据库自动更新配置"""
+    enabled: bool = True
+    update_interval_hours: int = 168          # 自动更新间隔（小时），7 天
+    download_url: str = (
+        "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
+    )
+    db_path: str = "data_gateway/GeoLite2-City.mmdb"  # 相对于项目根目录
+
+
+@dataclass
 class OrchestratorConfig:
     """编排器总配置 — 三层智能体架构"""
     screening: ScreeningAgentConfig = field(default_factory=ScreeningAgentConfig)
@@ -197,6 +208,7 @@ class OrchestratorConfig:
     adjudication: AdjudicationAgentConfig = field(default_factory=AdjudicationAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
     live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
+    geoip: GeoipConfig = field(default_factory=GeoipConfig)
     # 全局后端连接池配置
     default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
 

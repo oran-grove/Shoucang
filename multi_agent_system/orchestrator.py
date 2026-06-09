@@ -317,6 +317,7 @@ class Orchestrator:
         backtrack_cfg = self.config.backtrack
         lookback_windows = list(backtrack_cfg.lookback_windows)
         total_windows = len(lookback_windows)
+        lookback_hours: float = 0.0
         all_related_records: list[dict] = []
         seen_record_ids: set = set()  # 已见过的记录ID，用于判定本轮是否有新增数据
         final_adjudication: Optional[ThreatVerdict] = None
@@ -329,10 +330,15 @@ class Orchestrator:
             )
 
             # ---- Layer 2: 历史回溯 ----
+            # 每批上限 × 5 = 为多轮窗口预留足够的历史数据
+            max_per_batch = max(1, int(
+                self._get_backend_context_tokens(backtrack_cfg.backend)
+                * backtrack_cfg.batch_context_ratio / 120
+            ))
             similar_records = self._query_similar_flows(
                 flow_src_ip=flow.src_ip,
                 lookback_hours=lookback_hours,
-                max_records=backtrack_cfg.max_similar_records,
+                max_records=max(max_per_batch * 5, 100),
             )
 
             new_matched: list[dict] = []
@@ -451,7 +457,7 @@ class Orchestrator:
     def _query_similar_flows(
         self,
         flow_src_ip: str,
-        lookback_hours: int,
+        lookback_hours: float,
         max_records: int = 20,
     ) -> list[dict]:
         """

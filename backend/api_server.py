@@ -37,9 +37,7 @@ API 端点映射：
 import json
 import logging
 import os
-import sys
 import threading
-from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -50,12 +48,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---- 路径配置 ----
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
-
-# 确保项目根在 sys.path
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 
 # ---- 统一配置加载（通过 config 模块）----
 from config.loader import (
@@ -207,12 +201,23 @@ class BlacklistItem(BaseModel):
 # ============================================================================
 # 配置读写
 # ============================================================================
+# 配置缓存（避免每次请求都读磁盘）
+_config_cache: dict | None = None
+
+
 def _read_config_user() -> dict:
-    return load_config_dict()
+    """读取用户配置（首次从磁盘加载，后续返回缓存副本）。"""
+    global _config_cache
+    if _config_cache is None:
+        _config_cache = load_config_dict()
+    return _config_cache
 
 
-def _save_config_user(config: dict):
+def _save_config_user(config: dict) -> None:
+    """保存配置到磁盘并刷新缓存。"""
+    global _config_cache
     save_config_dict(config)
+    _config_cache = config
 
 
 # ============================================================================
@@ -964,9 +969,6 @@ def _record_to_memory_from_admin(
 ) -> None:
     """将管理员操作写入多智能体记忆系统"""
     try:
-        # 确保项目根在 sys.path
-        if str(_PROJECT_ROOT) not in sys.path:
-            sys.path.insert(0, str(_PROJECT_ROOT))
         from multi_agent_system.memory import get_store
 
         # 推断 AI 是否正确（基于管理员动作）

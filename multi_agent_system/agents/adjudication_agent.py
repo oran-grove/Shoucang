@@ -83,7 +83,7 @@ class AdjudicationAgent(BaseAgent):
         self,
         flow: FlowEvent,
         related_context: list[dict],
-        lookback_window_hours: int = 0,
+        lookback_window_hours: float = 0,
         screening_result: ThreatVerdict | None = None,
     ) -> ThreatVerdict:
         """

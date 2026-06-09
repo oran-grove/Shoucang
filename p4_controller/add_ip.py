@@ -11,8 +11,8 @@ import sys
 import socket
 from pathlib import Path
 
-# 确保项目根目录在 sys.path 中（兼容独立运行与包内导入）
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve() if (Path(__file__).parent / "__init__.py").exists() else Path(__file__).parent.resolve()
+# 确保项目根目录在 sys.path 中（兼容独立运行，必须先于 config 导入）
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -55,7 +55,7 @@ def _ip_to_bytes(ip_str: str) -> bytes:
 #    - 数据库写入: database.add_to_db_blacklist()
 #    - P4 物理流表: Thrift 注入 exact drop 规则
 # ==========================================
-def add_to_blacklist(ip: str, source: str) -> bool:
+def add_to_blacklist(ip: str, source: str, reason: str = "") -> bool:
     """通过 Thrift 直连交换机，注入精确匹配阻断流表"""
     from bm_runtime.standard.ttypes import (BmMatchParam, BmMatchParamExact,
                                              BmMatchParamType, BmAddEntryOptions)
@@ -74,7 +74,7 @@ def add_to_blacklist(ip: str, source: str) -> bool:
     logger.info("封杀执行！来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 流表...", source, ip)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
-    if not add_to_db_blacklist(ip, threat_level="高", reason=f"由{source}触发"):
+    if not add_to_db_blacklist(ip, threat_level="高", reason=reason or f"由{source}触发"):
         logger.error("数据库黑名单写入失败，终止拉黑")
         return False
 
@@ -109,7 +109,7 @@ def add_to_blacklist(ip: str, source: str) -> bool:
 #    - 数据库写入: database.add_to_db_whitelist()
 #    - P4 物理流表: Thrift 注入 LPM 免检规则
 # ==========================================
-def add_to_whitelist(ip: str, source: str) -> bool:
+def add_to_whitelist(ip: str, source: str, reason: str = "") -> bool:
     """通过 Thrift 直连交换机，注入 LPM 匹配免检流表"""
     from bm_runtime.standard.ttypes import (BmMatchParam, BmMatchParamLPM,
                                              BmMatchParamType, BmAddEntryOptions)
@@ -124,7 +124,7 @@ def add_to_whitelist(ip: str, source: str) -> bool:
     logger.info("特权加白！来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 免检通道...", source, ip)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
-    if not add_to_db_whitelist(ip, reason=f"由{source}手动加白"):
+    if not add_to_db_whitelist(ip, reason=reason or f"由{source}手动加白"):
         logger.error("数据库白名单写入失败，终止加白")
         return False
 
