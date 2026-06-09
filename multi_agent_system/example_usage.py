@@ -27,9 +27,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
+# 确保项目根在 sys.path（本文件可独立运行）
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config.shared_config import PROJECT_ROOT
 
 from multi_agent_system import (
     MultiAgentSystem, Orchestrator, OrchestratorConfig,
@@ -81,7 +84,7 @@ def _warn(msg: str) -> None:
 
 def load_test_config() -> OrchestratorConfig:
     """加载测试配置，优先使用 config_user.json（含用户的 API Key）。"""
-    user_path = _PROJECT_ROOT / "config" / "config_user.json"
+    user_path = PROJECT_ROOT / "config" / "config_user.json"
     if user_path.exists():
         return load_config(str(user_path))
     return load_config()

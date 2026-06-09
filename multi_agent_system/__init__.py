@@ -56,116 +56,26 @@ class MultiAgentSystem:
     """
     多智能体分析系统主类。
 
-    设计目标：对主调程序暴露最简洁的接口，
-    屏蔽内部 LLM 后端、三层管线等细节。
+    对主调程序暴露最简洁的接口，屏蔽内部 LLM 后端、三层管线等细节。
+    后端和智能体配置通过 OrchestratorConfig（JSON 文件加载）管理。
 
     —— 典型使用方式 ——
 
-        系统 = MultiAgentSystem()
-        系统.add_deepseek_backend("sk-your-key")
-        系统.set_screening_backend(BackendType.DEEPSEEK)
+        config = load_config("config/config_user.json")
+        system = MultiAgentSystem(orchestrator_config=config)
+        await system.start()
 
-        # 流量事件（来自 P4 交换机镜像）
-        flow = FlowEvent(
-            src_ip="192.168.1.100", dst_ip="8.8.8.8",
-            src_port=54321, dst_port=443,
-            protocol="TCP", app_protocol="TLS",
-            byte_count=1500000, avg_pkt_size=1200,
-            entropy_score=7.2, tls_sni="evil.example.com",
-        )
-
-        verdict = 系统.analyze_sync(flow)
+        verdict = await system.analyze(flow)
         if verdict.verdict == TrafficVerdict.MALICIOUS:
             print(f"检测到恶意流量！建议{verdict.recommended_action}")
 
-        # 管理员反馈
-        系统.feedback_sync("false_positive", src_ip="192.168.1.100")
+        await system.stop()
     """
 
     def __init__(self, orchestrator_config: Optional[OrchestratorConfig] = None):
         self._config = orchestrator_config or OrchestratorConfig()
         self._orchestrator = Orchestrator(config=self._config)
         self._started = False
-
-    # --- 后端配置 ---
-
-    def add_openai_backend(
-        self,
-        api_key: str,
-        api_base: str = "https://api.openai.com/v1",
-        model_name: str = "gpt-4o-mini",
-        timeout: float = 60.0,
-        max_retries: int = 3,
-    ) -> None:
-        """添加 OpenAI 兼容 API 后端"""
-        self._config.default_backends[BackendType.OPENAI] = LLMBackendConfig(
-            backend_type=BackendType.OPENAI,
-            api_base=api_base,
-            api_key=api_key,
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=max_retries,
-        )
-
-    def add_lmstudio_backend(
-        self,
-        api_base: str = "http://localhost:1234/v1",
-        model_name: str = "qwen3.5-9b",
-        timeout: float = 120.0,
-        auto_load: bool = True,
-        load_config: Optional[dict] = None,
-    ) -> None:
-        """添加 LM Studio 本地 AI 后端"""
-        self._config.default_backends[BackendType.LMSTUDIO] = LLMBackendConfig(
-            backend_type=BackendType.LMSTUDIO,
-            api_base=api_base,
-            api_key="lm-studio",
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=2,
-            auto_load=auto_load,
-            load_config=load_config or {},
-        )
-
-    def add_deepseek_backend(
-        self,
-        api_key: str,
-        api_base: str = "https://api.deepseek.com",
-        model_name: str = "deepseek-v4-flash",
-        timeout: float = 120.0,
-        max_retries: int = 5,
-        thinking_enabled: Optional[bool] = None,
-        reasoning_effort: Optional[str] = None,
-        include_reasoning: bool = False,
-    ) -> None:
-        """添加 DeepSeek V4 API 后端"""
-        self._config.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
-            backend_type=BackendType.DEEPSEEK,
-            api_base=api_base,
-            api_key=api_key,
-            model_name=model_name,
-            timeout=timeout,
-            max_retries=max_retries,
-            thinking_enabled=thinking_enabled,
-            reasoning_effort=reasoning_effort,
-            include_reasoning=include_reasoning,
-        )
-
-    def set_screening_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
-        """设置 Layer 1 筛查智能体使用的后端"""
-        self._config.screening.backend = backend
-
-    def set_backtrack_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
-        """设置 Layer 2 回溯智能体使用的后端"""
-        self._config.backtrack.backend = backend
-
-    def set_adjudication_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
-        """设置 Layer 3 研判智能体使用的后端"""
-        self._config.adjudication.backend = backend
-
-    def set_feedback_backend(self, backend: BackendType = BackendType.DEEPSEEK) -> None:
-        """设置反馈智能体使用的后端"""
-        self._config.feedback.backend = backend
 
     # --- 生命周期 ---
 

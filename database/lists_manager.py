@@ -327,7 +327,8 @@ def get_traffic_logs(limit: int = 200,
 
             cursor.execute(
                 f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy "
+                "protocol, packet_time, traffic_size, is_blocked, entropy, "
+                "ai_analyzed, ai_verdict "
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
                 params + [limit, offset],
             )
@@ -418,7 +419,7 @@ def get_traffic_max_id() -> int:
 
 def get_similar_flows_by_src_ip(
     src_ip: str,
-    lookback_hours: int,
+    lookback_hours: float,
     max_records: int = 20,
 ) -> list:
     """查询同源 IP 的历史记录（供 Layer 2 回溯使用）。"""

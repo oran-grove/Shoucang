@@ -155,6 +155,7 @@ class Orchestrator:
 
         # --- Layer 2: 回溯智能体 ---
         bk_cfg = self.config.backtrack
+        bk_ctx = self._get_backend_context_tokens(bk_cfg.backend)
         backtrack_agent = BacktrackAgent(
             name="BacktrackAgent",
             system_prompt=bk_cfg.system_prompt,
@@ -162,18 +163,23 @@ class Orchestrator:
             temperature=bk_cfg.temperature,
             max_tokens=bk_cfg.max_tokens,
             relevance_threshold=bk_cfg.relevance_threshold,
+            max_context_tokens=bk_ctx,
+            batch_context_ratio=bk_cfg.batch_context_ratio,
         )
         self._inject_agent_deps(backtrack_agent, bk_cfg.backend)
         self._agents["backtrack"] = backtrack_agent
 
         # --- Layer 3: 研判智能体 ---
         adj_cfg = self.config.adjudication
+        adj_ctx = self._get_backend_context_tokens(adj_cfg.backend)
         adjudication_agent = AdjudicationAgent(
             name="AdjudicationAgent",
             system_prompt=adj_cfg.system_prompt,
             model_name=adj_cfg.model_name,
             temperature=adj_cfg.temperature,
             max_tokens=adj_cfg.max_tokens,
+            max_context_tokens=adj_ctx,
+            batch_context_ratio=bk_cfg.batch_context_ratio,
         )
         self._inject_agent_deps(adjudication_agent, adj_cfg.backend)
         self._agents["adjudication"] = adjudication_agent
@@ -189,6 +195,18 @@ class Orchestrator:
         )
         self._inject_agent_deps(feedback_agent, fb_cfg.backend)
         self._agents["feedback"] = feedback_agent
+
+    def _get_backend_context_tokens(self, backend_type: BackendType) -> int:
+        """获取指定后端的 max_context_tokens，降级到默认值。"""
+        backend = self._backends.get(backend_type)
+        if backend and hasattr(backend, 'default_model'):
+            # 从 LLMBackendConfig 读取（_inject_agent_deps 会同步模型名）
+            pass
+        # 直接从 config 读取（初始化阶段 backend 可能尚未构建）
+        be_cfg = self.config.default_backends.get(backend_type)
+        if be_cfg:
+            return be_cfg.max_context_tokens
+        return 4096
 
     def _inject_agent_deps(self, agent, backend_type: BackendType) -> None:
         """向智能体注入 LLM 后端"""
@@ -289,7 +307,6 @@ class Orchestrator:
         if calibrated == "dangerous":
             logger.info("[%s] L1 判定危险，直接上报", pipeline_id)
             self._alert_if_needed(screening_result, flow, pipeline_id)
-            self._record_to_memory(screening_result, flow)
             return screening_result
 
         # calibrated == "suspicious" — 进入 Layer 2/3 循环
@@ -299,6 +316,7 @@ class Orchestrator:
         backtrack_cfg = self.config.backtrack
         lookback_windows = list(backtrack_cfg.lookback_windows)
         total_windows = len(lookback_windows)
+        lookback_hours: float = 0.0
         all_related_records: list[dict] = []
         seen_record_ids: set = set()  # 已见过的记录ID，用于判定本轮是否有新增数据
         final_adjudication: Optional[ThreatVerdict] = None
@@ -311,10 +329,15 @@ class Orchestrator:
             )
 
             # ---- Layer 2: 历史回溯 ----
+            # 每批上限 × 5 = 为多轮窗口预留足够的历史数据
+            max_per_batch = max(1, int(
+                self._get_backend_context_tokens(backtrack_cfg.backend)
+                * backtrack_cfg.batch_context_ratio / 120
+            ))
             similar_records = self._query_similar_flows(
                 flow_src_ip=flow.src_ip,
                 lookback_hours=lookback_hours,
-                max_records=backtrack_cfg.max_similar_records,
+                max_records=max(max_per_batch * 5, 100),
             )
 
             new_matched: list[dict] = []
@@ -410,10 +433,6 @@ class Orchestrator:
                 and lookback_windows and lookback_hours == lookback_windows[-1]):
             self._alert_if_needed(final_adjudication, flow, pipeline_id)
 
-        # 写入记忆系统
-        if final_adjudication.verdict in (TrafficVerdict.MALICIOUS, TrafficVerdict.SUSPICIOUS):
-            self._record_to_memory(final_adjudication, flow)
-
         return final_adjudication
 
     def analyze_flow_sync(self, flow: FlowEvent) -> ThreatVerdict:
@@ -433,7 +452,7 @@ class Orchestrator:
     def _query_similar_flows(
         self,
         flow_src_ip: str,
-        lookback_hours: int,
+        lookback_hours: float,
         max_records: int = 20,
     ) -> list[dict]:
         """
@@ -538,52 +557,5 @@ class Orchestrator:
                 self.alert_callback(verdict, flow)
             except Exception:
                 logger.exception("[%s] 告警回调异常", pipeline_id)
-
-    def _record_to_memory(self, verdict: ThreatVerdict, flow: FlowEvent) -> None:
-        """将判定结果写入记忆系统"""
-        try:
-            from .memory import get_store, get_index
-            store = get_store()
-            index = get_index()
-
-            features = {
-                "department": getattr(flow, "department", ""),
-                "protocol": getattr(flow, "protocol", "TCP"),
-                "direction": (
-                    "internal" if getattr(flow, "dst_ip", "").startswith(("10.", "192.168.", "172."))
-                    else "outbound"
-                ),
-                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
-            }
-            matching = index.query(features, min_match=0.5)
-            matched_ids = [c.card_id for c in matching]
-
-            store.record_feedback(
-                ai_verdict=verdict.verdict.value,
-                ai_confidence=verdict.confidence,
-                ai_reasoning=verdict.reasoning[:500],
-                ai_threat_type=verdict.threat_type,
-                admins_action="",
-                ai_correct=False,
-                admin_note="",
-                src_ip=flow.src_ip,
-                dst_ip=flow.dst_ip,
-                src_port=flow.src_port,
-                dst_port=flow.dst_port,
-                department=getattr(flow, "department", ""),
-                protocol=flow.protocol,
-                flow_features={
-                    "entropy": getattr(flow, "entropy_score", 0),
-                    "byte_count": getattr(flow, "byte_count", 0),
-                    "pkt_count": getattr(flow, "pkt_count", 0),
-                    "avg_pkt_size": getattr(flow, "avg_pkt_size", 0),
-                    "src_port": flow.src_port,
-                    "dst_port": flow.dst_port,
-                },
-                matched_pattern_ids=matched_ids,
-            )
-        except Exception:
-            pass
-
 
 __all__ = ["Orchestrator"]

@@ -8,16 +8,8 @@
     from config import BackendType, OrchestratorConfig, ...
 """
 
-import sys
-from pathlib import Path
-
-# 将项目根目录加入 sys.path 以便导入 config 包
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-# 从统一 config 包导出所有数据模型
-from config.schema import (  # noqa: F401, E402
+# 从统一 config 包导出所有数据模型（相对导入绕过 sys.path 依赖）
+from config.schema import (  # noqa: F401
     BackendType,
     LLMBackendConfig,
     ScreeningAgentConfig,

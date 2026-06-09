@@ -37,6 +37,7 @@ from .schema import (
     AdjudicationAgentConfig,
     FeedbackAgentConfig,
     LiveScanAgentConfig,
+    GeoipConfig,
     OrchestratorConfig,
 )
 
@@ -123,6 +124,7 @@ def _build_llm_config(backend_type: BackendType, d: dict) -> LLMBackendConfig:
         api_key=d.get("api_key", ""),
         temperature=d.get("temperature", 0.3),
         max_tokens=d.get("max_tokens", 2048),
+        max_context_tokens=d.get("max_context_tokens", 4096),
         timeout=d.get("timeout", 60.0),
         max_retries=d.get("max_retries", 3),
         auto_load=d.get("auto_load", True),
@@ -163,7 +165,7 @@ def _build_backtrack_config(d: dict) -> BacktrackAgentConfig:
         max_tokens=d.get("max_tokens", 2048),
         lookback_windows=d.get("lookback_windows", [0.5, 24, 168, 720, 2160]),
         relevance_threshold=d.get("relevance_threshold", 0.6),
-        max_similar_records=d.get("max_similar_records", 20),
+        batch_context_ratio=d.get("batch_context_ratio", 0.125),
     )
 
 
@@ -203,6 +205,19 @@ def _build_live_scan_config(d: dict) -> LiveScanAgentConfig:
         batch_size_multiplier=d.get("batch_size_multiplier", 2.5),
         max_concurrent_analyses=d.get("max_concurrent_analyses", 3),
         start_from=d.get("start_from", "oldest"),
+    )
+
+
+def _build_geoip_config(d: dict) -> GeoipConfig:
+    """从字典构建 GeoipConfig"""
+    return GeoipConfig(
+        enabled=d.get("enabled", True),
+        update_interval_hours=d.get("update_interval_hours", 168),
+        download_url=d.get(
+            "download_url",
+            "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
+        ),
+        db_path=d.get("db_path", "data_gateway/GeoLite2-City.mmdb"),
     )
 
 
@@ -275,6 +290,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         adjudication=_build_adjudication_config(merged.get("adjudication", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
         live_scan=_build_live_scan_config(merged.get("live_scan", {})),
+        geoip=_build_geoip_config(merged.get("geoip", {})),
         default_backends=default_backends,
     )
 
@@ -303,6 +319,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.OPENAI].api_key,
                 "temperature": config.default_backends[BackendType.OPENAI].temperature,
                 "max_tokens": config.default_backends[BackendType.OPENAI].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.OPENAI].max_context_tokens,
                 "timeout": config.default_backends[BackendType.OPENAI].timeout,
                 "max_retries": config.default_backends[BackendType.OPENAI].max_retries,
             },
@@ -312,6 +329,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.LMSTUDIO].api_key,
                 "temperature": config.default_backends[BackendType.LMSTUDIO].temperature,
                 "max_tokens": config.default_backends[BackendType.LMSTUDIO].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.LMSTUDIO].max_context_tokens,
                 "timeout": config.default_backends[BackendType.LMSTUDIO].timeout,
                 "max_retries": config.default_backends[BackendType.LMSTUDIO].max_retries,
                 "auto_load": config.default_backends[BackendType.LMSTUDIO].auto_load,
@@ -323,6 +341,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.DEEPSEEK].api_key,
                 "temperature": config.default_backends[BackendType.DEEPSEEK].temperature,
                 "max_tokens": config.default_backends[BackendType.DEEPSEEK].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.DEEPSEEK].max_context_tokens,
                 "timeout": config.default_backends[BackendType.DEEPSEEK].timeout,
                 "max_retries": config.default_backends[BackendType.DEEPSEEK].max_retries,
                 "thinking_enabled": config.default_backends[BackendType.DEEPSEEK].thinking_enabled,
@@ -350,7 +369,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "max_tokens": config.backtrack.max_tokens,
             "lookback_windows": config.backtrack.lookback_windows,
             "relevance_threshold": config.backtrack.relevance_threshold,
-            "max_similar_records": config.backtrack.max_similar_records,
+            "batch_context_ratio": config.backtrack.batch_context_ratio,
         },
         "adjudication": {
             "enabled": config.adjudication.enabled,
@@ -375,55 +394,13 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "max_concurrent_analyses": config.live_scan.max_concurrent_analyses,
             "start_from": config.live_scan.start_from,
         },
+        "geoip": {
+            "enabled": config.geoip.enabled,
+            "update_interval_hours": config.geoip.update_interval_hours,
+            "download_url": config.geoip.download_url,
+            "db_path": config.geoip.db_path,
+        },
     }
-
-
-# ============================================================
-# 便捷函数：创建快速启动配置
-# ============================================================
-
-
-def quick_all_local(
-    model_name: str = "qwen3.5-9b",
-    api_base: str = "http://localhost:1234/v1",
-) -> OrchestratorConfig:
-    """快速创建"全部使用 LM Studio 本地模型"的配置。"""
-    config = load_config()
-    config.default_backends[BackendType.LMSTUDIO].model_name = model_name
-    config.default_backends[BackendType.LMSTUDIO].api_base = api_base
-    config.screening.backend = BackendType.LMSTUDIO
-    config.screening.model_name = model_name
-    config.backtrack.backend = BackendType.LMSTUDIO
-    config.backtrack.model_name = model_name
-    config.adjudication.backend = BackendType.LMSTUDIO
-    config.adjudication.model_name = model_name
-    config.feedback.backend = BackendType.LMSTUDIO
-    config.feedback.model_name = model_name
-    return config
-
-
-def quick_all_deepseek(
-    api_key: str,
-    model_name: str = "deepseek-v4-flash",
-    thinking_enabled: Optional[bool] = None,
-    reasoning_effort: Optional[str] = None,
-) -> OrchestratorConfig:
-    """快速创建"全部使用 DeepSeek API"的配置。"""
-    config = load_config()
-    ds = config.default_backends[BackendType.DEEPSEEK]
-    ds.api_key = api_key
-    ds.model_name = model_name
-    ds.thinking_enabled = thinking_enabled
-    ds.reasoning_effort = reasoning_effort
-    config.screening.backend = BackendType.DEEPSEEK
-    config.screening.model_name = model_name
-    config.backtrack.backend = BackendType.DEEPSEEK
-    config.backtrack.model_name = model_name
-    config.adjudication.backend = BackendType.DEEPSEEK
-    config.adjudication.model_name = model_name
-    config.feedback.backend = BackendType.DEEPSEEK
-    config.feedback.model_name = model_name
-    return config
 
 
 # ============================================================
@@ -484,33 +461,7 @@ def save_config_dict(config: dict) -> None:
     )
 
 
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "default":
-        config = load_config()
-        save_config(config, "config_user_template.json")
-        print("已生成 config_user_template.json（可重命名为 config_user.json 后编辑）")
-    else:
-        user_path = sys.argv[1] if len(sys.argv) > 1 else None
-        config = load_config(user_path)
-
-        print("=" * 60)
-        print("多智能体分析系统 — 配置加载成功")
-        print("=" * 60)
-        print(f"\n后端:")
-        for bt in BackendType:
-            be = config.default_backends[bt]
-            print(f"  [{bt.value}] {be.model_name} @ {be.api_base}")
-        print(f"\n智能体:")
-        print(f"  L1-筛查: backend={config.screening.backend.value}, model={config.screening.model_name}")
-        print(f"  L2-回溯: backend={config.backtrack.backend.value}, model={config.backtrack.model_name}")
-        print(f"  L3-研判: backend={config.adjudication.backend.value}, model={config.adjudication.model_name}")
-        print(f"  反馈:   backend={config.feedback.backend.value}, model={config.feedback.model_name}")
-
-        ds = config.default_backends[BackendType.DEEPSEEK]
-        if ds.api_key:
-            print(f"\nDeepSeek V4:")
-            print(f"  thinking_enabled: {ds.thinking_enabled}")
-            print(f"  reasoning_effort: {ds.reasoning_effort}")
-            print(f"  include_reasoning: {ds.include_reasoning}")
+def reset_user_config() -> None:
+    """重置用户配置 — 直接删除 config_user.json。"""
+    if USER_CONFIG_PATH.exists():
+        USER_CONFIG_PATH.unlink()

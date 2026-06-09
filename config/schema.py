@@ -37,6 +37,7 @@ class LLMBackendConfig:
     api_key: str = ""
     temperature: float = 0.3
     max_tokens: int = 2048
+    max_context_tokens: int = 4096      # 模型最大上下文窗口（token 数），用于分批计算
     timeout: float = 60.0
     max_retries: int = 3
     # LM Studio 通常部署在 localhost
@@ -113,9 +114,9 @@ class BacktrackAgentConfig:
     )
     temperature: float = 0.3
     max_tokens: int = 2048
+    batch_context_ratio: float = 0.125         # 每批占上下文的 1/8（为深度思考预留）
     lookback_windows: list[float] = field(default_factory=lambda: [0.5, 24, 168, 720, 2160])  # 30m, 1d, 7d, 30d, 90d
     relevance_threshold: float = 0.6           # 关联度阈值（低于此值丢弃）
-    max_similar_records: int = 20              # 每次回溯最多拉取相似记录数
 
 
 @dataclass
@@ -189,6 +190,17 @@ class LiveScanAgentConfig:
 
 
 @dataclass
+class GeoipConfig:
+    """GeoIP 数据库自动更新配置"""
+    enabled: bool = True
+    update_interval_hours: int = 168          # 自动更新间隔（小时），7 天
+    download_url: str = (
+        "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
+    )
+    db_path: str = "data_gateway/GeoLite2-City.mmdb"  # 相对于项目根目录
+
+
+@dataclass
 class OrchestratorConfig:
     """编排器总配置 — 三层智能体架构"""
     screening: ScreeningAgentConfig = field(default_factory=ScreeningAgentConfig)
@@ -196,6 +208,7 @@ class OrchestratorConfig:
     adjudication: AdjudicationAgentConfig = field(default_factory=AdjudicationAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
     live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
+    geoip: GeoipConfig = field(default_factory=GeoipConfig)
     # 全局后端连接池配置
     default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
 

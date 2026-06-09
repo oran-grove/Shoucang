@@ -21,7 +21,7 @@ from thrift.protocol import TBinaryProtocol, TMultiplexedProtocol
 import data_packer  # 打包底座
 import analyzer  # 判官大脑
 import add_ip  # 完美对齐：户籍资产模块
-from timer import start_timer_thread  # 独立计时器
+from .timer import start_timer_thread  # 独立计时器
 
 app = Flask(__name__)
 

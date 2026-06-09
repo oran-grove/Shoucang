@@ -37,9 +37,7 @@ API 端点映射：
 import json
 import logging
 import os
-import sys
 import threading
-from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
@@ -50,17 +48,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---- 路径配置 ----
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
-
-# 确保项目根在 sys.path
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
 
 # ---- 统一配置加载（通过 config 模块）----
 from config.loader import (
     load_config_dict,
     save_config_dict,
+    reset_user_config,
 )
 
 logger = logging.getLogger("UnifiedBackend")
@@ -207,12 +202,23 @@ class BlacklistItem(BaseModel):
 # ============================================================================
 # 配置读写
 # ============================================================================
+# 配置缓存（避免每次请求都读磁盘）
+_config_cache: dict | None = None
+
+
 def _read_config_user() -> dict:
-    return load_config_dict()
+    """读取用户配置（首次从磁盘加载，后续返回缓存副本）。"""
+    global _config_cache
+    if _config_cache is None:
+        _config_cache = load_config_dict()
+    return _config_cache
 
 
-def _save_config_user(config: dict):
+def _save_config_user(config: dict) -> None:
+    """保存配置到磁盘并刷新缓存。"""
+    global _config_cache
     save_config_dict(config)
+    _config_cache = config
 
 
 # ============================================================================
@@ -429,8 +435,10 @@ async def api_config_backend_test(payload: BackendTestRequest):
 
 @app.post("/api/config/reset")
 async def api_config_reset():
-    """重置为默认配置 — 清空用户覆盖，config_user.json 写入空对象"""
-    _save_config_user({})
+    """重置为默认配置 — 直接删除 config_user.json"""
+    global _config_cache
+    reset_user_config()
+    _config_cache = None  # 下次读取时重新加载纯默认配置
     return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
 
 
@@ -726,13 +734,16 @@ async def api_traffic_action(payload: TrafficAction):
 
     target_ip = None
 
+    ai_verdict = "unknown"
+    ai_confidence = 0.0
     if action == "拉黑" and item_id:
-        # 找到该事件的源 IP
+        # 找到该事件的源 IP 和 AI 判定信息
         try:
             rows = _db("lists_manager", "get_traffic_logs", 200, 0)
             for row in rows:
                 if row.get("id") == item_id:
                     target_ip = row.get("src_ip")
+                    ai_verdict = row.get("ai_verdict", "unknown") or "unknown"
                     break
         except Exception:
             pass
@@ -755,7 +766,8 @@ async def api_traffic_action(payload: TrafficAction):
             pass
 
     # -- 写入多智能体记忆系统 (自适应 Tier 0) --
-    _record_to_memory_from_admin(item_id, action, reason, target_ip)
+    _record_to_memory_from_admin(item_id, action, reason, target_ip,
+                                 ai_verdict, ai_confidence)
 
     return JSONResponse({"code": 0, "msg": f"操作成功: {action}"})
 
@@ -961,22 +973,19 @@ def start(host: str = "0.0.0.0", port: int = 8080, **kwargs):
 
 def _record_to_memory_from_admin(
     traffic_id: Optional[int], action: str, reason: str, target_ip: Optional[str],
+    ai_verdict: str = "unknown", ai_confidence: float = 0.0,
 ) -> None:
     """将管理员操作写入多智能体记忆系统"""
     try:
-        # 确保项目根在 sys.path
-        if str(_PROJECT_ROOT) not in sys.path:
-            sys.path.insert(0, str(_PROJECT_ROOT))
         from multi_agent_system.memory import get_store
 
         # 推断 AI 是否正确（基于管理员动作）
         # 拉黑 → 管理员确认有异常；忽视 → 管理员认为是误报
         ai_correct = action == "拉黑"
-        category_map = {"拉黑": "tp", "忽视": "fp"}
 
         get_store().record_feedback(
-            ai_verdict="unknown",  # 后端 API 层没有 AI 判定信息
-            ai_confidence=0.0,
+            ai_verdict=ai_verdict,
+            ai_confidence=ai_confidence,
             admins_action=action,
             ai_correct=ai_correct,
             admin_note=reason,
