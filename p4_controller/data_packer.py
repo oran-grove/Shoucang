@@ -327,4 +327,11 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
         "定时器总线: 缓冲 %s 就绪！冷池 %d 条 / 热池 %d 条，已翻转到缓冲 %s",
         _ready_buf, cold_count, hot_count, _write_buf)
 
+    # 通知 DataBridge 消费者有新数据就绪
+    try:
+        from data_gateway.data_bridge import notify_data_ready
+        notify_data_ready()
+    except ImportError:
+        pass
+
     return unanalyzed_export, analyzed_export
