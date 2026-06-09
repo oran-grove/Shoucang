@@ -10,7 +10,7 @@ except ImportError:
         from add_ip import get_ip_label   # 独立模式
     except ImportError:
         def get_ip_label(ip):
-            return "Unknown_Label"
+            return 5.0  # 降级兜底：中等风险
 
 logger = logging.getLogger(__name__)
 

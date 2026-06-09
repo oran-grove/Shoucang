@@ -163,17 +163,18 @@ def add_to_whitelist(ip: str, source: str) -> bool:
 # ==========================================
 # 🔎 资产画像及身份标签快速查询接口
 # ==========================================
-def get_ip_label(ip: str) -> str:
+def get_ip_label(ip: str) -> float:
     """
-    提供给数据打包器的 IP 身份查询接口。
+    提供给数据打包器的 IP 身份危险等级查询接口。
+    返回 0.0~10.0 的危险分值，与 PORT_LABELS 的 0~10 分体系对齐。
     查询顺序：白名单 → 黑名单 → 内网/外网判定。
     """
     if is_whitelisted(ip):
-        return "Whitelisted_VIP"
+        return 0.0   # 白名单免检，零风险
     if is_blacklisted(ip):
-        return "Blacklisted_Ban"
+        return 9.5   # 已确认黑名单，极高风险 → 触达一票否决线
 
-    # 内网/保留地址 → Internal_Asset，其余 → External_User
+    # 内网/保留地址 → 低风险，其余 → 中风险
     if ip.startswith(("10.", "192.168.", "172.", "127.")):
-        return "Internal_Asset"
-    return "External_User"
+        return 3.0   # 内部资产
+    return 6.0       # 外部通信（未知来源）
