@@ -8,7 +8,7 @@
                         IP-部门映射集中管理
 
 用法:
-    from database.writer import start_db_writer, stop_db_writer, store_packet
+    from database.writer import start_db_writer, stop_db_writer
 
     # 启动后台写入线程
     write_queue, stop_event = start_db_writer()
@@ -18,7 +18,7 @@
     # 黑白名单操作（统一接口，禁止各模块私自操作数据库）
     from database import add_to_db_blacklist, add_to_db_whitelist
     from database import get_blacklist, get_whitelist, is_blacklisted, is_whitelisted
-    from database import load_lists_from_db, reload_lists_after_change
+    from database import load_lists_from_db
     from database import get_ip_dept_map, lookup_employee
 """
 
@@ -31,19 +31,14 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from .writer import (
-    store_packet,
     start_db_writer,
     stop_db_writer,
-)
-
-from .verdict_writer import (
     start_verdict_writer,
     stop_verdict_writer,
 )
 
 from .lists_manager import (
     load_lists_from_db,
-    reload_lists_after_change,
     get_blacklist,
     get_whitelist,
     is_blacklisted,
@@ -68,6 +63,10 @@ from .lists_manager import (
     get_traffic_logs,
     get_traffic_for_deep_analysis,
     update_traffic_action,
+    # 多智能体专用查询
+    get_unanalyzed_traffic,
+    get_traffic_max_id,
+    get_similar_flows_by_src_ip,
 )
 
 from config.shared_config import (
@@ -80,13 +79,11 @@ __all__ = [
     "DB_CONFIG",
     "DB_WRITE_BATCH_SIZE",
     "DB_WRITE_FLUSH_INTERVAL",
-    "store_packet",
     "start_db_writer",
     "stop_db_writer",
     "start_verdict_writer",
     "stop_verdict_writer",
     "load_lists_from_db",
-    "reload_lists_after_change",
     "get_blacklist",
     "get_whitelist",
     "is_blacklisted",
@@ -111,4 +108,8 @@ __all__ = [
     "get_traffic_logs",
     "get_traffic_for_deep_analysis",
     "update_traffic_action",
+    # 多智能体专用查询
+    "get_unanalyzed_traffic",
+    "get_traffic_max_id",
+    "get_similar_flows_by_src_ip",
 ]

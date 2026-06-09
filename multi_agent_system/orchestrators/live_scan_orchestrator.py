@@ -5,11 +5,12 @@
 逐条送入检测→关联→研判管线，并持久化分析结果。
 
 特性：
+- 双模式驱动：定时触发（默认 10 分钟） + 链式连续消费（直到清空）
+- 批次大小动态计算 = 并发数 × 倍数（2-3x）
 - 支持从指定位置开始扫描（oldest / newest / last_id:N）
 - 支持并发分析多条流量（max_concurrent_analyses 控制）
-- 支持节流间隔（scan_interval_seconds 控制每条分析间隔）
 - 支持管理员运行时开关（enabled 字段）
-- 分析结果回写 traffic_log（is_blocked / analysis 相关字段）
+- 分析结果回写 traffic_log（ai_analyzed / ai_verdict 字段）
 - 上次处理 ID 持久化到文件，重启后断点续扫
 
 用法:
@@ -23,7 +24,6 @@
     live_scanner = LiveScanOrchestrator(
         orchestrator=orchestrator,
         config=config.live_scan,
-        db_config=DB_CONFIG,
     )
     await live_scanner.start()
     # ... 系统运行 ...
@@ -39,8 +39,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import pymysql
-
 from ..core.message import FlowEvent
 from . import row_to_flow_event  # 共享的 DB row → FlowEvent 转换
 
@@ -50,8 +48,6 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-
-from config.shared_config import DB_CONFIG, DbConfig  # noqa: E402
 
 _CHECKPOINT_FILE = _PROJECT_ROOT / ".live_scan_checkpoint.json"
 
@@ -72,12 +68,10 @@ class LiveScanOrchestrator:
         self,
         orchestrator,  # Orchestrator 实例
         config,  # LiveScanAgentConfig
-        db_config: Optional[DbConfig] = None,
         verdict_queue: Optional[queue.Queue] = None,
     ):
         self._orchestrator = orchestrator
         self._config = config
-        self._db_config: DbConfig = db_config or DB_CONFIG
         self._verdict_queue: Optional[queue.Queue] = verdict_queue
 
         self._running = False
@@ -104,10 +98,13 @@ class LiveScanOrchestrator:
         self._load_checkpoint()
         self._scan_task = asyncio.create_task(self._scan_loop())
         logger.info(
-            "[LiveScan] 逐条评判扫描已启动 | 起始ID=%s | 间隔=%.1fs | 批次=%s | 并发=%s",
+            "[LiveScan] 逐条评判扫描已启动 | 起始ID=%s | 空闲探询=%.0fs | "
+            "批次=%s (并发%s×%.1f) | 并发=%s",
             self._last_processed_id,
-            self._config.scan_interval_seconds,
+            self._config.idle_poll_interval_seconds,
             self._config.batch_size,
+            self._config.max_concurrent_analyses,
+            self._config.batch_size_multiplier,
             self._config.max_concurrent_analyses,
         )
 
@@ -133,41 +130,54 @@ class LiveScanOrchestrator:
     # ==================== 主循环 ====================
 
     async def _scan_loop(self) -> None:
-        """主扫描循环：分批拉取 → 逐条分析 → 节流等待"""
+        """双模式扫描循环：定时触发 + 链式连续消费"""
         while self._running:
             try:
-                # 拉取一批未分析的流量记录
-                rows = self._fetch_unanalyzed_batch()
-                if not rows:
-                    # 没有新记录，休眠间隔后重试
-                    await asyncio.sleep(self._config.scan_interval_seconds)
-                    continue
+                # ============================================================
+                # 定时器模式：等待 idle_poll_interval_seconds（可中断）
+                # ============================================================
+                await self._interruptible_sleep(
+                    self._config.idle_poll_interval_seconds
+                )
 
-                logger.info("[LiveScan] 拉取到 %s 条待分析记录，开始逐条研判...", len(rows))
+                # ============================================================
+                # 链式消费模式：连续拉取直到数据库清空
+                # ============================================================
+                while self._running:
+                    rows = self._fetch_unanalyzed_batch()
+                    if not rows:
+                        logger.debug(
+                            "[LiveScan] 无可分析数据，回归定时器模式 "
+                            "(下次探询=%s秒后)",
+                            self._config.idle_poll_interval_seconds,
+                        )
+                        break  # 无数据 → 回到外层定时器
 
-                # 并发限流分析
-                semaphore = asyncio.Semaphore(self._config.max_concurrent_analyses)
+                    logger.info(
+                        "[LiveScan] 拉取到 %s 条待分析记录，并发分析中 "
+                        "(并发上限=%s)...",
+                        len(rows),
+                        self._config.max_concurrent_analyses,
+                    )
 
-                async def analyze_one(row: dict) -> None:
-                    async with semaphore:
-                        await self._analyze_row(row)
+                    # 并发分析整批（semaphore 控制并发上限，无逐条节流）
+                    semaphore = asyncio.Semaphore(
+                        self._config.max_concurrent_analyses
+                    )
 
-                # 逐条分析（并发控制由 semaphore 保证）
-                tasks = []
-                for row in rows:
-                    if not self._running:
-                        break
-                    task = asyncio.create_task(analyze_one(row))
-                    tasks.append(task)
-                    # 节流：每条之间等待 scan_interval_seconds
-                    await asyncio.sleep(self._config.scan_interval_seconds)
+                    async def analyze_one(row: dict) -> None:
+                        async with semaphore:
+                            await self._analyze_row(row)
 
-                # 等待当前批次所有任务完成
-                if tasks:
+                    tasks = [
+                        asyncio.create_task(analyze_one(row))
+                        for row in rows
+                    ]
                     await asyncio.gather(*tasks, return_exceptions=True)
 
-                # 批次结束后保存断点
-                self._save_checkpoint()
+                    # 批次结束后保存断点
+                    self._save_checkpoint()
+                    # 立即回到内层 while，尝试拉取下一批
 
             except asyncio.CancelledError:
                 break
@@ -175,33 +185,24 @@ class LiveScanOrchestrator:
                 logger.exception("[LiveScan] 扫描循环异常，10秒后重试")
                 await asyncio.sleep(10.0)
 
+    async def _interruptible_sleep(self, seconds: float) -> None:
+        """分段 sleep，每 1 秒检查 _running，支持快速优雅关闭。"""
+        remaining = seconds
+        while remaining > 0 and self._running:
+            await asyncio.sleep(min(1.0, remaining))
+            remaining -= 1.0
+
     # ==================== 数据获取 ====================
 
     def _fetch_unanalyzed_batch(self) -> list[dict]:
         """
         从 traffic_log 表中拉取一批未分析的记录。
-        优先使用 ai_analyzed 标记，游标 id 为辅。
+        委托 database 模块执行查询，禁止直接访问 MySQL。
         """
-        conn = None
-        try:
-            conn = pymysql.connect(**self._db_config)
-            with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-                sql = (
-                    "SELECT * FROM traffic_log "
-                    "WHERE (ai_analyzed IS NULL OR ai_analyzed = 0) "
-                    "AND id > %s "
-                    "ORDER BY id ASC "
-                    "LIMIT %s"
-                )
-                cursor.execute(sql, (self._last_processed_id, self._config.batch_size))
-                rows = cursor.fetchall()
-                return list(rows) if rows else []
-        except Exception:
-            logger.exception("[LiveScan] 拉取流量日志失败")
-            return []
-        finally:
-            if conn:
-                conn.close()
+        from database import get_unanalyzed_traffic
+        return get_unanalyzed_traffic(
+            self._last_processed_id, self._config.batch_size
+        )
 
     # ==================== 逐条分析 ====================
 
@@ -324,20 +325,9 @@ class LiveScanOrchestrator:
             logger.exception("[LiveScan] 保存断点失败")
 
     def _get_max_id(self) -> int:
-        """获取 traffic_log 表当前最大 id"""
-        conn = None
-        try:
-            conn = pymysql.connect(**self._db_config)
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT MAX(id) FROM traffic_log")
-                row = cursor.fetchone()
-                return row[0] if row and row[0] else 0
-        except Exception:
-            logger.exception("[LiveScan] 获取最大ID失败")
-            return 0
-        finally:
-            if conn:
-                conn.close()
+        """获取 traffic_log 表当前最大 id（委托 database 模块）。"""
+        from database import get_traffic_max_id
+        return get_traffic_max_id()
 
     # ==================== 统计与监控 ====================
 

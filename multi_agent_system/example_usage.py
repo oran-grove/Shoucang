@@ -447,8 +447,10 @@ def test_live_scan(config: OrchestratorConfig):
           f"熵={flow.entropy_score}, extra_keys={list(flow.extra.keys())}")
 
     _info(f"扫描配置: enabled={config.live_scan.enabled}, "
-          f"interval={config.live_scan.scan_interval_seconds}s, "
-          f"batch={config.live_scan.batch_size}, "
+          f"idle_poll={config.live_scan.idle_poll_interval_seconds}s, "
+          f"batch={config.live_scan.batch_size} "
+          f"(并发{config.live_scan.max_concurrent_analyses}×"
+          f"{config.live_scan.batch_size_multiplier}), "
           f"concurrency={config.live_scan.max_concurrent_analyses}")
 
     _ok("测试 4 完成")
@@ -624,7 +626,8 @@ def test_status(config: OrchestratorConfig):
 
     _info(f"回溯配置: 窗口序列={[_fmt(w) for w in config.backtrack.lookback_windows]}, ")
     _info(f"实时扫描: {'启用' if config.live_scan.enabled else '禁用'} "
-          f"(间隔={config.live_scan.scan_interval_seconds}s)")
+          f"(空闲探询={config.live_scan.idle_poll_interval_seconds}s, "
+          f"批次={config.live_scan.batch_size})")
 
     _ok("测试 7 完成")
 

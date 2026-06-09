@@ -200,7 +200,7 @@ def update_geoip_db():
 #    统一通过 database 模块获取（MySQL ip_dept_map 表）
 #    不再直接调用 Flask API，彻底解耦各模块间依赖
 # ============================================================
-from database import lookup_employee, get_ip_dept_map, reload_lists_after_change
+from database import lookup_employee, get_ip_dept_map, load_lists_from_db
 
 
 def refresh_employee_cache() -> dict:
@@ -209,7 +209,7 @@ def refresh_employee_cache() -> dict:
     所有模块统一使用 database 模块提供的接口，不私自操作数据库。
     返回最新的 {ip: (name, department), ...} 字典。
     """
-    reload_lists_after_change()
+    load_lists_from_db()
     return get_ip_dept_map()
 
 

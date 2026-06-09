@@ -1,193 +1,195 @@
 """
-数据库批量写入器 — 零拷贝版本
-===============================
-从 queue.Queue 消费数据包并攒批写入数据库。
+数据库批量写入器 — 通用攒批架构
+================================
+提供可复用的后台批量写入线程，同时用于：
+- traffic_log 批量 INSERT（流量数据入库）
+- traffic_log 批量 UPDATE（智能体判定结果回写）
 
-摒弃原有的 shared_memory 多进程方案，改为进程内 queue.Queue +
-后台写入线程，实现 dict 直接引用传参，消除 JSON 序列化和
-共享内存拷贝的开销（三次拷贝 → 零拷贝）。
-
-注：黑白名单 / IP-部门映射管理已抽取至 database.lists_manager。
-    database 包级导入路径不变，不影响现有调用方。
+架构：
+  queue.Queue + daemon 线程 + 攒批定时刷新
+  → 共享的 _batch_writer_worker 循环，不同 flush_fn 注入
 
 用法:
+    # 流量数据写入
     from database.writer import start_db_writer, stop_db_writer
-
-    # 在 DataBridge 中获取写入队列
     write_queue, stop_event = start_db_writer()
-    write_queue.put(row_dict)  # dict 直接引用，零拷贝
+    write_queue.put(row_dict)
     stop_db_writer(stop_event)
+
+    # 判定结果写入
+    from database.writer import start_verdict_writer, stop_verdict_writer
+    vq, ve = start_verdict_writer()
+    vq.put({"traffic_id": 12345, "ai_verdict": 1})
+    stop_verdict_writer(ve)
 """
 
-import sys
-import threading
 import queue
-from pathlib import Path
+import threading
 
-# 确保项目根目录在 sys.path 中
-_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-import pymysql
 from config.shared_config import (
-    DB_CONFIG,
     DB_WRITE_BATCH_SIZE,
     DB_WRITE_FLUSH_INTERVAL,
 )
+from .connection import db_cursor
 
 
 # ============================================================================
-# 数据库连接（内部使用）
+# 共享的攒批写入循环
 # ============================================================================
-def _db_connect():
-    """建立数据库连接（调用方负责关闭）。"""
-    return pymysql.connect(**DB_CONFIG, connect_timeout=5)
 
-
-# ============================================================================
-# 单条写入（兼容旧接口）
-# ============================================================================
-def store_packet(packet):
-    """存入数据库 - 按写入方字段接收"""
-    conn = pymysql.connect(**DB_CONFIG)
-    cursor = conn.cursor()
-    try:
-        # 获取表所有字段
-        cursor.execute("DESCRIBE traffic_log")
-        table_fields = [row[0] for row in cursor.fetchall()]
-
-        # 取 packet 中所有在表中存在的字段
-        write_fields = [f for f in packet.keys() if f in table_fields]
-
-        if not write_fields:
-            print(f"   ⚠️ 没有匹配的字段，跳过")
-            return
-
-        # 构建 INSERT 语句
-        placeholders = ', '.join(['%s'] * len(write_fields))
-        fields_str = ', '.join(write_fields)
-        sql = f"INSERT INTO traffic_log ({fields_str}) VALUES ({placeholders})"
-
-        # 获取对应的值
-        values = [packet.get(field) for field in write_fields]
-
-        cursor.execute(sql, values)
-        conn.commit()
-        print(f"   ✅ 已入库: {packet.get('src_ip')} -> {packet.get('dst_ip')}")
-    except Exception as e:
-        print(f"   ❌ 入库失败: {e}")
-    finally:
-        conn.close()
-
-
-# ============================================================================
-# 批量写入
-# ============================================================================
-def _store_batch(packets: list):
-    """批量写入多条数据包到数据库，使用单连接 + executemany 提高性能。"""
-    if not packets:
-        return
-
-    conn = pymysql.connect(**DB_CONFIG)
-    cursor = conn.cursor()
-    try:
-        # 获取表字段
-        cursor.execute("DESCRIBE traffic_log")
-        table_fields = [row[0] for row in cursor.fetchall()]
-
-        # 以第一条数据的字段为准（所有数据应具有相同结构）
-        write_fields = [f for f in packets[0].keys() if f in table_fields]
-        if not write_fields:
-            print(f"   ⚠️ 批量写入: 没有匹配的字段，跳过 {len(packets)} 条")
-            return
-
-        placeholders = ', '.join(['%s'] * len(write_fields))
-        fields_str = ', '.join(write_fields)
-        sql = f"INSERT INTO traffic_log ({fields_str}) VALUES ({placeholders})"
-
-        # 构建 values 列表
-        values_list = []
-        for pkt in packets:
-            values_list.append([pkt.get(field) for field in write_fields])
-
-        cursor.executemany(sql, values_list)
-        conn.commit()
-        print(f"   📦 批量入库: {len(packets)} 条")
-    except Exception as e:
-        print(f"   ❌ 批量入库失败: {e}")
-    finally:
-        conn.close()
-
-
-# ============================================================================
-# 后台写入线程
-# ============================================================================
 def _batch_writer_worker(
+    name: str,
     write_queue: queue.Queue,
     stop_event: threading.Event,
+    flush_fn,
     batch_size: int = DB_WRITE_BATCH_SIZE,
     flush_interval: float = DB_WRITE_FLUSH_INTERVAL,
-):
+) -> None:
     """
-    后台线程：从 write_queue 取数据，攒到 batch_size 条或
-    等待 flush_interval 秒后批量写入数据库。
+    通用攒批写入线程。
+
+    从 write_queue 取数据，攒到 batch_size 条或等待 flush_interval 秒后
+    调用 flush_fn(buffer) 批量写入数据库。
     """
-    buffer = []
-    print(f"🖊️  DB 写入线程已启动 (batch_size={batch_size}, flush_interval={flush_interval}s)")
+    buffer: list = []
+    print(f"🖊️  {name} 写入线程已启动 (batch={batch_size}, flush={flush_interval}s)")
 
     while not stop_event.is_set():
         try:
-            # 阻塞等待，最多 flush_interval 秒
-            packet = write_queue.get(timeout=flush_interval)
-            buffer.append(packet)
-
-            # 达到批量阈值 → 立即写入
+            item = write_queue.get(timeout=flush_interval)
+            buffer.append(item)
             if len(buffer) >= batch_size:
-                _store_batch(buffer)
+                flush_fn(buffer)
                 buffer.clear()
         except queue.Empty:
-            # 超时 → 强制刷新 buffer
             if buffer:
-                _store_batch(buffer)
+                flush_fn(buffer)
                 buffer.clear()
 
-    # 停止时刷新剩余数据
     if buffer:
-        _store_batch(buffer)
+        flush_fn(buffer)
         buffer.clear()
 
-    print("🛑 DB 写入线程已停止")
+    print(f"🛑 {name} 写入线程已停止")
 
 
 # ============================================================================
-# 公开接口
+# traffic_log 批量 INSERT
 # ============================================================================
+
+def _store_batch(packets: list[dict]) -> None:
+    """批量 INSERT 多条流量数据到 traffic_log 表。"""
+    if not packets:
+        return
+
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute("DESCRIBE traffic_log")
+            table_fields = [row["Field"] for row in cursor.fetchall()]
+
+            write_fields = [f for f in packets[0].keys() if f in table_fields]
+            if not write_fields:
+                print(f"   ⚠️ 批量写入: 无匹配字段，跳过 {len(packets)} 条")
+                return
+
+            placeholders = ", ".join(["%s"] * len(write_fields))
+            fields_str = ", ".join(write_fields)
+            sql = f"INSERT INTO traffic_log ({fields_str}) VALUES ({placeholders})"
+
+            values_list = [[pkt.get(field) for field in write_fields] for pkt in packets]
+            cursor.executemany(sql, values_list)
+            conn.commit()
+            print(f"   📦 批量入库: {len(packets)} 条")
+    except Exception as e:
+        print(f"   ❌ 批量入库失败: {e}")
+
+
 def start_db_writer(
     batch_size: int = DB_WRITE_BATCH_SIZE,
     flush_interval: float = DB_WRITE_FLUSH_INTERVAL,
-) -> tuple:
+) -> tuple[queue.Queue, threading.Event]:
     """
-    启动后台数据库写入线程。
+    启动后台流量数据写入线程。
 
     Returns:
-        (write_queue, stop_event): 
-            write_queue: queue.Queue，生产者 put dict 即可
-            stop_event: 调用 .set() 停止写入线程
+        (write_queue, stop_event):
+            write_queue — put(dict) 即可（dict 键名需匹配 traffic_log 列名）
+            stop_event — .set() 停止线程
     """
-    write_queue = queue.Queue(maxsize=10000)
+    write_queue: queue.Queue = queue.Queue(maxsize=10000)
     stop_event = threading.Event()
 
     thread = threading.Thread(
         target=_batch_writer_worker,
-        args=(write_queue, stop_event, batch_size, flush_interval),
+        args=("DB", write_queue, stop_event, _store_batch, batch_size, flush_interval),
         daemon=True,
     )
     thread.start()
-
     return write_queue, stop_event
 
 
-def stop_db_writer(stop_event: threading.Event):
-    """停止后台数据库写入线程。"""
+def stop_db_writer(stop_event: threading.Event) -> None:
+    """停止后台流量数据写入线程。"""
     stop_event.set()
+
+
+# ============================================================================
+# traffic_log 批量 UPDATE（判定结果回写）
+# ============================================================================
+
+def _update_verdict_batch(rows: list[dict]) -> None:
+    """批量 UPDATE traffic_log，设置 ai_analyzed=1 和 ai_verdict。"""
+    if not rows:
+        return
+
+    try:
+        with db_cursor() as (conn, cursor):
+            sql = (
+                "UPDATE traffic_log "
+                "SET ai_analyzed = 1, ai_verdict = %s "
+                "WHERE id = %s"
+            )
+            values_list = [(r["ai_verdict"], r["traffic_id"]) for r in rows]
+            cursor.executemany(sql, values_list)
+            conn.commit()
+            print(f"   📊 判定批量入库: {len(rows)} 条")
+    except Exception as e:
+        print(f"   ❌ 判定批量入库失败: {e}")
+
+
+def start_verdict_writer(
+    batch_size: int = DB_WRITE_BATCH_SIZE,
+    flush_interval: float = DB_WRITE_FLUSH_INTERVAL,
+) -> tuple[queue.Queue, threading.Event]:
+    """
+    启动后台判定结果写入线程。
+
+    Returns:
+        (write_queue, stop_event):
+            write_queue — put(dict) 即可，dict 需含 traffic_id 和 ai_verdict
+            stop_event — .set() 停止线程
+    """
+    write_queue: queue.Queue = queue.Queue(maxsize=10000)
+    stop_event = threading.Event()
+
+    thread = threading.Thread(
+        target=_batch_writer_worker,
+        args=("Verdict", write_queue, stop_event, _update_verdict_batch,
+              batch_size, flush_interval),
+        daemon=True,
+    )
+    thread.start()
+    return write_queue, stop_event
+
+
+def stop_verdict_writer(stop_event: threading.Event) -> None:
+    """停止后台判定写入线程。"""
+    stop_event.set()
+
+
+__all__ = [
+    "start_db_writer",
+    "stop_db_writer",
+    "start_verdict_writer",
+    "stop_verdict_writer",
+]

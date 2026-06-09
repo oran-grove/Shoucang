@@ -36,6 +36,7 @@ from .schema import (
     BacktrackAgentConfig,
     AdjudicationAgentConfig,
     FeedbackAgentConfig,
+    LiveScanAgentConfig,
     OrchestratorConfig,
 )
 
@@ -194,6 +195,17 @@ def _build_feedback_config(d: dict) -> FeedbackAgentConfig:
     )
 
 
+def _build_live_scan_config(d: dict) -> LiveScanAgentConfig:
+    """从字典构建 LiveScanAgentConfig"""
+    return LiveScanAgentConfig(
+        enabled=d.get("enabled", True),
+        idle_poll_interval_seconds=d.get("idle_poll_interval_seconds", 600.0),
+        batch_size_multiplier=d.get("batch_size_multiplier", 2.5),
+        max_concurrent_analyses=d.get("max_concurrent_analyses", 3),
+        start_from=d.get("start_from", "oldest"),
+    )
+
+
 def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
     """
     加载配置，返回 OrchestratorConfig。
@@ -262,6 +274,7 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         backtrack=_build_backtrack_config(merged.get("backtrack", {})),
         adjudication=_build_adjudication_config(merged.get("adjudication", {})),
         feedback=_build_feedback_config(merged.get("feedback", {})),
+        live_scan=_build_live_scan_config(merged.get("live_scan", {})),
         default_backends=default_backends,
     )
 
@@ -354,6 +367,13 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "system_prompt": config.feedback.system_prompt,
             "temperature": config.feedback.temperature,
             "max_tokens": config.feedback.max_tokens,
+        },
+        "live_scan": {
+            "enabled": config.live_scan.enabled,
+            "idle_poll_interval_seconds": config.live_scan.idle_poll_interval_seconds,
+            "batch_size_multiplier": config.live_scan.batch_size_multiplier,
+            "max_concurrent_analyses": config.live_scan.max_concurrent_analyses,
+            "start_from": config.live_scan.start_from,
         },
     }
 

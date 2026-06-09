@@ -13,7 +13,6 @@ Orchestrator 是整个系统的入口。
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, cast
 from uuid import uuid4
 
@@ -443,7 +442,6 @@ class Orchestrator:
         查询策略：
         - 同源IP的记录
         - 在 lookback_hours 时间窗口内
-        - 排除当前记录自身
         - 按时间降序排列（最近的优先）
 
         Args:
@@ -457,33 +455,12 @@ class Orchestrator:
         if self._db_query_callback:
             return self._db_query_callback(flow_src_ip, lookback_hours, max_records)
 
-        # 内置 DB 查询降级方案
+        # 委托 database 模块执行查询（统一数据库访问入口）
         try:
-            import sys
-            from pathlib import Path
-            _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-            if str(_PROJECT_ROOT) not in sys.path:
-                sys.path.insert(0, str(_PROJECT_ROOT))
-            from config.shared_config import DB_CONFIG
-            import pymysql
-
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-            conn = pymysql.connect(**DB_CONFIG, connect_timeout=5)
-            try:
-                with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-                    sql = (
-                        "SELECT id, src_ip, dst_ip, src_port, dst_port, protocol, "
-                        "traffic_size, department, entropy, created_at, packet_time "
-                        "FROM traffic_log "
-                        "WHERE src_ip = %s AND created_at >= %s "
-                        "ORDER BY created_at DESC "
-                        "LIMIT %s"
-                    )
-                    cursor.execute(sql, (flow_src_ip, cutoff, max_records))
-                    rows = cursor.fetchall()
-                    return list(rows) if rows else []
-            finally:
-                conn.close()
+            from database import get_similar_flows_by_src_ip
+            return get_similar_flows_by_src_ip(
+                flow_src_ip, lookback_hours, max_records
+            )
         except Exception:
             logger.exception("[Orchestrator] 查询历史相似流量失败")
             return []
