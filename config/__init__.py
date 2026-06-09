@@ -37,6 +37,7 @@ from .loader import (
     load_config_dict,
     load_default_config_dict,
     save_config_dict,
+    reset_user_config,
 )
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "load_config_dict",
     "load_default_config_dict",
     "save_config_dict",
+    "reset_user_config",
     # 活跃配置单例
     "get_active_config",
     "set_active_config",

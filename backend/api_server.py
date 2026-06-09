@@ -55,6 +55,7 @@ _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
 from config.loader import (
     load_config_dict,
     save_config_dict,
+    reset_user_config,
 )
 
 logger = logging.getLogger("UnifiedBackend")
@@ -434,8 +435,10 @@ async def api_config_backend_test(payload: BackendTestRequest):
 
 @app.post("/api/config/reset")
 async def api_config_reset():
-    """重置为默认配置 — 清空用户覆盖，config_user.json 写入空对象"""
-    _save_config_user({})
+    """重置为默认配置 — 直接删除 config_user.json"""
+    global _config_cache
+    reset_user_config()
+    _config_cache = None  # 下次读取时重新加载纯默认配置
     return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
 
 

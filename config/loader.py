@@ -461,6 +461,12 @@ def save_config_dict(config: dict) -> None:
     )
 
 
+def reset_user_config() -> None:
+    """重置用户配置 — 直接删除 config_user.json。"""
+    if USER_CONFIG_PATH.exists():
+        USER_CONFIG_PATH.unlink()
+
+
 if __name__ == "__main__":
     import sys
 
