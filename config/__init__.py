@@ -37,8 +37,6 @@ from .loader import (
     load_config_dict,
     load_default_config_dict,
     save_config_dict,
-    quick_all_local,
-    quick_all_deepseek,
 )
 
 __all__ = [
@@ -58,8 +56,6 @@ __all__ = [
     "load_config_dict",
     "load_default_config_dict",
     "save_config_dict",
-    "quick_all_local",
-    "quick_all_deepseek",
     # 活跃配置单例
     "get_active_config",
     "set_active_config",

@@ -404,54 +404,6 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
 
 
 # ============================================================
-# 便捷函数：创建快速启动配置
-# ============================================================
-
-
-def quick_all_local(
-    model_name: str = "qwen3.5-9b",
-    api_base: str = "http://localhost:1234/v1",
-) -> OrchestratorConfig:
-    """快速创建"全部使用 LM Studio 本地模型"的配置。"""
-    config = load_config()
-    config.default_backends[BackendType.LMSTUDIO].model_name = model_name
-    config.default_backends[BackendType.LMSTUDIO].api_base = api_base
-    config.screening.backend = BackendType.LMSTUDIO
-    config.screening.model_name = model_name
-    config.backtrack.backend = BackendType.LMSTUDIO
-    config.backtrack.model_name = model_name
-    config.adjudication.backend = BackendType.LMSTUDIO
-    config.adjudication.model_name = model_name
-    config.feedback.backend = BackendType.LMSTUDIO
-    config.feedback.model_name = model_name
-    return config
-
-
-def quick_all_deepseek(
-    api_key: str,
-    model_name: str = "deepseek-v4-flash",
-    thinking_enabled: Optional[bool] = None,
-    reasoning_effort: Optional[str] = None,
-) -> OrchestratorConfig:
-    """快速创建"全部使用 DeepSeek API"的配置。"""
-    config = load_config()
-    ds = config.default_backends[BackendType.DEEPSEEK]
-    ds.api_key = api_key
-    ds.model_name = model_name
-    ds.thinking_enabled = thinking_enabled
-    ds.reasoning_effort = reasoning_effort
-    config.screening.backend = BackendType.DEEPSEEK
-    config.screening.model_name = model_name
-    config.backtrack.backend = BackendType.DEEPSEEK
-    config.backtrack.model_name = model_name
-    config.adjudication.backend = BackendType.DEEPSEEK
-    config.adjudication.model_name = model_name
-    config.feedback.backend = BackendType.DEEPSEEK
-    config.feedback.model_name = model_name
-    return config
-
-
-# ============================================================
 # 原始字典级读写（供不需要类型化 OrchestratorConfig 的模块使用）
 # ============================================================
 
