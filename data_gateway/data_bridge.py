@@ -22,6 +22,7 @@
 
 import json
 import threading
+from datetime import datetime
 from typing import Any
 
 # ============================================================
@@ -250,6 +251,7 @@ def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
         "country": country,
         "employee": employee,
         "department": department,
+        "packet_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -271,7 +273,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
         if cold["pkts"] == 0 and cold["bytes"] == 0:
             continue
 
-        hot = analyzed_data.get(hash_key_str)
+        hot = analyzed_data.get(hash_key)
 
         if hot is not None:
             # ============================================
@@ -379,6 +381,16 @@ class DataBridge:
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
             print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
 
+    def _print_rows(self, result: dict):
+        """入库前打印每行数据的关键字段，方便调试"""
+        for key, row in result.items():
+            print(f"   📋 [hash={key}] {row.get('src_ip')}:{row.get('src_port')} "
+                  f"-> {row.get('dst_ip')}:{row.get('dst_port')} "
+                  f"proto={row.get('protocol')} "
+                  f"pkts={row.get('accumulated_pkts')} bytes={row.get('accumulated_bytes')} "
+                  f"entropy(avg/max/min)={row.get('avg_entropy')}/{row.get('max_entropy')}/{row.get('min_entropy')} "
+                  f"country={row.get('country')} employee={row.get('employee')} dept={row.get('department')}")
+
     def run(self):
         # 预加载 GeoIP
         _init_geoip()
@@ -423,6 +435,8 @@ class DataBridge:
                 with self.lock:
                     result = process_tables(unanalyzed, analyzed)
                     if result:
+                        # 入库前打印
+                        self._print_rows(result)
                         # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
                         for row in result.values():
                             self.write_queue.put(row)
