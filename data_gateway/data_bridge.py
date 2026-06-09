@@ -21,9 +21,12 @@
 """
 
 import json
+import logging
 import threading
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 0. 双缓冲通知机制（data_packer → data_bridge）
@@ -96,13 +99,13 @@ def _init_geoip():
     try:
         import maxminddb
         _geoip_reader = maxminddb.open_database(GEOIP_DB_PATH)
-        print(f"🌍 GeoIP 数据库已加载: {GEOIP_DB_PATH}")
+        logger.info("GeoIP 数据库已加载: %s", GEOIP_DB_PATH)
     except ImportError:
-        print("⚠️ maxminddb 未安装，请执行: pip install maxminddb")
+        logger.warning("maxminddb 未安装，请执行: pip install maxminddb")
     except FileNotFoundError:
-        print(f"⚠️ GeoIP 数据库文件未找到: {GEOIP_DB_PATH}")
+        logger.warning("GeoIP 数据库文件未找到: %s", GEOIP_DB_PATH)
     except Exception as e:
-        print(f"⚠️ GeoIP 初始化失败: {e}")
+        logger.warning("GeoIP 初始化失败: %s", e)
 
 
 def lookup_country(ip: str) -> str:
@@ -145,20 +148,20 @@ def update_geoip_db():
     import shutil
     from urllib.request import urlopen
 
-    print(f"⬇️ 正在下载 GeoIP 数据库: {GEOIP_DOWNLOAD_URL}")
+    logger.info("正在下载 GeoIP 数据库: %s", GEOIP_DOWNLOAD_URL)
     try:
         resp = urlopen(GEOIP_DOWNLOAD_URL, timeout=120)
         with open(GEOIP_GZ_TEMP, "wb") as f:
             shutil.copyfileobj(resp, f)
         resp.close()
     except Exception as e:
-        print(f"❌ 下载失败: {e}")
+        logger.error("GeoIP 下载失败: %s", e)
         return False
 
     # 先释放当前 GeoIP reader 的文件句柄（Windows 上 mmdb 文件被 mmap 锁定）
     _close_geoip()
 
-    print("📦 正在解压...")
+    logger.info("正在解压 GeoIP 数据库...")
     new_path = GEOIP_DB_PATH + ".new"
     try:
         # 将下载内容读入内存
@@ -168,10 +171,10 @@ def update_geoip_db():
         # 检测是否为 gzip 格式（magic: 0x1f 0x8b）
         # urllib 可能已透明解压 Content-Encoding，导致存下来的是裸 mmdb
         if raw[:2] == b'\x1f\x8b':
-            print("   检测到 gzip 格式，正在解压...")
+            logger.info("检测到 gzip 格式，正在解压...")
             raw = gzip.decompress(raw)
         else:
-            print("   数据已解压，直接写入...")
+            logger.info("数据已解压，直接写入...")
 
         # 先写入临时文件，再 os.replace 原子替换，避免 Windows mmap 残留锁
         with open(new_path, "wb") as f_out:
@@ -182,9 +185,9 @@ def update_geoip_db():
         except PermissionError:
             _os.remove(GEOIP_DB_PATH)
             _os.rename(new_path, GEOIP_DB_PATH)
-        print(f"✅ GeoIP 数据库已更新: {GEOIP_DB_PATH}")
+        logger.info("GeoIP 数据库已更新: %s", GEOIP_DB_PATH)
     except Exception as e:
-        print(f"❌ 解压失败: {e}")
+        logger.error("GeoIP 解压失败: %s", e)
         # 清理失败的临时文件
         try:
             import os as _os2
@@ -362,13 +365,13 @@ class DataBridge:
         try:
             payload = json.loads(data.decode("utf-8"))
         except json.JSONDecodeError as e:
-            print(f"❌ JSON 解析失败: {e}")
+            logger.error("JSON 解析失败: %s", e)
             return
 
         unanalyzed = payload.get("unanalyzed_data", {})
         analyzed = payload.get("analyzed_data", {})
 
-        print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
+        logger.info("[数据桥] 未分析流 %d 条, 已分析流 %d 条", len(unanalyzed), len(analyzed))
 
         with self.lock:
             result = process_tables(unanalyzed, analyzed)
@@ -376,20 +379,25 @@ class DataBridge:
                 # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
                 for row in result.values():
                     self.write_queue.put(row)
-                print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
+                logger.info("  已入队 %d 条 (queue.Queue → DB攒批写入)", len(result))
 
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
-            print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
+            logger.info("输出 %d 条记录 (含 GeoIP/员工信息: %d 条)", len(result), enriched)
 
     def _print_rows(self, result: dict):
-        """入库前打印每行数据的关键字段，方便调试"""
+        """入库前记录每行数据的关键字段，方便调试"""
         for key, row in result.items():
-            print(f"   📋 [hash={key}] {row.get('src_ip')}:{row.get('src_port')} "
-                  f"-> {row.get('dst_ip')}:{row.get('dst_port')} "
-                  f"proto={row.get('protocol')} "
-                  f"pkts={row.get('accumulated_pkts')} bytes={row.get('accumulated_bytes')} "
-                  f"entropy(avg/max/min)={row.get('avg_entropy')}/{row.get('max_entropy')}/{row.get('min_entropy')} "
-                  f"country={row.get('country')} employee={row.get('employee')} dept={row.get('department')}")
+            logger.debug(
+                "[hash=%s] %s:%s -> %s:%s proto=%s pkts=%s bytes=%s "
+                "entropy(avg/max/min)=%s/%s/%s country=%s employee=%s dept=%s",
+                key,
+                row.get('src_ip'), row.get('src_port'),
+                row.get('dst_ip'), row.get('dst_port'),
+                row.get('protocol'),
+                row.get('accumulated_pkts'), row.get('accumulated_bytes'),
+                row.get('avg_entropy'), row.get('max_entropy'), row.get('min_entropy'),
+                row.get('country'), row.get('employee'), row.get('department'),
+            )
 
     def run(self):
         # 预加载 GeoIP
@@ -397,9 +405,9 @@ class DataBridge:
         # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
         refresh_employee_cache()
 
-        print(f"[数据桥] 双缓冲模式已就绪（从 data_packer 内存直接读取，无UDP/无JSON序列化）")
-        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝）")
-        print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
+        logger.info("[数据桥] 双缓冲模式已就绪（从 data_packer 内存直接读取，无UDP/无JSON序列化）")
+        logger.info("  写入方式: queue.Queue → DB攒批写入（零拷贝）")
+        logger.info("  员工库: MySQL ip_dept_map (通过 database 模块)")
 
         import time
         while self.running:
@@ -430,20 +438,20 @@ class DataBridge:
                 if not unanalyzed and not analyzed:
                     continue
 
-                print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
+                logger.info("[数据桥] 未分析流 %d 条, 已分析流 %d 条", len(unanalyzed), len(analyzed))
 
                 with self.lock:
                     result = process_tables(unanalyzed, analyzed)
                     if result:
-                        # 入库前打印
+                        # 入库前记录
                         self._print_rows(result)
                         # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
                         for row in result.values():
                             self.write_queue.put(row)
-                        print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
+                        logger.info("  已入队 %d 条 (queue.Queue → DB攒批写入)", len(result))
 
                     enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
-                    print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
+                    logger.info("输出 %d 条记录 (含 GeoIP/员工信息: %d 条)", len(result), enriched)
 
                 # 清空就绪缓冲，释放给 data_packer 下一轮写入
                 clear_ready()
@@ -455,10 +463,10 @@ class DataBridge:
                     self._last_employee_refresh = now
 
             except Exception as e:
-                print(f"⚠️ 异常: {e}")
+                logger.warning("数据桥运行时异常: %s", e)
 
         stop_db_writer(self.stop_event)
-        print("🛑 已停止")
+        logger.info("数据桥已停止")
 
 
 if __name__ == "__main__":
@@ -467,4 +475,4 @@ if __name__ == "__main__":
         bridge.run()
     except KeyboardInterrupt:
         bridge.running = False
-        print("\n🛑 收到中断信号，退出...")
+        logger.info("收到中断信号，退出...")
