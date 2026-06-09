@@ -40,28 +40,9 @@ FRONTEND_ALERT_API = 'http://127.0.0.1:8080/api/alert'  # 前端大屏实时告�
 # 【核心防线】：保护 data_packer 字典的并发安全锁
 table_lock = threading.Lock()
 
-# 📝 日志配置：只在独立运行时配置 root logger，包内运行时由 main.py 管理
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        handlers=[
-            logging.FileHandler('control.log', encoding='utf-8'),
-            logging.StreamHandler(sys.stdout),
-        ]
-    )
+# 📝 日志：统一使用模块 logger，由 main.py 的 logging.basicConfig 统一管理
 logger = logging.getLogger(__name__)
-
-# 📝 遥测专用日志记录器
-telemetry_logger = logging.getLogger('telemetry')
-# 避免重复添加 handler
-if not telemetry_logger.handlers:
-    telemetry_logger.setLevel(logging.INFO)
-    log_handler = logging.FileHandler('telemetry.log', encoding='utf-8')
-    log_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-    telemetry_logger.addHandler(log_handler)
-    telemetry_logger.addHandler(logging.StreamHandler(sys.stdout))
+telemetry_logger = logging.getLogger(__name__ + ".telemetry")
 
 
 # ==========================================
