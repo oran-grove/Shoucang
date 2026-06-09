@@ -317,6 +317,14 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
         if vol_chunk == b'\x00\x00\x00\x00\x00\x00\x00\x00':
             continue
         raw_p4_binary = (vol_chunk + ent_chunk).hex()
+        # 调试：打印每条非零记录的原始数据
+        logger.info("DEBUG hash=%d offset=%d vol=%s ent=%s pkts=%d bytes=%d score=%d",
+            hash_idx, offset,
+            vol_chunk.hex(),
+            ent_chunk.hex(),
+            (int.from_bytes(vol_chunk, 'big') >> 48) & 0xFFFF,
+            (int.from_bytes(vol_chunk, 'big') >> 24) & 0xFFFFFF,
+            int.from_bytes(vol_chunk, 'big') & 0xFFFFFF)
         unanalyzed_export[hash_idx] = base + [raw_p4_binary]
 
     # 2. 复制热池

@@ -65,6 +65,7 @@ def parse_raw_p4_hex(hex_str: str) -> dict:
 
     pkts = (vol_val >> 48) & 0xFFFF
     bytes_len = (vol_val >> 24) & 0xFFFFFF
+    score = vol_val & 0xFFFFFF
 
     max_e = (ent_val >> 52) & 0xFFF
     min_e = (ent_val >> 40) & 0xFFF
@@ -75,6 +76,7 @@ def parse_raw_p4_hex(hex_str: str) -> dict:
     return {
         "pkts": pkts,
         "bytes": bytes_len,
+        "score": score,
         "max_e": max_e,
         "min_e": min_e,
         "sum_e": sum_e,
@@ -264,7 +266,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
         raw_hex = cold_entry[5]
         cold = parse_raw_p4_hex(raw_hex)
 
-        if cold["pkts"] == 0 and cold["bytes"] == 0:
+        if cold["pkts"] == 0 and cold["bytes"] == 0 and cold["score"] == 0:
             continue
 
         hot = analyzed_data.get(hash_key_str)
