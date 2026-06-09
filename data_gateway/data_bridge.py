@@ -1,29 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-流量数据处理器：从 UDP 9999 接收流量数据 JSON，
-遍历未分析流解析第六位 P4 寄存器原始数据，与已分析流合并后写入数据库。
-内置零拷贝写入：queue.Queue → DB背景攒批线程，无JSON序列化，无内存拷贝。
-独立于原代码运行，不修改任何原有文件。
+流量数据处理器：直接从 data_packer 双缓冲共享内存读取冷/热表，
+遍历冷表解析第六位 P4 寄存器原始数据，与热表合并后写入数据库。
+零网络开销，同一进程内共享内存引用传递。
 
-合并规则（未分析流 hash_idx 在已分析流中存在）：
-  - 五元组、资产标签：保持不变（取自已分析流）
-  - 历史总累计包   = 已分析流[8]  + 未分析流.pkts
-  - 历史总累计字节 = 已分析流[9]  + 未分析流.bytes
+DataBridge 作为消费者：轮询 data_packer.get_ready_pools()，
+拿到就绪的冷/热表后调用 process_tables() → 入队 DB 写入。
+
+合并规则（冷表 hash_idx 在热表中存在）：
+  - 五元组、资产标签：保持不变（取自热表）
+  - 历史总累计包   = 热表[8]  + 冷表.pkts
+  - 历史总累计字节 = 热表[9]  + 冷表.bytes
   - 全局PPS        = 更新后总包 // 100
   - 全局BPS        = 更新后总字节 // 100
-  - 历史均熵       = (已分析流均熵 * 已分析流总包 + 未分析流均熵 * 未分析流总包) / 更新后总包
-  - 历史最高熵     = max(已分析流[17], 未分析流.max_e)
-  - 历史最低熵     = min(已分析流[18], 未分析流.min_e)
+  - 历史均熵       = (热表均熵 * 热表总包 + 冷表均熵 * 冷表总包) / 更新后总包
+  - 历史最高熵     = max(热表[17], 冷表.max_e)
+  - 历史最低熵     = min(热表[18], 冷表.min_e)
   - 删除：初始时钟[10]、上次时钟[11]、瞬时PPS[12]、瞬时BPS[14]、reason[19]、Normal[20]
 
-不在已分析流中：
-  - 五元组取自未分析流，资产标签默认 5，其余取未分析流解析值
+不在热表中：
+  - 五元组取自冷表，资产标签默认 5，其余取冷表解析值
 """
 
-import socket
-import json
+import logging
 import threading
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 0. 可配置参数
@@ -92,13 +95,13 @@ def _init_geoip():
     try:
         import maxminddb
         _geoip_reader = maxminddb.open_database(GEOIP_DB_PATH)
-        print(f"🌍 GeoIP 数据库已加载: {GEOIP_DB_PATH}")
+        logger.info("GeoIP 数据库已加载: %s", GEOIP_DB_PATH)
     except ImportError:
-        print("⚠️ maxminddb 未安装，请执行: pip install maxminddb")
+        logger.warning("maxminddb 未安装，请执行: pip install maxminddb")
     except FileNotFoundError:
-        print(f"⚠️ GeoIP 数据库文件未找到: {GEOIP_DB_PATH}")
+        logger.warning("GeoIP 数据库文件未找到: %s", GEOIP_DB_PATH)
     except Exception as e:
-        print(f"⚠️ GeoIP 初始化失败: {e}")
+        logger.warning("GeoIP 初始化失败: %s", e)
 
 
 def lookup_country(ip: str) -> str:
@@ -141,20 +144,20 @@ def update_geoip_db():
     import shutil
     from urllib.request import urlopen
 
-    print(f"⬇️ 正在下载 GeoIP 数据库: {GEOIP_DOWNLOAD_URL}")
+    logger.info("正在下载 GeoIP 数据库: %s", GEOIP_DOWNLOAD_URL)
     try:
         resp = urlopen(GEOIP_DOWNLOAD_URL, timeout=120)
         with open(GEOIP_GZ_TEMP, "wb") as f:
             shutil.copyfileobj(resp, f)
         resp.close()
     except Exception as e:
-        print(f"❌ 下载失败: {e}")
+        logger.error("GeoIP 下载失败: %s", e)
         return False
 
     # 先释放当前 GeoIP reader 的文件句柄（Windows 上 mmdb 文件被 mmap 锁定）
     _close_geoip()
 
-    print("📦 正在解压...")
+    logger.info("正在解压 GeoIP 数据库...")
     new_path = GEOIP_DB_PATH + ".new"
     try:
         # 将下载内容读入内存
@@ -164,19 +167,19 @@ def update_geoip_db():
         # 检测是否为 gzip 格式（magic: 0x1f 0x8b）
         # urllib 可能已透明解压 Content-Encoding，导致存下来的是裸 mmdb
         if raw[:2] == b'\x1f\x8b':
-            print("   检测到 gzip 格式，正在解压...")
+            logger.debug("检测到 gzip 格式，正在解压...")
             raw = gzip.decompress(raw)
         else:
-            print("   数据已解压，直接写入...")
+            logger.debug("数据已解压，直接写入...")
 
         # 先写入临时文件，再 os.replace 原子替换，避免 Windows mmap 残留锁
         with open(new_path, "wb") as f_out:
             f_out.write(raw)
         import os as _os
         _os.replace(new_path, GEOIP_DB_PATH)
-        print(f"✅ GeoIP 数据库已更新: {GEOIP_DB_PATH}")
+        logger.info("GeoIP 数据库已更新: %s", GEOIP_DB_PATH)
     except Exception as e:
-        print(f"❌ 解压失败: {e}")
+        logger.error("GeoIP 解压失败: %s", e)
         # 清理失败的临时文件
         try:
             import os as _os2
@@ -326,9 +329,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
 # ============================================================
 # 5. 数据库写入（零拷贝：queue.Queue + 后台攒批线程）
 # ============================================================
-# 旧版的共享内存方案（SHM_NAME/MAX_PACKETS/PACKET_SIZE/HEADER_SIZE）
-# 已被移除，改为进程内 queue.Queue 直传 dict。
-# 数据流: DataBridge → queue.Queue → DB写入线程 → MySQL
+# 数据流: data_packer 双缓冲 → DataBridge → queue.Queue → DB写入线程 → MySQL
 # dict 直接引用传递，无 JSON 序列化，无内存拷贝。
 # 详见 database/writer.py
 
@@ -336,14 +337,29 @@ from database.writer import start_db_writer, stop_db_writer
 
 
 # ============================================================
-# 6. UDP 接收与主循环
+# 6. 共享内存接收与主循环（替代 UDP）
 # ============================================================
+# 数据就绪通知事件：由 control.py 的 telemetry_job 在 swap_buffers() 后触发
+_data_ready_event = threading.Event()
+
+
+def notify_data_ready():
+    """生产者调用：通知消费者有新数据就绪"""
+    _data_ready_event.set()
+
+
 class DataBridge:
-    """UDP 数据桥：接收流量数据，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
+    """
+    共享内存数据桥：从 data_packer 双缓冲读取冷/热表，
+    合并后 GeoIP+员工富化，零拷贝入 DB。
+
+    不再使用 UDP 传输，也不做盲轮询。
+    通过 threading.Event 等待 data_packer 双缓冲就绪通知，
+    由 control.py 的 telemetry_job 在 swap_buffers() 后调用
+    notify_data_ready() 唤醒消费者。
+    """
 
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(5.0)
         self.running = True
         self.lock = threading.Lock()
         self._last_employee_refresh = 0
@@ -351,64 +367,63 @@ class DataBridge:
         # 启动后台数据库写入线程（零拷贝 queue.Queue）
         self.write_queue, self.stop_event = start_db_writer()
 
-    def handle_payload(self, data: bytes):
-        try:
-            payload = json.loads(data.decode("utf-8"))
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON 解析失败: {e}")
-            return
-
-        unanalyzed = payload.get("unanalyzed_data", {})
-        analyzed = payload.get("analyzed_data", {})
-
-        print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
+    def handle_payload(self, unanalyzed: dict, analyzed: dict):
+        """直接接收 dict 的冷表/热表，无需 JSON 解析"""
+        cold_count = len(unanalyzed)
+        hot_count = len(analyzed)
+        logger.info("[数据桥] 冷表 %d 条, 热表 %d 条 (共享内存)", cold_count, hot_count)
 
         with self.lock:
             result = process_tables(unanalyzed, analyzed)
             if result:
-                # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
                 for row in result.values():
                     self.write_queue.put(row)
-                print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
+                logger.info("  已入队 %d 条 (queue.Queue → DB攒批写入)", len(result))
 
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
-            print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
+            logger.info("输出 %d 条记录 (含 GeoIP/员工信息: %d 条)", len(result), enriched)
 
     def run(self):
-        try:
-            self.sock.bind((UDP_LISTEN_IP, UDP_LISTEN_PORT))
-        except OSError as e:
-            print(f"❌ 绑定 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT} 失败: {e}")
-            return
-
         # 预加载 GeoIP
         _init_geoip()
         # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
         refresh_employee_cache()
 
-        print(f"[数据桥] 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
-        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
-        print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
+        # 🌟 导入 data_packer 共享内存接口（p4_controller 包内）
+        from p4_controller import data_packer
+
+        logger.info("共享内存双缓冲消费者已就绪")
+        logger.info("  读取方式: data_packer.get_ready_pools() + Event 通知（零网络开销）")
+        logger.info("  写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
+        logger.info("  员工库: MySQL ip_dept_map (通过 database 模块)")
 
         import time
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(65535)
-                print(f"[数据桥] 收到来自 {addr}，{len(data)} 字节")
-                self.handle_payload(data)
-            except socket.timeout:
+                # 阻塞等待生产者通知数据就绪（超时 105 秒 > 100 秒遥测周期）
+                _data_ready_event.wait(timeout=105.0)
+                _data_ready_event.clear()
+
+                # 从 data_packer 的就绪缓冲读取冷/热表
+                unanalyzed, analyzed = data_packer.get_ready_pools()
+
+                if unanalyzed or analyzed:
+                    self.handle_payload(unanalyzed, analyzed)
+                    # 处理完毕，清空就绪缓冲
+                    data_packer.clear_ready()
+
                 # 每 10 分钟刷新员工缓存
                 now = time.time()
                 if now - self._last_employee_refresh > 600:
                     refresh_employee_cache()
                     self._last_employee_refresh = now
-                continue
-            except Exception as e:
-                print(f"⚠️ 异常: {e}")
 
-        self.sock.close()
+            except Exception as e:
+                logger.warning("[数据桥] 异常: %s", e)
+                time.sleep(1)
+
         stop_db_writer(self.stop_event)
-        print("🛑 已停止")
+        logger.info("[数据桥] 已停止")
 
 
 if __name__ == "__main__":
@@ -417,4 +432,4 @@ if __name__ == "__main__":
         bridge.run()
     except KeyboardInterrupt:
         bridge.running = False
-        print("\n🛑 收到中断信号，退出...")
+        logger.info("收到中断信号，退出...")
