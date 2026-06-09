@@ -4,10 +4,13 @@ import struct
 import socket
 
 try:
-    from add_ip import get_ip_label
+    from .add_ip import get_ip_label      # 包模式
 except ImportError:
-    def get_ip_label(ip):
-        return "Unknown_Label"
+    try:
+        from add_ip import get_ip_label   # 独立模式
+    except ImportError:
+        def get_ip_label(ip):
+            return "Unknown_Label"
 
 logger = logging.getLogger(__name__)
 

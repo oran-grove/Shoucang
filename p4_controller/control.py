@@ -17,11 +17,17 @@ from flask import Flask, request, jsonify
 from thrift.transport import TSocket, TTransport
 from thrift.protocol import TBinaryProtocol, TMultiplexedProtocol
 
-# 🔌 引入你的三大核心业务模块
-import data_packer  # 打包底座
-import analyzer  # 判官大脑
-import add_ip  # 完美对齐：户籍资产模块
-from timer import start_timer_thread  # 独立计时器
+# 🔌 双模式导入：支持包内调用 (main.py) 和独立运行
+try:
+    from . import data_packer   # 包模式: p4_controller.data_packer
+    from . import analyzer
+    from . import add_ip
+    from .timer import start_timer_thread
+except ImportError:
+    import data_packer          # 独立模式
+    import analyzer
+    import add_ip
+    from timer import start_timer_thread
 
 app = Flask(__name__)
 
@@ -34,26 +40,28 @@ FRONTEND_ALERT_API = 'http://127.0.0.1:8080/api/alert'  # 前端大屏实时告�
 # 【核心防线】：保护 data_packer 字典的并发安全锁
 table_lock = threading.Lock()
 
-# 📝 统一日志配置
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler('control.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout),
-    ]
-)
+# 📝 日志配置：只在独立运行时配置 root logger，包内运行时由 main.py 管理
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+        handlers=[
+            logging.FileHandler('control.log', encoding='utf-8'),
+            logging.StreamHandler(sys.stdout),
+        ]
+    )
 logger = logging.getLogger(__name__)
 
 # 📝 遥测专用日志记录器
 telemetry_logger = logging.getLogger('telemetry')
-telemetry_logger.setLevel(logging.INFO)
-log_handler = logging.FileHandler('telemetry.log', encoding='utf-8')
-log_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-telemetry_logger.addHandler(log_handler)
-# 遥测日志也输出到控制台
-telemetry_logger.addHandler(logging.StreamHandler(sys.stdout))
+# 避免重复添加 handler
+if not telemetry_logger.handlers:
+    telemetry_logger.setLevel(logging.INFO)
+    log_handler = logging.FileHandler('telemetry.log', encoding='utf-8')
+    log_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    telemetry_logger.addHandler(log_handler)
+    telemetry_logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
 # ==========================================
