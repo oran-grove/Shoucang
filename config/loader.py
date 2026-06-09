@@ -465,35 +465,3 @@ def reset_user_config() -> None:
     """重置用户配置 — 直接删除 config_user.json。"""
     if USER_CONFIG_PATH.exists():
         USER_CONFIG_PATH.unlink()
-
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "default":
-        config = load_config()
-        save_config(config, "config_user_template.json")
-        print("已生成 config_user_template.json（可重命名为 config_user.json 后编辑）")
-    else:
-        user_path = sys.argv[1] if len(sys.argv) > 1 else None
-        config = load_config(user_path)
-
-        print("=" * 60)
-        print("多智能体分析系统 — 配置加载成功")
-        print("=" * 60)
-        print(f"\n后端:")
-        for bt in BackendType:
-            be = config.default_backends[bt]
-            print(f"  [{bt.value}] {be.model_name} @ {be.api_base}")
-        print(f"\n智能体:")
-        print(f"  L1-筛查: backend={config.screening.backend.value}, model={config.screening.model_name}")
-        print(f"  L2-回溯: backend={config.backtrack.backend.value}, model={config.backtrack.model_name}")
-        print(f"  L3-研判: backend={config.adjudication.backend.value}, model={config.adjudication.model_name}")
-        print(f"  反馈:   backend={config.feedback.backend.value}, model={config.feedback.model_name}")
-
-        ds = config.default_backends[BackendType.DEEPSEEK]
-        if ds.api_key:
-            print(f"\nDeepSeek V4:")
-            print(f"  thinking_enabled: {ds.thinking_enabled}")
-            print(f"  reasoning_effort: {ds.reasoning_effort}")
-            print(f"  include_reasoning: {ds.include_reasoning}")
