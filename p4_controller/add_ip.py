@@ -78,30 +78,30 @@ def add_to_blacklist(ip: str, source: str, reason: str = "") -> bool:
         logger.error("数据库黑名单写入失败，终止拉黑")
         return False
 
-    # 第二步：Thrift 注入 P4 物理流表
+    # 第二步：Thrift 注入 P4 物理流表（若交换机不可达，DB 写入已生效）
     clean_ip = ip.split('/')[0].strip()
     match_key = [BmMatchParam(
         type=BmMatchParamType.EXACT,
         exact=BmMatchParamExact(key=_ip_to_bytes(clean_ip))
     )]
 
-    client, transport = _get_thrift_client()
     try:
-        entry_handle = client.bm_mt_add_entry(
-            0,                              # cxt_id
-            'MyIngress.blacklist_table',    # table_name
-            match_key,                      # match_key
-            'MyIngress.drop',               # action_name (全限定名)
-            [],                             # action_data
-            BmAddEntryOptions()             # options
-        )
-        logger.info("P4 黑名单流表注入成功！entry_handle=%s", entry_handle)
-        return True
+        client, transport = _get_thrift_client()
+        try:
+            entry_handle = client.bm_mt_add_entry(
+                0,                              # cxt_id
+                'MyIngress.blacklist_table',    # table_name
+                match_key,                      # match_key
+                'MyIngress.drop',               # action_name (全限定名)
+                [],                             # action_data
+                BmAddEntryOptions()             # options
+            )
+            logger.info("P4 黑名单流表注入成功！entry_handle=%s", entry_handle)
+        finally:
+            transport.close()
     except Exception as e:
-        logger.error("P4 物理拦截下发失败: %s", e)
-        return False
-    finally:
-        transport.close()
+        logger.warning("P4 交换机不可达，流表未下发 (DB已生效): %s", e)
+    return True
 
 
 # ==========================================
@@ -128,7 +128,7 @@ def add_to_whitelist(ip: str, source: str, reason: str = "") -> bool:
         logger.error("数据库白名单写入失败，终止加白")
         return False
 
-    # 第二步：Thrift 注入 P4 物理流表
+    # 第二步：Thrift 注入 P4 物理流表（若交换机不可达，DB 写入已生效）
     if '/' in ip:
         addr, prefix = ip.split('/')
         prefix_len = int(prefix)
@@ -141,23 +141,23 @@ def add_to_whitelist(ip: str, source: str, reason: str = "") -> bool:
         lpm=BmMatchParamLPM(key=_ip_to_bytes(addr), prefix_length=prefix_len)
     )]
 
-    client, transport = _get_thrift_client()
     try:
-        entry_handle = client.bm_mt_add_entry(
-            0,                              # cxt_id
-            'MyIngress.whitelist_table',    # table_name
-            match_key,                      # match_key
-            'MyIngress.set_whitelisted',    # action_name (全限定名)
-            [],                             # action_data
-            BmAddEntryOptions()             # options
-        )
-        logger.info("P4 免检通道开通成功！entry_handle=%s", entry_handle)
-        return True
+        client, transport = _get_thrift_client()
+        try:
+            entry_handle = client.bm_mt_add_entry(
+                0,                              # cxt_id
+                'MyIngress.whitelist_table',    # table_name
+                match_key,                      # match_key
+                'MyIngress.set_whitelisted',    # action_name (全限定名)
+                [],                             # action_data
+                BmAddEntryOptions()             # options
+            )
+            logger.info("P4 免检通道开通成功！entry_handle=%s", entry_handle)
+        finally:
+            transport.close()
     except Exception as e:
-        logger.error("P4 免检通道下发失败: %s", e)
-        return False
-    finally:
-        transport.close()
+        logger.warning("P4 交换机不可达，免检通道未下发 (DB已生效): %s", e)
+    return True
 
 
 # ==========================================

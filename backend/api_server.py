@@ -602,18 +602,17 @@ async def api_blacklist_get():
 
 @app.post("/api/blacklist")
 async def api_blacklist_add(payload: BlacklistAdd):
-    """加入黑名单 — P4 硬件流表 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）"""
+    """加入黑名单 — DB 写入（由 add_ip.add_to_blacklist 统一完成，P4 尽力下发）"""
     target_ip = payload.ip
 
     try:
         from p4_controller.add_ip import add_to_blacklist as _p4_block
-        if not _p4_block(target_ip, source="frontend", reason=payload.reason or "手动添加"):
-            return JSONResponse({"status": "error", "msg": f"拉黑 {target_ip} 失败（P4 交换机可能未连接）"}, status_code=500)
+        _p4_block(target_ip, source="frontend", reason=payload.reason or "手动添加")
     except Exception as e:
-        logger.error(f"P4 硬件拉黑异常: {e}")
-        return JSONResponse({"status": "error", "msg": f"拉黑失败: {e}"}, status_code=500)
+        logger.error(f"拉黑异常: {e}")
+        return JSONResponse({"code": 1, "msg": f"拉黑失败: {e}"}, status_code=500)
 
-    return JSONResponse({"status": "success", "msg": f"已成功拉黑 {target_ip}"})
+    return JSONResponse({"code": 0, "msg": f"已成功拉黑 {target_ip}"})
 
 
 @app.delete("/api/blacklist/{item_id}")
