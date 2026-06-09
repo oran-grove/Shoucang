@@ -4,10 +4,13 @@ import struct
 import socket
 
 try:
-    from add_ip import get_ip_label
+    from .add_ip import get_ip_label      # 包模式
 except ImportError:
-    def get_ip_label(ip):
-        return "Unknown_Label"
+    try:
+        from add_ip import get_ip_label   # 独立模式
+    except ImportError:
+        def get_ip_label(ip):
+            return 5.0  # 降级兜底：中等风险
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +317,19 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
         if vol_chunk == b'\x00\x00\x00\x00\x00\x00\x00\x00':
             continue
         raw_p4_binary = (vol_chunk + ent_chunk).hex()
+        # 调试：打印每条非零记录的原始数据
+        logger.info("DEBUG hash=%d offset=%d vol=%s ent=%s pkts=%d bytes=%d score=%d",
+            hash_idx, offset,
+            vol_chunk.hex(),
+            ent_chunk.hex(),
+            (int.from_bytes(vol_chunk, 'big') >> 48) & 0xFFFF,
+            (int.from_bytes(vol_chunk, 'big') >> 24) & 0xFFFFFF,
+            int.from_bytes(vol_chunk, 'big') & 0xFFFFFF)
         unanalyzed_export[hash_idx] = base + [raw_p4_binary]
+
+    # 将拼装好的数据写回冷池（替换原始 5 元素条目为 6 元素条目）
+    cold.clear()
+    cold.update(unanalyzed_export)
 
     # 2. 复制热池
     analyzed_export = hot.copy()
@@ -326,5 +341,12 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
     logger.info(
         "定时器总线: 缓冲 %s 就绪！冷池 %d 条 / 热池 %d 条，已翻转到缓冲 %s",
         _ready_buf, cold_count, hot_count, _write_buf)
+
+    # 通知 DataBridge 消费者有新数据就绪
+    try:
+        from data_gateway.data_bridge import notify_data_ready
+        notify_data_ready()
+    except ImportError:
+        pass
 
     return unanalyzed_export, analyzed_export

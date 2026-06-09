@@ -20,16 +20,20 @@
   - 五元组取自未分析流，资产标签默认 5，其余取未分析流解析值
 """
 
-import socket
 import json
 import threading
+from datetime import datetime
 from typing import Any
 
 # ============================================================
-# 0. 可配置参数
+# 0. 双缓冲通知机制（data_packer → data_bridge）
 # ============================================================
-UDP_LISTEN_IP = "127.0.0.1"
-UDP_LISTEN_PORT = 9999
+_data_ready_event = threading.Event()
+
+
+def notify_data_ready():
+    """由 data_packer.process_pulled_registers() 调用，通知有新数据就绪"""
+    _data_ready_event.set()
 
 # GeoIP 数据库路径（MaxMind GeoLite2-City.mmdb）
 # 优先使用 shared_config 中的常量，如果未设置则回退到本地硬编码默认值
@@ -173,7 +177,11 @@ def update_geoip_db():
         with open(new_path, "wb") as f_out:
             f_out.write(raw)
         import os as _os
-        _os.replace(new_path, GEOIP_DB_PATH)
+        try:
+            _os.replace(new_path, GEOIP_DB_PATH)
+        except PermissionError:
+            _os.remove(GEOIP_DB_PATH)
+            _os.rename(new_path, GEOIP_DB_PATH)
         print(f"✅ GeoIP 数据库已更新: {GEOIP_DB_PATH}")
     except Exception as e:
         print(f"❌ 解压失败: {e}")
@@ -243,6 +251,7 @@ def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
         "country": country,
         "employee": employee,
         "department": department,
+        "packet_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -264,7 +273,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
         if cold["pkts"] == 0 and cold["bytes"] == 0:
             continue
 
-        hot = analyzed_data.get(hash_key_str)
+        hot = analyzed_data.get(hash_key)
 
         if hot is not None:
             # ============================================
@@ -342,8 +351,6 @@ class DataBridge:
     """UDP 数据桥：接收流量数据，解码合并，GeoIP+员工富化，零拷贝入 DB。"""
 
     def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(5.0)
         self.running = True
         self.lock = threading.Lock()
         self._last_employee_refresh = 0
@@ -374,39 +381,82 @@ class DataBridge:
             enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
             print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
 
-    def run(self):
-        try:
-            self.sock.bind((UDP_LISTEN_IP, UDP_LISTEN_PORT))
-        except OSError as e:
-            print(f"❌ 绑定 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT} 失败: {e}")
-            return
+    def _print_rows(self, result: dict):
+        """入库前打印每行数据的关键字段，方便调试"""
+        for key, row in result.items():
+            print(f"   📋 [hash={key}] {row.get('src_ip')}:{row.get('src_port')} "
+                  f"-> {row.get('dst_ip')}:{row.get('dst_port')} "
+                  f"proto={row.get('protocol')} "
+                  f"pkts={row.get('accumulated_pkts')} bytes={row.get('accumulated_bytes')} "
+                  f"entropy(avg/max/min)={row.get('avg_entropy')}/{row.get('max_entropy')}/{row.get('min_entropy')} "
+                  f"country={row.get('country')} employee={row.get('employee')} dept={row.get('department')}")
 
+    def run(self):
         # 预加载 GeoIP
         _init_geoip()
         # 预加载员工信息（通过 database 模块从 MySQL ip_dept_map 表加载）
         refresh_employee_cache()
 
-        print(f"[数据桥] 监听 UDP {UDP_LISTEN_IP}:{UDP_LISTEN_PORT}")
-        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝，无JSON序列化）")
+        print(f"[数据桥] 双缓冲模式已就绪（从 data_packer 内存直接读取，无UDP/无JSON序列化）")
+        print(f"   写入方式: queue.Queue → DB攒批写入（零拷贝）")
         print(f"   员工库: MySQL ip_dept_map (通过 database 模块)")
 
         import time
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(65535)
-                print(f"[数据桥] 收到来自 {addr}，{len(data)} 字节")
-                self.handle_payload(data)
-            except socket.timeout:
-                # 每 10 分钟刷新员工缓存
+                # 等待 data_packer 通知新数据就绪
+                _data_ready_event.wait(timeout=10.0)
+
+                if not _data_ready_event.is_set():
+                    # 超时：刷新员工缓存
+                    now = time.time()
+                    if now - self._last_employee_refresh > 600:
+                        refresh_employee_cache()
+                        self._last_employee_refresh = now
+                    continue
+
+                _data_ready_event.clear()
+
+                # 从双缓冲读取就绪数据
+                try:
+                    from p4_controller.data_packer import get_ready_pools, clear_ready
+                except ImportError:
+                    import importlib
+                    dp = importlib.import_module("p4_controller.data_packer")
+                    get_ready_pools = dp.get_ready_pools
+                    clear_ready = dp.clear_ready
+
+                unanalyzed, analyzed = get_ready_pools()
+                if not unanalyzed and not analyzed:
+                    continue
+
+                print(f"[数据桥] 未分析流 {len(unanalyzed)} 条, 已分析流 {len(analyzed)} 条")
+
+                with self.lock:
+                    result = process_tables(unanalyzed, analyzed)
+                    if result:
+                        # 入库前打印
+                        self._print_rows(result)
+                        # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
+                        for row in result.values():
+                            self.write_queue.put(row)
+                        print(f"   📤 已入队 {len(result)} 条 (queue.Queue → DB攒批写入)")
+
+                    enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
+                    print(f"📊 输出 {len(result)} 条记录 (含 GeoIP/员工信息: {enriched} 条)")
+
+                # 清空就绪缓冲，释放给 data_packer 下一轮写入
+                clear_ready()
+
+                # 刷新员工缓存
                 now = time.time()
                 if now - self._last_employee_refresh > 600:
                     refresh_employee_cache()
                     self._last_employee_refresh = now
-                continue
+
             except Exception as e:
                 print(f"⚠️ 异常: {e}")
 
-        self.sock.close()
         stop_db_writer(self.stop_event)
         print("🛑 已停止")
 
