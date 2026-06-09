@@ -58,112 +58,118 @@
         <form class="layui-form" lay-filter="configForm">
 
         <fieldset class="layui-elem-field layui-field-title" style="margin-top: 30px;">
-            <legend>检测模块配置</legend>
+            <legend>Layer 1 — 筛查智能体 (screening)</legend>
         </fieldset>
 
         <div class="layui-form-item">
             <label class="layui-form-label">后端模型</label>
             <div class="layui-input-block">
-                <input type="text" name="detection[backend]" class="layui-input">
+                <input type="text" name="screening[backend]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">模型名称</label>
             <div class="layui-input-block">
-                <input type="text" name="detection[model_name]" class="layui-input">
+                <input type="text" name="screening[model_name]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">温度参数</label>
             <div class="layui-input-block">
-                <input type="number" name="detection[temperature]" step="0.1" class="layui-input">
+                <input type="number" name="screening[temperature]" step="0.1" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">最大Token数</label>
             <div class="layui-input-block">
-                <input type="number" name="detection[max_tokens]" class="layui-input">
+                <input type="number" name="screening[max_tokens]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">恶意置信度阈值</label>
             <div class="layui-input-block">
-                <input type="number" name="detection[confidence_threshold_malicious]" step="0.01" class="layui-input">
+                <input type="number" name="screening[confidence_threshold_dangerous]" step="0.01" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">可疑置信度阈值</label>
             <div class="layui-input-block">
-                <input type="number" name="detection[confidence_threshold_suspect]" step="0.01" class="layui-input">
+                <input type="number" name="screening[confidence_threshold_suspicious]" step="0.01" class="layui-input">
             </div>
         </div>
 
         <fieldset class="layui-elem-field layui-field-title" style="margin-top: 30px;">
-            <legend>关联分析配置</legend>
+            <legend>Layer 2 — 回溯智能体 (backtrack)</legend>
         </fieldset>
 
         <div class="layui-form-item">
             <label class="layui-form-label">后端模型</label>
             <div class="layui-input-block">
-                <input type="text" name="correlation[backend]" class="layui-input">
+                <input type="text" name="backtrack[backend]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">模型名称</label>
             <div class="layui-input-block">
-                <input type="text" name="correlation[model_name]" class="layui-input">
+                <input type="text" name="backtrack[model_name]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">温度参数</label>
             <div class="layui-input-block">
-                <input type="number" name="correlation[temperature]" step="0.1" class="layui-input">
+                <input type="number" name="backtrack[temperature]" step="0.1" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">最大Token数</label>
             <div class="layui-input-block">
-                <input type="number" name="correlation[max_tokens]" class="layui-input">
+                <input type="number" name="backtrack[max_tokens]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
-            <label class="layui-form-label">最小关联记录数</label>
+            <label class="layui-form-label">关联度阈值</label>
             <div class="layui-input-block">
-                <input type="number" name="correlation[min_records_to_correlate]" class="layui-input">
+                <input type="number" name="backtrack[relevance_threshold]" step="0.01" class="layui-input">
+            </div>
+        </div>
+        <div class="layui-form-item">
+            <label class="layui-form-label">分批上下文比例</label>
+            <div class="layui-input-block">
+                <input type="number" name="backtrack[batch_context_ratio]" step="0.001" class="layui-input">
             </div>
         </div>
 
         <fieldset class="layui-elem-field layui-field-title" style="margin-top: 30px;">
-            <legend>综合判定配置</legend>
+            <legend>Layer 3 — 研判智能体 (adjudication)</legend>
         </fieldset>
 
         <div class="layui-form-item">
             <label class="layui-form-label">后端模型</label>
             <div class="layui-input-block">
-                <input type="text" name="judgment[backend]" class="layui-input">
+                <input type="text" name="adjudication[backend]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">模型名称</label>
             <div class="layui-input-block">
-                <input type="text" name="judgment[model_name]" class="layui-input">
+                <input type="text" name="adjudication[model_name]" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">温度参数</label>
             <div class="layui-input-block">
-                <input type="number" name="judgment[temperature]" step="0.1" class="layui-input">
+                <input type="number" name="adjudication[temperature]" step="0.1" class="layui-input">
             </div>
         </div>
         <div class="layui-form-item">
             <label class="layui-form-label">最大Token数</label>
             <div class="layui-input-block">
-                <input type="number" name="judgment[max_tokens]" class="layui-input">
+                <input type="number" name="adjudication[max_tokens]" class="layui-input">
             </div>
         </div>
 
         <fieldset class="layui-elem-field layui-field-title" style="margin-top: 30px;">
-            <legend>反馈迭代配置</legend>
+            <legend>反馈智能体 (feedback)</legend>
         </fieldset>
 
         <div class="layui-form-item">
@@ -258,7 +264,7 @@
         // 加载配置并填充表单
         $.getJSON('/api/config', function (resp) {
             var config = resp.data || resp;
-            ['detection', 'correlation', 'judgment', 'feedback'].forEach(function (section) {
+            ['screening', 'backtrack', 'adjudication', 'feedback'].forEach(function (section) {
                 var data = config[section];
                 if (data) {
                     for (var key in data) {
