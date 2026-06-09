@@ -155,6 +155,7 @@ class Orchestrator:
 
         # --- Layer 2: 回溯智能体 ---
         bk_cfg = self.config.backtrack
+        bk_ctx = self._get_backend_context_tokens(bk_cfg.backend)
         backtrack_agent = BacktrackAgent(
             name="BacktrackAgent",
             system_prompt=bk_cfg.system_prompt,
@@ -162,18 +163,23 @@ class Orchestrator:
             temperature=bk_cfg.temperature,
             max_tokens=bk_cfg.max_tokens,
             relevance_threshold=bk_cfg.relevance_threshold,
+            max_context_tokens=bk_ctx,
+            batch_context_ratio=bk_cfg.batch_context_ratio,
         )
         self._inject_agent_deps(backtrack_agent, bk_cfg.backend)
         self._agents["backtrack"] = backtrack_agent
 
         # --- Layer 3: 研判智能体 ---
         adj_cfg = self.config.adjudication
+        adj_ctx = self._get_backend_context_tokens(adj_cfg.backend)
         adjudication_agent = AdjudicationAgent(
             name="AdjudicationAgent",
             system_prompt=adj_cfg.system_prompt,
             model_name=adj_cfg.model_name,
             temperature=adj_cfg.temperature,
             max_tokens=adj_cfg.max_tokens,
+            max_context_tokens=adj_ctx,
+            batch_context_ratio=bk_cfg.batch_context_ratio,
         )
         self._inject_agent_deps(adjudication_agent, adj_cfg.backend)
         self._agents["adjudication"] = adjudication_agent
@@ -189,6 +195,18 @@ class Orchestrator:
         )
         self._inject_agent_deps(feedback_agent, fb_cfg.backend)
         self._agents["feedback"] = feedback_agent
+
+    def _get_backend_context_tokens(self, backend_type: BackendType) -> int:
+        """获取指定后端的 max_context_tokens，降级到默认值。"""
+        backend = self._backends.get(backend_type)
+        if backend and hasattr(backend, 'default_model'):
+            # 从 LLMBackendConfig 读取（_inject_agent_deps 会同步模型名）
+            pass
+        # 直接从 config 读取（初始化阶段 backend 可能尚未构建）
+        be_cfg = self.config.default_backends.get(backend_type)
+        if be_cfg:
+            return be_cfg.max_context_tokens
+        return 4096
 
     def _inject_agent_deps(self, agent, backend_type: BackendType) -> None:
         """向智能体注入 LLM 后端"""

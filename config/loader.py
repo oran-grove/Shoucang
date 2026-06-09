@@ -123,6 +123,7 @@ def _build_llm_config(backend_type: BackendType, d: dict) -> LLMBackendConfig:
         api_key=d.get("api_key", ""),
         temperature=d.get("temperature", 0.3),
         max_tokens=d.get("max_tokens", 2048),
+        max_context_tokens=d.get("max_context_tokens", 4096),
         timeout=d.get("timeout", 60.0),
         max_retries=d.get("max_retries", 3),
         auto_load=d.get("auto_load", True),
@@ -163,7 +164,7 @@ def _build_backtrack_config(d: dict) -> BacktrackAgentConfig:
         max_tokens=d.get("max_tokens", 2048),
         lookback_windows=d.get("lookback_windows", [0.5, 24, 168, 720, 2160]),
         relevance_threshold=d.get("relevance_threshold", 0.6),
-        max_similar_records=d.get("max_similar_records", 20),
+        batch_context_ratio=d.get("batch_context_ratio", 0.125),
     )
 
 
@@ -303,6 +304,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.OPENAI].api_key,
                 "temperature": config.default_backends[BackendType.OPENAI].temperature,
                 "max_tokens": config.default_backends[BackendType.OPENAI].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.OPENAI].max_context_tokens,
                 "timeout": config.default_backends[BackendType.OPENAI].timeout,
                 "max_retries": config.default_backends[BackendType.OPENAI].max_retries,
             },
@@ -312,6 +314,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.LMSTUDIO].api_key,
                 "temperature": config.default_backends[BackendType.LMSTUDIO].temperature,
                 "max_tokens": config.default_backends[BackendType.LMSTUDIO].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.LMSTUDIO].max_context_tokens,
                 "timeout": config.default_backends[BackendType.LMSTUDIO].timeout,
                 "max_retries": config.default_backends[BackendType.LMSTUDIO].max_retries,
                 "auto_load": config.default_backends[BackendType.LMSTUDIO].auto_load,
@@ -323,6 +326,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
                 "api_key": config.default_backends[BackendType.DEEPSEEK].api_key,
                 "temperature": config.default_backends[BackendType.DEEPSEEK].temperature,
                 "max_tokens": config.default_backends[BackendType.DEEPSEEK].max_tokens,
+                "max_context_tokens": config.default_backends[BackendType.DEEPSEEK].max_context_tokens,
                 "timeout": config.default_backends[BackendType.DEEPSEEK].timeout,
                 "max_retries": config.default_backends[BackendType.DEEPSEEK].max_retries,
                 "thinking_enabled": config.default_backends[BackendType.DEEPSEEK].thinking_enabled,
@@ -350,7 +354,7 @@ def _config_to_dict(config: OrchestratorConfig) -> dict:
             "max_tokens": config.backtrack.max_tokens,
             "lookback_windows": config.backtrack.lookback_windows,
             "relevance_threshold": config.backtrack.relevance_threshold,
-            "max_similar_records": config.backtrack.max_similar_records,
+            "batch_context_ratio": config.backtrack.batch_context_ratio,
         },
         "adjudication": {
             "enabled": config.adjudication.enabled,

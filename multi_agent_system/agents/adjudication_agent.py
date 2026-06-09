@@ -11,10 +11,12 @@ Layer 3 — 最终研判智能体
 """
 
 import logging
+import random
 from typing import Any
 
 from ..core.agent import BaseAgent
 from ..core.message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel
+from .backtrack_agent import TOKENS_PER_RECORD  # 复用 L2 的 token 估算常量
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,8 @@ class AdjudicationAgent(BaseAgent):
         model_name: str = "deepseek-v4-flash",
         temperature: float = 0.3,
         max_tokens: int = 2048,
+        max_context_tokens: int = 4096,
+        batch_context_ratio: float = 0.125,
     ):
         super().__init__(
             name=name,
@@ -37,6 +41,8 @@ class AdjudicationAgent(BaseAgent):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        self.max_context_tokens = max_context_tokens
+        self.batch_context_ratio = batch_context_ratio
         if not system_prompt:
             self.system_prompt = (
                 "你是一个内部威胁最终研判专家。请结合原始可疑流量及其历史关联数据，"
@@ -92,6 +98,19 @@ class AdjudicationAgent(BaseAgent):
         Returns:
             ThreatVerdict: 最终威胁判定
         """
+        # 复用 L2 公式计算最大展示数，超出则随机抽样
+        max_show = max(
+            1,
+            int(self.max_context_tokens * self.batch_context_ratio / TOKENS_PER_RECORD),
+        )
+        display_context = related_context
+        if lookback_window_hours > 0 and len(related_context) > max_show:
+            display_context = random.sample(related_context, max_show)
+            logger.info(
+                "[%s] 抽样: %s条关联 → 随机抽取 %s条 (上限=%s)",
+                self.name, len(related_context), len(display_context), max_show,
+            )
+
         context_lines = []
         if screening_result:
             context_lines.append(f"L1筛查结果: {screening_result.verdict.value} "
@@ -100,11 +119,12 @@ class AdjudicationAgent(BaseAgent):
 
         if lookback_window_hours > 0:
             context_lines.append(f"当前回溯窗口: {self._fmt_window(lookback_window_hours)}")
-            context_lines.append(f"关联历史记录数: {len(related_context)}")
+            context_lines.append(f"关联历史记录总数: {len(related_context)}"
+                               f"{' (展示抽样' + str(len(display_context)) + '条)' if len(related_context) > len(display_context) else ''}")
 
-            if related_context:
+            if display_context:
                 context_lines.append("\n--- 高关联历史记录 ---")
-                for i, r in enumerate(related_context):
+                for i, r in enumerate(display_context):
                     context_lines.append(
                         f"[{i + 1}] {r.get('src_ip', '?')} -> {r.get('dst_ip', '?')} | "
                         f"协议={r.get('protocol', '?')} | "

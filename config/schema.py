@@ -37,6 +37,7 @@ class LLMBackendConfig:
     api_key: str = ""
     temperature: float = 0.3
     max_tokens: int = 2048
+    max_context_tokens: int = 4096      # 模型最大上下文窗口（token 数），用于分批计算
     timeout: float = 60.0
     max_retries: int = 3
     # LM Studio 通常部署在 localhost
@@ -113,9 +114,9 @@ class BacktrackAgentConfig:
     )
     temperature: float = 0.3
     max_tokens: int = 2048
+    batch_context_ratio: float = 0.125         # 每批占上下文的 1/8（为深度思考预留）
     lookback_windows: list[float] = field(default_factory=lambda: [0.5, 24, 168, 720, 2160])  # 30m, 1d, 7d, 30d, 90d
     relevance_threshold: float = 0.6           # 关联度阈值（低于此值丢弃）
-    max_similar_records: int = 20              # 每次回溯最多拉取相似记录数
 
 
 @dataclass

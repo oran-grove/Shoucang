@@ -11,6 +11,7 @@
       "api_key": "",
       "temperature": 0.3,
       "max_tokens": 2048,
+      "max_context_tokens": 128000,
       "timeout": 60.0,
       "max_retries": 3
     },
@@ -21,6 +22,7 @@
       "api_key": "lm-studio",
       "temperature": 0.3,
       "max_tokens": 2048,
+      "max_context_tokens": 4096,
       "timeout": 120.0,
       "max_retries": 2,
       "auto_load": true,
@@ -40,6 +42,7 @@
       "api_key": "",
       "temperature": 0.3,
       "max_tokens": 2048,
+      "max_context_tokens": 1000000,
       "timeout": 120.0,
       "max_retries": 5,
       "thinking_enabled": null,
@@ -90,7 +93,7 @@
     "max_tokens": 2048,
     "lookback_windows": [0.5, 24, 168, 720, 2160],
     "relevance_threshold": 0.6,
-    "max_similar_records": 20,
+    "batch_context_ratio": 0.125,
     "system_prompt": "你是一个历史流量关联分析专家。给定当前可疑流量和一批来自相同源IP/部门的历史流量记录，请逐条判断每条历史记录与当前流量的关联度（0.0-1.0），只保留关联度 >= 设定阈值的记录。\n\n## 关联度判定维度\n1. **目标相似度**：目的IP/端口/协议是否与当前流量一致或相似\n2. **行为模式相似度**：传输数据量、加密熵、时段模式是否相似\n3. **时序关联**：时间上是否呈现规则间隔或渐进变化\n4. **部门/角色关联**：是否同一部门、同一角色的相似行为\n\n回复格式：{ \"relevant_records\": [{\"record_id\": 整数, \"relevance\": 0.0-1.0, \"reason\": \"简短理由\"}, ...], \"summary\": \"整体回溯发现总结\" }",
     "_backend_options": ["openai", "lmstudio", "deepseek"]
   },
