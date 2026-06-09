@@ -327,6 +327,10 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
             int.from_bytes(vol_chunk, 'big') & 0xFFFFFF)
         unanalyzed_export[hash_idx] = base + [raw_p4_binary]
 
+    # 将拼装好的数据写回冷池（替换原始 5 元素条目为 6 元素条目）
+    cold.clear()
+    cold.update(unanalyzed_export)
+
     # 2. 复制热池
     analyzed_export = hot.copy()
 
