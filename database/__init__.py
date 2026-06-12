@@ -22,6 +22,8 @@
     from database import get_ip_dept_map, lookup_employee
 """
 
+from .seed import seed_all
+
 from .writer import (
     start_db_writer,
     stop_db_writer,
@@ -71,6 +73,7 @@ __all__ = [
     "DB_CONFIG",
     "DB_WRITE_BATCH_SIZE",
     "DB_WRITE_FLUSH_INTERVAL",
+    "seed_all",
     "start_db_writer",
     "stop_db_writer",
     "start_verdict_writer",
