@@ -465,3 +465,20 @@ def reset_user_config() -> None:
     """重置用户配置 — 直接删除 config_user.json。"""
     if USER_CONFIG_PATH.exists():
         USER_CONFIG_PATH.unlink()
+
+
+# ============================================================
+# 数据库密码查询 — 供 database/connection.py 使用
+# ============================================================
+
+def get_database_password() -> str:
+    """
+    按优先级返回数据库密码。
+
+    优先级: config_user.json > config_default.json
+    若都为空（未配置），返回空字符串。
+    此函数供 connection.py 在系统启动早期调用（早于 OrchestratorConfig 构建）。
+    """
+    cfg = load_config_dict()
+    db = cfg.get("database", {})
+    return db.get("password", "")

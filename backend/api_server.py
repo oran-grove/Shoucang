@@ -443,6 +443,42 @@ async def api_config_reset():
 
 
 # ============================================================================
+# API: 数据库配置
+# ============================================================================
+class DatabaseConfigSave(BaseModel):
+    host: str = "localhost"
+    port: int = 3306
+    user: str = "root"
+    password: str = ""
+
+
+@app.get("/api/config/database")
+async def api_get_database_config():
+    """获取数据库配置（预填当前值）"""
+    config = _read_config_user()
+    db = config.get("database", {})
+    return JSONResponse({
+        "code": 0,
+        "data": {
+            "host": db.get("host", "localhost"),
+            "port": db.get("port", 3306),
+            "user": db.get("user", "root"),
+            "password": db.get("password", ""),
+        }
+    })
+
+
+@app.post("/api/config/database")
+async def api_save_database_config(payload: DatabaseConfigSave):
+    """保存数据库配置"""
+    config = _read_config_user()
+    if "database" not in config:
+        config["database"] = {}
+    config["database"].update(payload.model_dump(exclude_none=True))
+    _save_config_user(config)
+    return JSONResponse({"code": 0, "msg": "数据库配置已保存，重启后生效"})
+
+# ============================================================================
 # API: 菜单/权限
 # ============================================================================
 @app.get("/api/menus")

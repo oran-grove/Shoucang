@@ -201,6 +201,17 @@ class GeoipConfig:
 
 
 @dataclass
+class DatabaseConfig:
+    """数据库连接配置 — 通过 config_user.json 覆盖，由 config.loader 统一管理"""
+    host: str = "localhost"
+    port: int = 3306
+    user: str = "root"
+    password: str = ""
+    database: str = "insider_threat_db"
+    charset: str = "utf8mb4"
+
+
+@dataclass
 class OrchestratorConfig:
     """编排器总配置 — 三层智能体架构"""
     screening: ScreeningAgentConfig = field(default_factory=ScreeningAgentConfig)
