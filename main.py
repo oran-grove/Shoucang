@@ -47,7 +47,6 @@ import signal
 import sys
 import threading
 import time
-from pathlib import Path
 
 from multi_agent_system import MultiAgentSystem
 
@@ -276,21 +275,9 @@ async def start_multi_agent_system(
 
     _logger.info(_cyan("[Layer 2] 启动多智能体系统..."))
     try:
-        from config.loader import load_config
-
-        # 加载配置（默认 + 用户覆盖）
-        config_path = Path(__file__).parent / "config" / "config_user.json"
-        if config_path.exists():
-            config = load_config(str(config_path))
-        else:
-            _logger.warning(
-                _yellow("[Layer 2] config_user.json 不存在，使用默认配置")
-            )
-            config = load_config()
-
-        # 写入全局活跃配置单例
-        from config.active import set_active_config
-        set_active_config(config)
+        # 复用全局活跃配置（已在 async_main 开头加载）
+        from config.active import get_active_config
+        config = get_active_config()
 
         system = MultiAgentSystem(orchestrator_config=config)
         await system.start()
@@ -583,6 +570,31 @@ async def async_main(args: argparse.Namespace):
     _global_state["start_time"] = time.time()
     _global_state["backend_port"] = args.frontend_port
     print_banner()
+
+    # ====== 0. 加载配置（必须最先执行，在数据库模块导入前完成）======
+
+    _logger.info(_cyan("[配置] 加载系统配置（单次读取，常驻内存）..."))
+    from config.loader import load_config_dict, load_config_from_dict
+
+    # 读取合并配置字典（仅此一次磁盘读取）
+    _cfg_dict = load_config_dict()
+
+    # 构建类型化配置 + 写入全局活跃配置单例
+    config = load_config_from_dict(_cfg_dict)
+    from config.active import set_active_config
+    set_active_config(config)
+
+    # 将数据库密码注入 DB_CONFIG（database/connection.py 唯一的数据源）
+    _db = _cfg_dict.get("database", {})
+    if _db.get("password"):
+        from config.shared_config import DB_CONFIG
+        DB_CONFIG["password"] = _db["password"]
+    _logger.info(
+        _green(
+            f"[配置] 系统配置已加载 [OK] "
+            f"(数据库: {_db.get('user', 'root')}@{_db.get('host', 'localhost')}:{_db.get('port', 3306)}/{_db.get('database', 'insider_threat_db')})"
+        )
+    )
 
     # ---- 初始化：从 MySQL 加载黑白名单/IP映射到常驻内存 ----
     try:

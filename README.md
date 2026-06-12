@@ -163,7 +163,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 - `config_default.json` 是权威模板，日常调参只动 `config_user.json`
 - `config_user.json` 在 `.gitignore` 中，API 密钥和数据库密码不会外泄
 - 前端通过 REST API 读写配置（智能体参数、数据库连接等），从不直接碰 JSON 文件
-- 子模块不直接读 JSON——统一走 `config/loader.py`，包括 `get_database_password()`
+- 子模块不直接读 JSON——统一走 `config/loader.py` 或 `config.active` 单例
 - 支持三种 LLM 后端：**OpenAI**（含所有兼容 API）、**LM Studio**（本地模型，自动加载/卸载）、**DeepSeek V4**（支持 reasoning_effort 和 thinking 模式）
 
 ## 项目结构
@@ -225,7 +225,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ## 约束与约定
 
 - **数据库**：MySQL 是唯一数据源。所有 DB 访问通过 `database/` 模块暴露的接口，禁止各模块私自打开连接。
-- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。数据库密码通过 `config.loader.get_database_password()` 获取。
+- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。数据库密码在 `config_user.json` 的 `database.password` 字段配置，由 `main.py` 启动时注入 `DB_CONFIG`，各模块不直接读取配置文件。
 - **P4 控制器**：模块支持 `try: from . import` 双模式导入（包内/独立运行），修改时保持兼容。
 - **GeoIP**：`GeoLite2-City.mmdb` 通过 jsDelivr CDN 每 7 天自动更新，`maxminddb` 包缺失时自动降级跳过。
 - **前端**：无构建工具，FastAPI 直接托管 `frontend/` 目录。前端通过 REST API 与后端通信，不直接读配置或数据库。

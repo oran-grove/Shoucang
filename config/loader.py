@@ -221,6 +221,62 @@ def _build_geoip_config(d: dict) -> GeoipConfig:
     )
 
 
+def _load_merged_dict(user_config_path: Optional[str] = None) -> dict:
+    """
+    加载默认配置并与用户配置深合并。返回合并后的字典。
+
+    所有需要读取配置文件的函数都应通过此函数获取合并后的字典，
+    确保文件只被读取一次。
+    """
+    if not _DEFAULT_CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"默认配置文件不存在: {_DEFAULT_CONFIG_PATH}\n"
+            f"请确保 config_default.json 在 config/ 目录下。"
+        )
+    with open(_DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
+        default_dict = json.load(f)
+
+    if user_config_path:
+        user_path = Path(user_config_path)
+        if user_path.exists():
+            with open(user_path, "r", encoding="utf-8") as f:
+                user_dict = json.load(f)
+            return _deep_merge(default_dict, user_dict)
+        else:
+            print(f"[loader] 用户配置文件不存在: {user_config_path}，使用默认配置。")
+
+    return default_dict
+
+
+def _build_config_from_dict(merged: dict) -> OrchestratorConfig:
+    """从合并后的配置字典构建 OrchestratorConfig（校验 + 构建各节）。"""
+    # 校验可选值
+    warnings = _validate_config(merged)
+    for w in warnings:
+        print(f"[loader] ⚠ {w}")
+
+    # 构建后端配置
+    backends = merged.get("backends", {})
+    for name in ("openai", "lmstudio", "deepseek"):
+        if name not in backends:
+            backends[name] = {}
+    default_backends = {
+        BackendType.OPENAI: _build_llm_config(BackendType.OPENAI, backends["openai"]),
+        BackendType.LMSTUDIO: _build_llm_config(BackendType.LMSTUDIO, backends["lmstudio"]),
+        BackendType.DEEPSEEK: _build_llm_config(BackendType.DEEPSEEK, backends["deepseek"]),
+    }
+
+    return OrchestratorConfig(
+        screening=_build_screening_config(merged.get("screening", {})),
+        backtrack=_build_backtrack_config(merged.get("backtrack", {})),
+        adjudication=_build_adjudication_config(merged.get("adjudication", {})),
+        feedback=_build_feedback_config(merged.get("feedback", {})),
+        live_scan=_build_live_scan_config(merged.get("live_scan", {})),
+        geoip=_build_geoip_config(merged.get("geoip", {})),
+        default_backends=default_backends,
+    )
+
+
 def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
     """
     加载配置，返回 OrchestratorConfig。
@@ -245,54 +301,24 @@ def load_config(user_config_path: Optional[str] = None) -> OrchestratorConfig:
         >>> config = load_config()  # 仅默认配置
         >>> config = load_config("config/config_user.json")  # 默认+用户覆盖
     """
-    # 1. 加载默认配置
-    if not _DEFAULT_CONFIG_PATH.exists():
-        raise FileNotFoundError(
-            f"默认配置文件不存在: {_DEFAULT_CONFIG_PATH}\n"
-            f"请确保 config_default.json 在 config/ 目录下。"
-        )
-    with open(_DEFAULT_CONFIG_PATH, "r", encoding="utf-8") as f:
-        default_dict = json.load(f)
+    merged = _load_merged_dict(user_config_path)
+    return _build_config_from_dict(merged)
 
-    # 2. 加载并合并用户配置
-    if user_config_path:
-        user_path = Path(user_config_path)
-        if user_path.exists():
-            with open(user_path, "r", encoding="utf-8") as f:
-                user_dict = json.load(f)
-            merged = _deep_merge(default_dict, user_dict)
-        else:
-            print(f"[loader] 用户配置文件不存在: {user_config_path}，使用默认配置。")
-            merged = default_dict
-    else:
-        merged = default_dict
 
-    # 3. 校验可选值
-    warnings = _validate_config(merged)
-    for w in warnings:
-        print(f"[loader] ⚠ {w}")
+def load_config_from_dict(merged: dict) -> OrchestratorConfig:
+    """
+    从已合并的配置字典构建 OrchestratorConfig（不再读取文件）。
 
-    # 4. 构建后端配置
-    backends = merged.get("backends", {})
-    for name in ("openai", "lmstudio", "deepseek"):
-        if name not in backends:
-            backends[name] = {}
-    default_backends = {
-        BackendType.OPENAI: _build_llm_config(BackendType.OPENAI, backends["openai"]),
-        BackendType.LMSTUDIO: _build_llm_config(BackendType.LMSTUDIO, backends["lmstudio"]),
-        BackendType.DEEPSEEK: _build_llm_config(BackendType.DEEPSEEK, backends["deepseek"]),
-    }
+    用于调用方已通过 load_config_dict() 获取合并字典后，
+    避免重复读取磁盘。
 
-    # 5. 构建 OrchestratorConfig
-    return OrchestratorConfig(
-        screening=_build_screening_config(merged.get("screening", {})),
-        backtrack=_build_backtrack_config(merged.get("backtrack", {})),
-        adjudication=_build_adjudication_config(merged.get("adjudication", {})),
-        feedback=_build_feedback_config(merged.get("feedback", {})),
-        live_scan=_build_live_scan_config(merged.get("live_scan", {})),
-        geoip=_build_geoip_config(merged.get("geoip", {})),
-        default_backends=default_backends,
-    )
+    Args:
+        merged: 已合并的配置字典（默认 + 用户覆盖）
+
+    Returns:
+        OrchestratorConfig: 构建好的配置对象
+    """
+    return _build_config_from_dict(merged)
 
 
 def save_config(config: OrchestratorConfig, path: str) -> None:
@@ -413,14 +439,14 @@ from .shared_config import USER_CONFIG_PATH
 def load_config_dict() -> dict:
     """
     以原始字典形式返回合并后的配置（默认 + 用户覆盖）。
+
+    与 load_config() 共享 _load_merged_dict()，避免重复读取文件。
     """
     if not _DEFAULT_CONFIG_PATH.exists():
         return {}
-    default = json.loads(_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
-    if USER_CONFIG_PATH.exists():
-        user = json.loads(USER_CONFIG_PATH.read_text(encoding="utf-8"))
-        return _deep_merge(default, user)
-    return default
+    return _load_merged_dict(
+        str(USER_CONFIG_PATH) if USER_CONFIG_PATH.exists() else None
+    )
 
 
 def load_default_config_dict() -> dict:
@@ -466,19 +492,3 @@ def reset_user_config() -> None:
     if USER_CONFIG_PATH.exists():
         USER_CONFIG_PATH.unlink()
 
-
-# ============================================================
-# 数据库密码查询 — 供 database/connection.py 使用
-# ============================================================
-
-def get_database_password() -> str:
-    """
-    按优先级返回数据库密码。
-
-    优先级: config_user.json > config_default.json
-    若都为空（未配置），返回空字符串。
-    此函数供 connection.py 在系统启动早期调用（早于 OrchestratorConfig 构建）。
-    """
-    cfg = load_config_dict()
-    db = cfg.get("database", {})
-    return db.get("password", "")

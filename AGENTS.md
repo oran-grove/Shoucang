@@ -83,7 +83,7 @@ Two-layer JSON merge: `config/config_default.json` ← overridden by `config/con
 ## Database
 
 - **MySQL is the sole data source.** All DB access must go through `database/` module interfaces.
-- `database/connection.py` — `db_connect()` and `db_cursor()` context manager (always `DictCursor`). DB password via `config.loader.get_database_password()`; team members set their own password in `config_user.json` under `"database"."password"`.
+- `database/connection.py` — `db_connect()` and `db_cursor()` context manager (always `DictCursor`). DB password comes from `config.shared_config.DB_CONFIG["password"]`, injected by `main.py` at startup (reading from `config_user.json` → `database.password`). Team members set their own password in `config_user.json` under `"database"."password"`.
 - `database/lists_manager.py` — blacklist/whitelist/IP-dept-map CRUD, memory-cached with `threading.RLock()`, auto-refreshes on write.
 - `database/writer.py` — two batch writers using `queue.Queue` (max 10000 items each):
   - `start_db_writer()` → `_store_batch()`: batch INSERT into `traffic_log`
@@ -95,7 +95,7 @@ Two-layer JSON merge: `config/config_default.json` ← overridden by `config/con
 | Path | Role |
 |---|---|
 | `main.py` | Single entrypoint — starts all layers, health check, signal handlers |
-| `config/loader.py` | Config reading/writing/validation — `load_config()`, `save_config_dict()`, `reset_user_config()`, `get_database_password()` |
+| `config/loader.py` | Config reading/writing/validation — `load_config()`, `save_config_dict()`, `reset_user_config()` |
 | `config/schema.py` | Dataclass config models — `OrchestratorConfig`, agent configs, `BackendType`, `DatabaseConfig` |
 | `config/shared_config.py` | System-level constants — project root, paths, batch params, GeoIP constants |
 | `multi_agent_system/orchestrator.py` | Core 3-tier pipeline — `Orchestrator.analyze_flow()` |

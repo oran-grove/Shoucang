@@ -24,21 +24,13 @@ from contextlib import contextmanager
 
 import pymysql
 from config.shared_config import DB_CONFIG
-from config.loader import get_database_password
 
 logger = logging.getLogger(__name__)
-
-# ── 模块导入时解析一次数据库密码 ────────────────────────────
-_DB_PASSWORD = get_database_password()
-if _DB_PASSWORD:
-    logger.debug("数据库密码来源: config_user.json / config_default.json")
-else:
-    logger.warning("数据库密码未在配置文件中设置")
 
 
 def db_connect() -> pymysql.connections.Connection:
     """建立数据库连接（调用方负责关闭）。"""
-    password = _DB_PASSWORD or DB_CONFIG["password"]
+    password = DB_CONFIG["password"]
     return pymysql.connect(
         host=DB_CONFIG["host"],
         user=DB_CONFIG["user"],

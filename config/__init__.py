@@ -33,6 +33,7 @@ from .active import (
 
 from .loader import (
     load_config,
+    load_config_from_dict,
     save_config,
     load_config_dict,
     load_default_config_dict,
@@ -53,6 +54,7 @@ __all__ = [
     "OrchestratorConfig",
     # 加载器
     "load_config",
+    "load_config_from_dict",
     "save_config",
     "load_config_dict",
     "load_default_config_dict",
