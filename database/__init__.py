@@ -62,13 +62,11 @@ from .lists_manager import (
 )
 
 from config.shared_config import (
-    DB_CONFIG,
     DB_WRITE_BATCH_SIZE,
     DB_WRITE_FLUSH_INTERVAL,
 )
 
 __all__ = [
-    "DB_CONFIG",
     "DB_WRITE_BATCH_SIZE",
     "DB_WRITE_FLUSH_INTERVAL",
     "start_db_writer",

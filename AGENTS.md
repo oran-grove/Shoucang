@@ -70,20 +70,22 @@ Supporting components (not numbered layers):
 
 ## Configuration
 
-Two-layer JSON merge: `config/config_default.json` ← overridden by `config/config_user.json`.
+Two-layer JSON merge: `config/config_default.json` ← overridden by `config/config_user.json`. Config is cached in memory as typed dataclass structs via `config/store.py:ConfigStore`.
 
-- **ALWAYS use `config/loader.py`** to read/write config. Sub-modules must never read JSON files directly.
-- `config/schema.py` — dataclass definitions for all config objects (`BackendType`, `LLMBackendConfig`, `ScreeningAgentConfig`, `DatabaseConfig`, etc.)
-- `config/active.py` — runtime singleton `set_active_config()` / `get_active_config()`, set by `main.py` on startup.
-- `config/shared_config.py` — project root, batch write params, config file paths, GeoIP constants. DB credentials managed via config JSON files.
-- `multi_agent_system/config.py` is a **compatibility redirect** to `config/schema.py` — new code should import directly from `config`.
-- DeepSeek V4-specific settings: `thinking_enabled`, `reasoning_effort`, `include_reasoning` in the `deepseek` backend block.
+- **Use `config` module functions exclusively** to read/write config. Sub-modules must never read JSON files directly.
+- `get_config(*sections)` — request specific config structs. `get_config()` returns `FullConfig` (with `.to_dict()` for JSON serialization).
+- `save_config(**structs)` — save typed structs. `save_config_dict(updates)` for WebUI partial updates.
+- `reset_config()` — delete user config, reload defaults.
+- `config/schema.py` — dataclass structs: `DatabaseConfig`, `BackendsConfig`, `LLMBackendConfig`, `ScreeningAgentConfig`, `BacktrackAgentConfig`, `AdjudicationAgentConfig`, `FeedbackAgentConfig`, `LiveScanConfig`, `GeoipConfig`, `FullConfig`.
+- `config/store.py` — ConfigStore singleton + public API functions.
+- `config/loader.py` — internal helpers only (`_deep_merge`, `_compute_delta`, `_validate`). Not imported by other modules.
+- `config/shared_config.py` — system constants (project root, batch write params, GeoIP paths).
 - `config/config_user.json` is in `.gitignore` (contains API keys). The `config_default.json` is committed as the template.
 
 ## Database
 
 - **MySQL is the sole data source.** All DB access must go through `database/` module interfaces.
-- `database/connection.py` — `db_connect()` and `db_cursor()` context manager (always `DictCursor`). DB password comes from `config.shared_config.DB_CONFIG["password"]`, injected by `main.py` at startup (reading from `config_user.json` → `database.password`). Team members set their own password in `config_user.json` under `"database"."password"`.
+- `database/connection.py` — `db_connect()` and `db_cursor()` context manager (always `DictCursor`). Connection params obtained via `get_config("database")` → `DatabaseConfig`. Team members set their password in `config_user.json` under `"database"."password"`.
 - `database/lists_manager.py` — blacklist/whitelist/IP-dept-map CRUD, memory-cached with `threading.RLock()`, auto-refreshes on write.
 - `database/writer.py` — two batch writers using `queue.Queue` (max 10000 items each):
   - `start_db_writer()` → `_store_batch()`: batch INSERT into `traffic_log`
@@ -95,8 +97,9 @@ Two-layer JSON merge: `config/config_default.json` ← overridden by `config/con
 | Path | Role |
 |---|---|
 | `main.py` | Single entrypoint — starts all layers, health check, signal handlers |
-| `config/loader.py` | Config reading/writing/validation — `load_config()`, `save_config_dict()`, `reset_user_config()` |
-| `config/schema.py` | Dataclass config models — `OrchestratorConfig`, agent configs, `BackendType`, `DatabaseConfig` |
+| `config/store.py` | ConfigStore singleton — `get_config()`, `save_config()`, `save_config_dict()`, `reset_config()` |
+| `config/schema.py` | Dataclass structs — `FullConfig`, `DatabaseConfig`, `BackendsConfig`, agent configs, `BackendType` |
+| `config/loader.py` | Internal helpers only — `_deep_merge`, `_compute_delta`, `_validate` |
 | `config/shared_config.py` | System-level constants — project root, paths, batch params, GeoIP constants |
 | `multi_agent_system/orchestrator.py` | Core 3-tier pipeline — `Orchestrator.analyze_flow()` |
 | `multi_agent_system/orchestrators/live_scan_orchestrator.py` | Background scanner — polls DB, feeds pipeline |
@@ -115,7 +118,7 @@ Two-layer JSON merge: `config/config_default.json` ← overridden by `config/con
 
 - **Imports**: `p4_controller/` modules use `try: from . import` for dual-mode (package vs standalone). Expect `ImportError` fallbacks.
 - **Database access**: Always through `database/` module — never raw `pymysql` calls elsewhere. Use `db_cursor()` context manager.
-- **Config access**: Always through `config/loader.py` or `config/active.py` — never read JSON directly.
+- **Config access**: Always through `config` module (`get_config`, `save_config`) — never read JSON directly.
 - **Thread safety**: `threading.RLock()` for memory caches, `threading.Event()` for shutdown signals, `queue.Queue` for producer-consumer.
 - **Graceful shutdown**: All layers use `threading.Event` (`shutdown_requested`) + signal handlers. Main loop waits on the event with timeout.
 - **Logging**: Module-level `logging.getLogger(__name__)` throughout. `main.py` configures `logging.basicConfig()` once at startup.
@@ -140,11 +143,10 @@ Two-layer JSON merge: `config/config_default.json` ← overridden by `config/con
 
 ## Tips for AI agents
 
-- **Startup order matters in `main.py`**: DB lists load first, then verdict writer, then backend, then P4 controller, then multi-agent system (async), then data gateway, then GeoIP thread, then health check loop. The multi-agent system depends on the backend being up for alert callbacks.
-- **Config changes require restart**: There's no hot-reload. The frontend writes to `config_user.json`, which takes effect on next `main.py` launch.
+- **Startup order matters in `main.py`**: Config loads first (via `get_config()`), then DB lists, then verdict writer, then backend, then P4 controller, then multi-agent system (async), then data gateway, then GeoIP thread, then health check loop. Config MUST be loaded before any database imports because `db_connect()` calls `get_config("database")`.
+- **Config changes require restart**: `save_config()` / `save_config_dict()` write to `config_user.json` and refresh the in-memory cache, but running components (orchestrator, agents) won't pick up changes until next `main.py` launch.
 - **Testing individual layers**: Use the `--no-*` flags to isolate. `--no-llm --no-live-scan --no-p4 --no-flow-data` leaves just the FastAPI frontend.
 - **LLM backend selection**: Each agent can use a different backend. If an agent's specified backend lacks an API key, the orchestrator falls back to the first available backend.
 - **The `database/` module is the only DB interface**: If you need a new query, add it to `lists_manager.py` or `writer.py`, and expose it via `database/__init__.py`. The backend uses `importlib` to call these dynamically.
 - **P4 controller import fragility**: The `try: from . import` pattern in `p4_controller/control.py` is intentional for standalone testing. Don't "fix" it to absolute imports.
 - **Memory pattern data**: `multi_agent_system/memory/data/` contains runtime artifacts (SQLite WAL files for feedback, JSON patterns). These are gitignored — don't commit them.
-- **`crash.txt`**: Present in repo root — likely a crash dump artifact. Don't modify or delete without asking.

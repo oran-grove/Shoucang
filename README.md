@@ -162,8 +162,8 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 设计原则：
 - `config_default.json` 是权威模板，日常调参只动 `config_user.json`
 - `config_user.json` 在 `.gitignore` 中，API 密钥和数据库密码不会外泄
-- 前端通过 REST API 读写配置（智能体参数、数据库连接等），从不直接碰 JSON 文件
-- 子模块不直接读 JSON——统一走 `config/loader.py` 或 `config.active` 单例
+- 配置在内存中以类型化结构体（dataclass）缓存，通过 `get_config("section")` 按节获取
+- 前端通过 REST API 读写配置，后端通过 `save_config` / `save_config_dict` 写入并刷新缓存
 - 支持三种 LLM 后端：**OpenAI**（含所有兼容 API）、**LM Studio**（本地模型，自动加载/卸载）、**DeepSeek V4**（支持 reasoning_effort 和 thinking 模式）
 
 ## 项目结构
@@ -174,9 +174,9 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ├── config/                    # 统一配置
 │   ├── config_default.json    #   出厂默认配置
 │   ├── config_user.json       #   用户覆盖配置（gitignored）
-│   ├── schema.py              #   数据模型定义（DatabaseConfig、智能体配置等）
-│   ├── loader.py              #   加载/合并/校验/保存/密码查询
-│   ├── active.py              #   运行时配置单例
+│   ├── schema.py              #   配置结构体定义（DatabaseConfig、BackendsConfig 等）
+│   ├── store.py               #   ConfigStore 单例 + get_config / save_config API
+│   ├── loader.py              #   内部辅助（合并、校验、增量计算）
 │   └── shared_config.py       #   系统级常量（路径、批次参数、GeoIP 常量）
 ├── p4_controller/             # P4 硬件控制面
 │   ├── control.py             #   Flask 守护进程 + pynng 监听 + Thrift 遥测
@@ -193,7 +193,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ├── backend/                   # FastAPI 统一后端
 │   └── api_server.py          #   REST API + 前端静态文件托管
 ├── database/                  # 数据持久化
-│   ├── connection.py          #   数据库连接工厂（密码由 config.loader 提供）
+│   ├── connection.py          #   数据库连接工厂（通过 get_config("database") 获取连接参数）
 │   ├── writer.py              #   双队列攒批写入（INSERT + UPDATE）
 │   ├── lists_manager.py       #   黑白名单 / IP 映射内存缓存
 │   └── create_database.sql    #   建库 DDL
@@ -225,7 +225,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ## 约束与约定
 
 - **数据库**：MySQL 是唯一数据源。所有 DB 访问通过 `database/` 模块暴露的接口，禁止各模块私自打开连接。
-- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。数据库密码在 `config_user.json` 的 `database.password` 字段配置，由 `main.py` 启动时注入 `DB_CONFIG`，各模块不直接读取配置文件。
+- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。数据库密码在 `config_user.json` 的 `database.password` 字段配置，`database/connection.py` 通过 `get_config("database")` 直接获取，各模块不直接读取配置文件。
 - **P4 控制器**：模块支持 `try: from . import` 双模式导入（包内/独立运行），修改时保持兼容。
 - **GeoIP**：`GeoLite2-City.mmdb` 通过 jsDelivr CDN 每 7 天自动更新，`maxminddb` 包缺失时自动降级跳过。
 - **前端**：无构建工具，FastAPI 直接托管 `frontend/` 目录。前端通过 REST API 与后端通信，不直接读配置或数据库。

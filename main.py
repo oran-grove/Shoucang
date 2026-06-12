@@ -275,11 +275,11 @@ async def start_multi_agent_system(
 
     _logger.info(_cyan("[Layer 2] 启动多智能体系统..."))
     try:
-        # 复用全局活跃配置（已在 async_main 开头加载）
-        from config.active import get_active_config
-        config = get_active_config()
+        # 复用全局配置（已在 async_main 开头加载，store 自动返回缓存）
+        from config import get_config
+        config = get_config()  # FullConfig，不再次读盘
 
-        system = MultiAgentSystem(orchestrator_config=config)
+        system = MultiAgentSystem()  # 配置自动从缓存加载
         await system.start()
 
         _global_state["multi_agent_system"] = system
@@ -471,10 +471,10 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
     """启动 GeoIP 数据库定期自动更新线程"""
     interval_hours = args.geoip_update_interval
     if interval_hours is None:
-        # 从全局活跃配置读取
+        # 从配置缓存读取
         try:
-            from config.active import get_active_config
-            geoip_cfg = get_active_config().geoip
+            from config import get_config
+            geoip_cfg = get_config("geoip")
             if not geoip_cfg.enabled:
                 _logger.info("[GeoIP] 配置文件中已禁用自动更新")
                 return
@@ -573,26 +573,13 @@ async def async_main(args: argparse.Namespace):
 
     # ====== 0. 加载配置（必须最先执行，在数据库模块导入前完成）======
 
-    _logger.info(_cyan("[配置] 加载系统配置（单次读取，常驻内存）..."))
-    from config.loader import load_config_dict, load_config_from_dict
+    _logger.info(_cyan("[配置] 加载系统配置（单次读取，结构体缓存）..."))
+    from config import get_config
+    config = get_config()  # FullConfig — 触发文件加载，构建所有结构体
 
-    # 读取合并配置字典（仅此一次磁盘读取）
-    _cfg_dict = load_config_dict()
-
-    # 构建类型化配置 + 写入全局活跃配置单例
-    config = load_config_from_dict(_cfg_dict)
-    from config.active import set_active_config
-    set_active_config(config)
-
-    # 将数据库密码注入 DB_CONFIG（database/connection.py 唯一的数据源）
-    _db = _cfg_dict.get("database", {})
-    if _db.get("password"):
-        from config.shared_config import DB_CONFIG
-        DB_CONFIG["password"] = _db["password"]
     _logger.info(
         _green(
             f"[配置] 系统配置已加载 [OK] "
-            f"(数据库: {_db.get('user', 'root')}@{_db.get('host', 'localhost')}:{_db.get('port', 3306)}/{_db.get('database', 'insider_threat_db')})"
         )
     )
 

@@ -23,21 +23,21 @@ import logging
 from contextlib import contextmanager
 
 import pymysql
-from config.shared_config import DB_CONFIG
 
 logger = logging.getLogger(__name__)
 
 
 def db_connect() -> pymysql.connections.Connection:
     """建立数据库连接（调用方负责关闭）。"""
-    password = DB_CONFIG["password"]
+    from config import get_config
+    db = get_config("database")
     return pymysql.connect(
-        host=DB_CONFIG["host"],
-        user=DB_CONFIG["user"],
-        password=password,
-        database=DB_CONFIG["database"],
-        port=DB_CONFIG["port"],
-        charset=DB_CONFIG["charset"],
+        host=db.host,
+        user=db.user,
+        password=db.password,
+        database=db.database,
+        port=db.port,
+        charset=db.charset,
         connect_timeout=5,
     )
 

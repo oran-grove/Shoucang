@@ -51,12 +51,8 @@ from pydantic import BaseModel
 from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
 
-# ---- 统一配置加载（通过 config 模块）----
-from config.loader import (
-    load_config_dict,
-    save_config_dict,
-    reset_user_config,
-)
+# ---- 配置管理（通过 config 模块）----
+from config import get_config, reset_config, save_config_dict
 
 logger = logging.getLogger("UnifiedBackend")
 
@@ -141,12 +137,14 @@ app.add_middleware(
 # 数据模型
 # ============================================================================
 class ConfigSaveRequest(BaseModel):
-    detection: Optional[dict] = None
-    correlation: Optional[dict] = None
-    judgment: Optional[dict] = None
-    feedback: Optional[dict] = None
+    database: Optional[dict] = None
     backends: Optional[dict] = None
-    deep_analysis: Optional[dict] = None
+    screening: Optional[dict] = None
+    backtrack: Optional[dict] = None
+    adjudication: Optional[dict] = None
+    feedback: Optional[dict] = None
+    live_scan: Optional[dict] = None
+    geoip: Optional[dict] = None
 
 
 class BackendConfigSave(BaseModel):
@@ -197,28 +195,6 @@ class TrafficAction(BaseModel):
 
 class BlacklistItem(BaseModel):
     id: int
-
-
-# ============================================================================
-# 配置读写
-# ============================================================================
-# 配置缓存（避免每次请求都读磁盘）
-_config_cache: dict | None = None
-
-
-def _read_config_user() -> dict:
-    """读取用户配置（首次从磁盘加载，后续返回缓存副本）。"""
-    global _config_cache
-    if _config_cache is None:
-        _config_cache = load_config_dict()
-    return _config_cache
-
-
-def _save_config_user(config: dict) -> None:
-    """保存配置到磁盘并刷新缓存。"""
-    global _config_cache
-    save_config_dict(config)
-    _config_cache = config
 
 
 # ============================================================================
@@ -292,14 +268,14 @@ async def api_init():
 @app.get("/api/config")
 async def api_get_config():
     """获取当前用户配置"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     return JSONResponse({"code": 0, "data": config})
 
 
 @app.post("/api/config")
 async def api_save_config(payload: ConfigSaveRequest):
     """保存用户配置（部分更新）"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     data = payload.model_dump(exclude_none=True)
 
     for section, fields in data.items():
@@ -319,14 +295,14 @@ async def api_save_config(payload: ConfigSaveRequest):
                     except (ValueError, TypeError):
                         config[section][key] = value
 
-    _save_config_user(config)
+    save_config_dict(config)
     return JSONResponse({"code": 0, "msg": "保存成功"})
 
 
 @app.post("/api/config/backend")
 async def api_save_backend_config(payload: BackendConfigSave):
     """单独保存某个后端的 API 密钥 / 模型配置"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     if "backends" not in config:
         config["backends"] = {}
 
@@ -351,7 +327,7 @@ async def api_save_backend_config(payload: BackendConfigSave):
         else:
             config["backends"][backend_name][key] = value
 
-    _save_config_user(config)
+    save_config_dict(config)
     return JSONResponse({"code": 0, "msg": f"后端 '{backend_name}' 配置已保存"})
 
 
@@ -362,7 +338,7 @@ class BackendTestRequest(BaseModel):
 @app.post("/api/config/backend/test")
 async def api_config_backend_test(payload: BackendTestRequest):
     """测试指定后端的连接性"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     backends = config.get("backends", {})
     backend_cfg = backends.get(payload.backend)
 
@@ -436,9 +412,7 @@ async def api_config_backend_test(payload: BackendTestRequest):
 @app.post("/api/config/reset")
 async def api_config_reset():
     """重置为默认配置 — 直接删除 config_user.json"""
-    global _config_cache
-    reset_user_config()
-    _config_cache = None  # 下次读取时重新加载纯默认配置
+    reset_config()
     return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
 
 
@@ -455,7 +429,7 @@ class DatabaseConfigSave(BaseModel):
 @app.get("/api/config/database")
 async def api_get_database_config():
     """获取数据库配置（预填当前值）"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     db = config.get("database", {})
     return JSONResponse({
         "code": 0,
@@ -471,11 +445,11 @@ async def api_get_database_config():
 @app.post("/api/config/database")
 async def api_save_database_config(payload: DatabaseConfigSave):
     """保存数据库配置"""
-    config = _read_config_user()
+    config = get_config().to_dict()
     if "database" not in config:
         config["database"] = {}
     config["database"].update(payload.model_dump(exclude_none=True))
-    _save_config_user(config)
+    save_config_dict(config)
     return JSONResponse({"code": 0, "msg": "数据库配置已保存，重启后生效"})
 
 # ============================================================================

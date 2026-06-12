@@ -1,67 +1,62 @@
 """
 统一配置管理模块
 ================
-项目所有模块的配置均在此模块中集中管理。
 
-结构:
- - schema.py: 纯数据模型定义（LLM后端、智能体配置结构等）
- - loader.py: JSON 文件加载器（读取、合并、校验、保存）
- - shared_config.py: 系统共享常量（数据库连接、路径等）
- 
- 用法:
-     from config import load_config, save_config, OrchestratorConfig
-     from config.shared_config import DB_CONFIG
+公开 API:
+    get_config(*sections) → 按节请求配置结构体
+    save_config(**sections) → 保存配置节
+    reset_config() → 重置为默认配置
+
+用法:
+    from config import get_config, save_config
+
+    db = get_config("database")                     # → DatabaseConfig
+    be, scr = get_config("backends", "screening")   # → (BackendsConfig, ScreeningAgentConfig)
+    full = get_config()                             # → FullConfig
+
+    save_config(database=db)
+    save_config(screening=scr, backtrack=bk)
 """
 
 from .schema import (
-    BackendType,
-    LLMBackendConfig,
-    ScreeningAgentConfig,
-    BacktrackAgentConfig,
     AdjudicationAgentConfig,
+    BackendsConfig,
+    BackendType,
+    BacktrackAgentConfig,
+    DatabaseConfig,
     FeedbackAgentConfig,
+    FullConfig,
     GeoipConfig,
-    LiveScanAgentConfig,
-    OrchestratorConfig,
+    LLMBackendConfig,
+    LiveScanConfig,
+    ScreeningAgentConfig,
 )
 
-from .active import (
-    get_active_config,
-    set_active_config,
-    is_config_loaded,
-)
-
-from .loader import (
-    load_config,
-    load_config_from_dict,
+from .store import (
+    ConfigNotLoadedError,
+    get_config,
+    reset_config,
     save_config,
-    load_config_dict,
-    load_default_config_dict,
     save_config_dict,
-    reset_user_config,
 )
 
 __all__ = [
     # 数据模型
     "BackendType",
+    "DatabaseConfig",
     "LLMBackendConfig",
+    "BackendsConfig",
     "ScreeningAgentConfig",
     "BacktrackAgentConfig",
     "AdjudicationAgentConfig",
     "FeedbackAgentConfig",
+    "LiveScanConfig",
     "GeoipConfig",
-    "LiveScanAgentConfig",
-    "OrchestratorConfig",
-    # 加载器
-    "load_config",
-    "load_config_from_dict",
+    "FullConfig",
+    # API
+    "get_config",
     "save_config",
-    "load_config_dict",
-    "load_default_config_dict",
     "save_config_dict",
-    "reset_user_config",
-    # 活跃配置单例
-    "get_active_config",
-    "set_active_config",
-    "is_config_loaded",
+    "reset_config",
+    "ConfigNotLoadedError",
 ]

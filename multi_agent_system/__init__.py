@@ -9,12 +9,8 @@ Layer 3 — AdjudicationAgent: 最终研判 (结合回溯数据二次判定)
 
     from multi_agent_system import MultiAgentSystem
 
-    # 创建系统
+    # 创建系统（配置自动从 config 模块加载）
     system = MultiAgentSystem()
-
-    # 添加后端
-    system.add_lmstudio_backend("http://localhost:1234/v1")
-    system.add_openai_backend("sk-xxx")
 
     # 分析流量
     verdict = system.analyze(flow_event)
@@ -23,16 +19,13 @@ Layer 3 — AdjudicationAgent: 最终研判 (结合回溯数据二次判定)
     system.feedback("false_positive", src_ip="10.0.0.5")
 """
 
-from typing import Optional
-
-from .config import (
+from config.schema import (
     BackendType,
     LLMBackendConfig,
     ScreeningAgentConfig,
     BacktrackAgentConfig,
     AdjudicationAgentConfig,
     FeedbackAgentConfig,
-    OrchestratorConfig,
 )
 from .core.message import (
     FlowEvent,
@@ -57,12 +50,11 @@ class MultiAgentSystem:
     多智能体分析系统主类。
 
     对主调程序暴露最简洁的接口，屏蔽内部 LLM 后端、三层管线等细节。
-    后端和智能体配置通过 OrchestratorConfig（JSON 文件加载）管理。
+    配置自动从 config 模块加载（通过 get_config()）。
 
     —— 典型使用方式 ——
 
-        config = load_config("config/config_user.json")
-        system = MultiAgentSystem(orchestrator_config=config)
+        system = MultiAgentSystem()
         await system.start()
 
         verdict = await system.analyze(flow)
@@ -72,9 +64,15 @@ class MultiAgentSystem:
         await system.stop()
     """
 
-    def __init__(self, orchestrator_config: Optional[OrchestratorConfig] = None):
-        self._config = orchestrator_config or OrchestratorConfig()
-        self._orchestrator = Orchestrator(config=self._config)
+    def __init__(self):
+        from config import get_config
+        self._orchestrator = Orchestrator(
+            backends=get_config("backends"),
+            screening=get_config("screening"),
+            backtrack=get_config("backtrack"),
+            adjudication=get_config("adjudication"),
+            feedback=get_config("feedback"),
+        )
         self._started = False
 
     # --- 生命周期 ---
@@ -165,13 +163,12 @@ __all__ = [
     # 主类
     "MultiAgentSystem",
     "Orchestrator",
-    # 配置
-    "OrchestratorConfig",
-    "LLMBackendConfig",
+    # 配置类型
     "ScreeningAgentConfig",
     "BacktrackAgentConfig",
     "AdjudicationAgentConfig",
     "FeedbackAgentConfig",
+    "LLMBackendConfig",
     "BackendType",
     # 数据结构
     "FlowEvent",

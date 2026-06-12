@@ -69,30 +69,59 @@ async def run_evolution_loop(shutdown_event: threading.Event):
                         "[Evolution:Loop3] 执行每日 LLM 模式提取..."
                     )
                     try:
-                        from config.active import get_active_config
-                        from ..config import BackendType
-                        cfg = get_active_config()
-                        ds_cfg = cfg.default_backends.get(BackendType.DEEPSEEK)
-                        if ds_cfg and ds_cfg.api_key:
-                            from ..backends.deepseek_backend import (
-                                DeepSeekBackend,
-                            )
-                            llm = DeepSeekBackend(
-                                api_base=ds_cfg.api_base,
-                                api_key=ds_cfg.api_key,
-                                timeout=ds_cfg.timeout,
-                                max_retries=ds_cfg.max_retries,
-                                default_model=ds_cfg.model_name,
-                            )
+                        from config import get_config
+                        from config.schema import BackendType
+                        backends = get_config("backends")
+                        # 按优先级选择可用后端: deepseek > openai > lmstudio
+                        llm = None
+                        chosen_backend = ""
+                        for be_type, be_cfg in [
+                            (BackendType.DEEPSEEK, backends.deepseek),
+                            (BackendType.OPENAI, backends.openai),
+                            (BackendType.LMSTUDIO, backends.lmstudio),
+                        ]:
+                            if be_cfg.api_key:
+                                chosen_backend = be_type.value
+                                if be_type == BackendType.DEEPSEEK:
+                                    from ..backends.deepseek_backend import (
+                                        DeepSeekBackend,
+                                    )
+                                    llm = DeepSeekBackend(
+                                        api_base=be_cfg.api_base,
+                                        api_key=be_cfg.api_key,
+                                        timeout=be_cfg.timeout,
+                                        max_retries=be_cfg.max_retries,
+                                        default_model=be_cfg.model_name,
+                                    )
+                                elif be_type == BackendType.OPENAI:
+                                    from ..backends import OpenAIBackend
+                                    llm = OpenAIBackend(
+                                        api_base=be_cfg.api_base,
+                                        api_key=be_cfg.api_key,
+                                        timeout=be_cfg.timeout,
+                                        max_retries=be_cfg.max_retries,
+                                        default_model=be_cfg.model_name,
+                                    )
+                                elif be_type == BackendType.LMSTUDIO:
+                                    from ..backends import LMStudioBackend
+                                    llm = LMStudioBackend(
+                                        api_base=be_cfg.api_base,
+                                        api_key=be_cfg.api_key,
+                                        timeout=be_cfg.timeout,
+                                        max_retries=be_cfg.max_retries,
+                                        default_model=be_cfg.model_name,
+                                    )
+                                break
+                        if llm:
                             result3 = await run_weekly_extraction(llm)
                             logger.info(
-                                "[Evolution:Loop3] 完成: 候选原则=%d",
+                                "[Evolution:Loop3] 完成: 候选原则=%d, 后端=%s",
                                 result3.get("candidates_generated", 0),
+                                chosen_backend,
                             )
                         else:
                             logger.info(
-                                "[Evolution:Loop3] DeepSeek API Key "
-                                "未配置, 跳过"
+                                "[Evolution:Loop3] 无可用后端 (API Key 均未配置), 跳过"
                             )
                     except Exception as e:
                         logger.warning(
