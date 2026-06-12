@@ -52,7 +52,52 @@ GEOIP_GZ_TEMP = GEOIP_DB_PATH + ".gz"
 
 
 # ============================================================
-# 1. P4 寄存器原始数据解析
+# 1. IP 威胁评分（复用 database 模块的黑白名单缓存）
+# ============================================================
+def _get_ip_score(ip: str) -> float:
+    """返回 IP 威胁分数 0.0~10.0，查询顺序：白名单 → 黑名单(按等级) → 内网/外网"""
+    if is_whitelisted(ip):
+        return 0.0
+    if is_blacklisted(ip):
+        from database import get_blacklist_threat_level
+        level = get_blacklist_threat_level(ip)
+        return {"高": 9.5, "中": 8.5, "低": 7.5}.get(level, 9.5)
+    if ip.startswith(("10.", "192.168.", "172.", "127.")):
+        return 3.0
+    return 6.0
+
+
+# ============================================================
+# 2. 端口威胁评分（常驻字典，无需查库）
+# ============================================================
+_PORT_LABELS = {
+    4444: 10, 3333: 10, 1337: 10, 31337: 10,
+    6666:  9, 6667:  9, 6697:  9, 9999:  8,
+    53:    9,   # DNS 隧道
+    22:    8, 21: 7, 3389: 7, 5900: 7, 5901: 7, 23: 6,
+    25:    6, 465: 6, 587: 6,
+    110:   5, 995: 5, 143: 5, 993: 5,
+    135:   5, 139: 5, 445: 5, 1433: 5, 3306: 5,
+    1521:  5, 5432: 5, 27017: 5, 6379: 5,
+    8080:  4, 8443: 4, 9090: 4, 1080: 4, 3128: 4, 8888: 3,
+    80:    2, 443: 2,
+    123:   1, 161: 1, 162: 1, 389: 1, 636: 1, 514: 1,
+}
+
+
+def _get_port_score(port: int) -> int:
+    """返回端口威胁分数 0~10"""
+    if port in _PORT_LABELS:
+        return _PORT_LABELS[port]
+    if port > 49151:
+        return 5
+    if port > 1024:
+        return 3
+    return 1
+
+
+# ============================================================
+# 3. P4 寄存器原始数据解析
 # ============================================================
 def parse_raw_p4_hex(hex_str: str) -> dict:
     """
@@ -211,7 +256,7 @@ def update_geoip_db():
 #    统一通过 database 模块获取（MySQL ip_dept_map 表）
 #    不再直接调用 Flask API，彻底解耦各模块间依赖
 # ============================================================
-from database import lookup_employee, get_ip_dept_map, load_lists_from_db
+from database import lookup_employee, get_ip_dept_map, load_lists_from_db, is_blacklisted, is_whitelisted
 
 
 def refresh_employee_cache() -> dict:
@@ -315,7 +360,7 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
             result_table[hash_key_str] = build_row(
                 hash_key,
                 src_ip, dst_ip, sp, dp, proto,
-                5, 5, 5,
+                _get_ip_score(src_ip), _get_port_score(sp), _get_port_score(dp),
                 cold["pkts"], cold["bytes"],
                 cold["pkts"] // 100, cold["bytes"] // 100,
                 cold["avg_entropy"],
