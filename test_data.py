@@ -2,11 +2,14 @@
 """
 数据库示例数据初始化
 ====================
-系统启动时自动执行，先修复ENUM编码，再注入黑名单、白名单、员工IP映射。
-重复执行不报错（幂等）。
+直接运行以注入黑名单、白名单、员工IP映射到数据库。
+重复执行不报错（幂等，使用 ON DUPLICATE KEY UPDATE）。
+
+用法:
+    python test_data.py
 """
 
-from .database.connection import db_cursor
+from database.connection import db_cursor
 
 
 def _fix_enum(cursor):

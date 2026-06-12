@@ -43,6 +43,11 @@ multi_agent_system/memory/data/feedback.db-wal
 config/config_user.json
 
 # ============================================================
+# P4 controller — runtime crash dump
+# ============================================================
+crash.txt
+
+# ============================================================
 # Live scan checkpoint
 # ============================================================
 .live_scan_checkpoint.json
