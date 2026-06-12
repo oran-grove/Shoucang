@@ -22,8 +22,6 @@
     from database import get_ip_dept_map, lookup_employee
 """
 
-from .seed import seed_all
-
 from .writer import (
     start_db_writer,
     stop_db_writer,

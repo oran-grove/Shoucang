@@ -6,7 +6,7 @@
 重复执行不报错（幂等）。
 """
 
-from .connection import db_cursor
+from .database.connection import db_cursor
 
 
 def _fix_enum(cursor):
