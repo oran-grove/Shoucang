@@ -26,9 +26,10 @@ from .connection import db_cursor
 # 常驻内存缓存（统一锁保护，消除多锁竞争）
 # ============================================================================
 _cache_lock = threading.RLock()
-_blacklist: set = set()       # {ip_address, ...}
-_whitelist: set = set()       # {ip_address, ...}
-_ip_dept_map: dict = {}       # {ip: (name, department), ...}
+_blacklist: set = set()              # {ip_address, ...}  ← 向后兼容
+_blacklist_detail: dict = {}         # {ip: {"threat_level": "高"/"中"/"低", "reason": ..., "attack_type": ...}}
+_whitelist: set = set()              # {ip_address, ...}
+_ip_dept_map: dict = {}              # {ip: (name, department), ...}
 
 
 # ============================================================================
@@ -40,12 +41,23 @@ def load_lists_from_db() -> None:
     系统启动时调用一次，各模块通过 get_* 读取。
     写操作（add/remove）内部自动调用此函数刷新缓存。
     """
-    global _blacklist, _whitelist, _ip_dept_map
+    global _blacklist, _blacklist_detail, _whitelist, _ip_dept_map
 
     try:
         with db_cursor() as (conn, cursor):
-            cursor.execute("SELECT ip_address FROM blacklist")
-            new_blacklist = {row["ip_address"] for row in cursor.fetchall() if row["ip_address"]}
+            # 黑名单：同时缓存IP集合 + 详细信息（含威胁等级）
+            cursor.execute("SELECT ip_address, threat_level, reason, attack_type FROM blacklist")
+            new_blacklist = set()
+            new_blacklist_detail = {}
+            for row in cursor.fetchall():
+                ip = row["ip_address"]
+                if ip:
+                    new_blacklist.add(ip)
+                    new_blacklist_detail[ip] = {
+                        "threat_level": row["threat_level"] or "",
+                        "reason": row["reason"] or "",
+                        "attack_type": row["attack_type"] or "",
+                    }
             cursor.execute("SELECT ip_address FROM whitelist")
             new_whitelist = {row["ip_address"] for row in cursor.fetchall() if row["ip_address"]}
             cursor.execute("SELECT ip, name, department FROM ip_dept_map")
@@ -57,6 +69,7 @@ def load_lists_from_db() -> None:
 
         with _cache_lock:
             _blacklist = new_blacklist
+            _blacklist_detail = new_blacklist_detail
             _whitelist = new_whitelist
             _ip_dept_map = new_ip_dept
 
@@ -85,6 +98,13 @@ def is_blacklisted(ip: str) -> bool:
     """判断 IP 是否在黑名单中。"""
     with _cache_lock:
         return ip in _blacklist
+
+
+def get_blacklist_threat_level(ip: str) -> str:
+    """查询黑名单IP的威胁等级（高/中/低），不在黑名单返回空字符串。"""
+    with _cache_lock:
+        detail = _blacklist_detail.get(ip, {})
+        return detail.get("threat_level", "")
 
 
 def is_whitelisted(ip: str) -> bool:

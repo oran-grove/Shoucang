@@ -34,6 +34,7 @@ from .writer import (
 from .lists_manager import (
     load_lists_from_db,
     get_blacklist,
+    get_blacklist_threat_level,
     get_whitelist,
     is_blacklisted,
     is_whitelisted,
