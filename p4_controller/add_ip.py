@@ -172,7 +172,14 @@ def get_ip_label(ip: str) -> float:
     if is_whitelisted(ip):
         return 0.0   # 白名单免检，零风险
     if is_blacklisted(ip):
-        return 9.5   # 已确认黑名单，极高风险 → 触达一票否决线
+        from database import get_blacklist_threat_level
+        level = get_blacklist_threat_level(ip)
+        threat_score_map = {
+            "高": 9.5,   # C2/APT/僵尸网络 → 一票否决
+            "中": 8.5,   # 恶意软件/钓鱼/挖矿/DNS隧道 → 接近否决，需叠加
+            "低": 7.5,   # 代理/VPN/扫描引擎 → 明显可疑，但力度较轻
+        }
+        return threat_score_map.get(level, 9.5)
 
     # 内网/保留地址 → 低风险，其余 → 中风险
     if ip.startswith(("10.", "192.168.", "172.", "127.")):
