@@ -6,8 +6,16 @@
 重复执行不报错（幂等，使用 ON DUPLICATE KEY UPDATE）。
 
 用法:
-    python test_data.py
+    python tests/test_data.py
 """
+
+import sys
+from pathlib import Path
+
+# 确保项目根在 sys.path（本文件在 tests/ 子目录中）
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from database.connection import db_cursor
 
