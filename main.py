@@ -357,6 +357,7 @@ async def start_multi_agent_system(
                 orchestrator=system._orchestrator,
                 config=config.live_scan,
                 verdict_queue=_global_state.get("verdict_write_queue"),
+                deletion_queue=_global_state.get("deletion_write_queue"),
             )
             _global_state["live_scanner"] = live_scanner
 
@@ -598,6 +599,13 @@ async def async_main(args: argparse.Namespace):
     _global_state["verdict_stop_event"] = _ve
     _logger.info(_green("[数据库] 判定批量写入器已启动 [OK]"))
 
+    # ---- 启动安全流量删除写入器 ----
+    from database.writer import start_deletion_writer, stop_deletion_writer as _stop_dw
+    _dq, _de = start_deletion_writer()
+    _global_state["deletion_write_queue"] = _dq
+    _global_state["deletion_stop_event"] = _de
+    _logger.info(_green("[数据库] 安全流量删除写入器已启动 [OK]"))
+
     # ---- 启动顺序 ----
 
     # 1. FastAPI 统一后端（最先启动，前端 + REST API）
@@ -706,12 +714,18 @@ async def async_main(args: argparse.Namespace):
     # 2. 停止多智能体系统
     await stop_multi_agent_system()
 
-    # 2.5 停止判定批量写入器（在多智能体之后、数据网关之前）
+    # 2.5 停止判定批量写入器 + 安全流量删除写入器（在多智能体之后、数据网关之前）
     _ve = _global_state.get("verdict_stop_event")
     if _ve is not None:
         from database.writer import stop_verdict_writer as _stop_vw
         _stop_vw(_ve)
         _logger.info(_green("[数据库] 判定批量写入器已停止"))
+
+    _de = _global_state.get("deletion_stop_event")
+    if _de is not None:
+        from database.writer import stop_deletion_writer as _stop_dw
+        _stop_dw(_de)
+        _logger.info(_green("[数据库] 安全流量删除写入器已停止"))
 
     # 3. 停止数据网关
     stop_data_gateway()

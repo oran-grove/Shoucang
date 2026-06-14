@@ -63,10 +63,12 @@ class LiveScanOrchestrator:
         orchestrator,  # Orchestrator 实例
         config,  # LiveScanAgentConfig
         verdict_queue: Optional[queue.Queue] = None,
+        deletion_queue: Optional[queue.Queue] = None,
     ):
         self._orchestrator = orchestrator
         self._config = config
         self._verdict_queue: Optional[queue.Queue] = verdict_queue
+        self._deletion_queue: Optional[queue.Queue] = deletion_queue
 
         self._running = False
         self._scan_task: Optional[asyncio.Task] = None
@@ -226,10 +228,16 @@ class LiveScanOrchestrator:
                     row_id, row.get("src_ip", "?"), verdict, result.confidence,
                 )
 
-                # 判定结果入队 → 数据库批量写入
-                self._enqueue_verdict(row_id, verdict)
+                if verdict == "safe":
+                    # 安全流量：直接删除，不入 verdict 队列
+                    self._enqueue_deletion(row_id)
+                else:
+                    # 可疑/恶意：判定结果入队 → 数据库批量 UPDATE
+                    self._enqueue_verdict(row_id, verdict)
             else:
                 self._stats["total_safe"] += 1
+                # result 为 None 也视为安全，直接删除
+                self._enqueue_deletion(row_id)
 
         except Exception:
             self._stats["errors"] += 1
@@ -254,6 +262,15 @@ class LiveScanOrchestrator:
                 "traffic_id": row_id,
                 "ai_verdict": ai_verdict,
             })
+        except queue.Full:
+            pass  # 队列满时丢弃，避免阻塞扫描管线
+
+    def _enqueue_deletion(self, row_id: int) -> None:
+        """将安全流量的 ID 放入删除队列，供 deletion_writer 批量 DELETE。"""
+        if self._deletion_queue is None:
+            return
+        try:
+            self._deletion_queue.put_nowait(row_id)
         except queue.Full:
             pass  # 队列满时丢弃，避免阻塞扫描管线
 

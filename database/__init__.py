@@ -27,6 +27,8 @@ from .writer import (
     stop_db_writer,
     start_verdict_writer,
     stop_verdict_writer,
+    start_deletion_writer,
+    stop_deletion_writer,
 )
 
 from .lists_manager import (
@@ -54,12 +56,13 @@ from .lists_manager import (
     get_employee_count,
     # 流量日志
     get_traffic_logs,
-    get_traffic_for_deep_analysis,
     update_traffic_action,
     # 多智能体专用查询
     get_unanalyzed_traffic,
     get_traffic_max_id,
     get_similar_flows_by_src_ip,
+    # 安全流量清理
+    delete_traffic_by_ids,
 )
 
 from config.shared_config import (
@@ -75,6 +78,8 @@ __all__ = [
     "stop_db_writer",
     "start_verdict_writer",
     "stop_verdict_writer",
+    "start_deletion_writer",
+    "stop_deletion_writer",
     "load_lists_from_db",
     "get_blacklist",
     "get_whitelist",
@@ -98,10 +103,11 @@ __all__ = [
     "get_employee_count",
     # 流量日志
     "get_traffic_logs",
-    "get_traffic_for_deep_analysis",
     "update_traffic_action",
     # 多智能体专用查询
     "get_unanalyzed_traffic",
     "get_traffic_max_id",
     "get_similar_flows_by_src_ip",
+    # 安全流量清理
+    "delete_traffic_by_ids",
 ]

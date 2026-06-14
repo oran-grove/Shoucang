@@ -187,9 +187,56 @@ def stop_verdict_writer(stop_event: threading.Event) -> None:
     stop_event.set()
 
 
+# ============================================================================
+# traffic_log 批量 DELETE（安全流量清理）
+# ============================================================================
+
+def _delete_safe_batch(ids: list[int]) -> None:
+    """批量 DELETE traffic_log 中已被 AI 判定为安全的记录。"""
+    if not ids:
+        return
+    from .lists_manager import delete_traffic_by_ids
+    delete_traffic_by_ids(ids)
+
+
+def start_deletion_writer(
+    batch_size: int = DB_WRITE_BATCH_SIZE,
+    flush_interval: float = DB_WRITE_FLUSH_INTERVAL,
+) -> tuple[queue.Queue, threading.Event]:
+    """
+    启动后台安全流量删除线程。
+
+    队列中放入的是单条 traffic_log.id (int)，
+    攒批后调用 delete_traffic_by_ids 批量 DELETE。
+
+    Returns:
+        (write_queue, stop_event):
+            write_queue — put(traffic_id: int) 即可
+            stop_event — .set() 停止线程
+    """
+    write_queue: queue.Queue = queue.Queue(maxsize=10000)
+    stop_event = threading.Event()
+
+    thread = threading.Thread(
+        target=_batch_writer_worker,
+        args=("SafeDelete", write_queue, stop_event, _delete_safe_batch,
+              batch_size, flush_interval),
+        daemon=True,
+    )
+    thread.start()
+    return write_queue, stop_event
+
+
+def stop_deletion_writer(stop_event: threading.Event) -> None:
+    """停止后台安全流量删除线程。"""
+    stop_event.set()
+
+
 __all__ = [
     "start_db_writer",
     "stop_db_writer",
     "start_verdict_writer",
     "stop_verdict_writer",
+    "start_deletion_writer",
+    "stop_deletion_writer",
 ]
