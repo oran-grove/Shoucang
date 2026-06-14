@@ -73,7 +73,6 @@ from config.shared_config import (
 __all__ = [
     "DB_WRITE_BATCH_SIZE",
     "DB_WRITE_FLUSH_INTERVAL",
-    "seed_all",
     "start_db_writer",
     "stop_db_writer",
     "start_verdict_writer",

@@ -335,78 +335,98 @@ class BackendTestRequest(BaseModel):
     backend: str
 
 
+# 前端后端名称 → 配置节名称
+_SUPPORTED_BACKENDS = {"deepseek", "openai", "lmstudio"}
+
+
 @app.post("/api/config/backend/test")
 async def api_config_backend_test(payload: BackendTestRequest):
-    """测试指定后端的连接性"""
-    config = get_config().to_dict()
-    backends = config.get("backends", {})
-    backend_cfg = backends.get(payload.backend)
+    """测试指定后端的连接性 — 复用多智能体系统的后端类进行真实推理测试。"""
+    backend_key = payload.backend.lower()
+    if backend_key not in _SUPPORTED_BACKENDS:
+        return JSONResponse(
+            {"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400,
+        )
 
-    if not backend_cfg:
-        return JSONResponse({"code": 1, "msg": f"后端 '{payload.backend}' 未配置"}, status_code=400)
+    app_config = get_config()
+    backend_cfg = getattr(app_config.backends, backend_key, None)
 
-    api_key = backend_cfg.get("api_key", "")
-    model_name = backend_cfg.get("model_name", "")
-    api_base = backend_cfg.get("api_base", "")
+    if backend_cfg is None or not backend_cfg.api_key:
+        return JSONResponse(
+            {"code": 1, "msg": f"后端 '{payload.backend}' 未配置 API 密钥"}, status_code=400,
+        )
 
-    if not api_key:
-        return JSONResponse({"code": 1, "msg": f"后端 '{payload.backend}' 未配置 API 密钥"}, status_code=400)
-
-    # 根据后端类型构造测试请求
-    import httpx
-
-    if payload.backend == "deepseek":
-        url = api_base or "https://api.deepseek.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_name or "deepseek-chat",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    elif payload.backend == "openai":
-        url = api_base or "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_name or "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    elif payload.backend == "lmstudio":
-        url = (api_base or "http://localhost:1234") + "/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}" if api_key else "",
-            "Content-Type": "application/json",
-        }
-        if not api_key:
-            del headers["Authorization"]
-        body = {
-            "model": model_name or "local-model",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    else:
-        return JSONResponse({"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400)
-
+    # 使用与 Orchestrator._init_backends() 完全相同的后端实例化逻辑
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code == 200:
-                return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 连接成功"})
-            else:
-                detail = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-                return JSONResponse({"code": 1, "msg": f"连接失败: {detail}"}, status_code=502)
-    except httpx.ConnectError:
-        return JSONResponse({"code": 1, "msg": f"无法连接到 {url}"}, status_code=502)
-    except httpx.TimeoutException:
-        return JSONResponse({"code": 1, "msg": f"连接 {url} 超时"}, status_code=504)
+        backend = _build_backend_for_test(backend_key, backend_cfg)
+    except ValueError as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=400)
+
+    # 发送最小推理请求，验证完整的请求→响应链路
+    try:
+        await backend.chat(
+            system_prompt="",
+            user_prompt="ping",
+            model=backend_cfg.model_name,
+            max_tokens=1,
+        )
+        return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 连接成功"})
+    except RuntimeError as e:
+        msg = str(e)[:300]
+        return JSONResponse({"code": 1, "msg": f"连接失败: {msg}"}, status_code=502)
     except Exception as e:
         return JSONResponse({"code": 1, "msg": f"连接测试异常: {str(e)}"}, status_code=500)
+    finally:
+        await _close_backend(backend)
+
+
+def _build_backend_for_test(backend_key: str, cfg):
+    """为连通性测试构建后端实例（与 Orchestrator._init_backends() 逻辑一致）。"""
+    from multi_agent_system.backends.openai_backend import OpenAIBackend
+    from multi_agent_system.backends.deepseek_backend import DeepSeekBackend
+    from multi_agent_system.backends.lmstudio_backend import LMStudioBackend
+
+    if backend_key == "deepseek":
+        return DeepSeekBackend(
+            api_key=cfg.api_key,
+            api_base=cfg.api_base or "https://api.deepseek.com",
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "deepseek-v4-flash",
+            default_thinking_enabled=getattr(cfg, "thinking_enabled", None),
+            default_reasoning_effort=getattr(cfg, "reasoning_effort", None),
+            include_reasoning=getattr(cfg, "include_reasoning", False),
+        )
+    elif backend_key == "openai":
+        return OpenAIBackend(
+            api_base=cfg.api_base or "https://api.openai.com/v1",
+            api_key=cfg.api_key,
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "gpt-4o-mini",
+        )
+    elif backend_key == "lmstudio":
+        return LMStudioBackend(
+            api_base=cfg.api_base or "http://localhost:1234/v1",
+            api_key=cfg.api_key or "lm-studio",
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "local-model",
+            auto_load=False,  # 测试时不触发自动加载
+        )
+    else:
+        raise ValueError(f"不支持的后端: {backend_key}")
+
+
+async def _close_backend(backend) -> None:
+    """安全关闭后端连接。"""
+    try:
+        if hasattr(backend, "aclose"):
+            await backend.aclose()
+        elif hasattr(backend, "close"):
+            backend.close()
+    except Exception:
+        pass
 
 
 @app.post("/api/config/reset")
