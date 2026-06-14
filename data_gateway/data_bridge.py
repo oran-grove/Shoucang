@@ -99,6 +99,22 @@ def _get_port_score(port: int) -> int:
 # ============================================================
 # 3. P4 寄存器原始数据解析
 # ============================================================
+
+# MySQL traffic_log.avg_entropy 列类型为 DECIMAL(10,4)，最大 999999.9999
+_MAX_AVG_ENTROPY = 999999.9999
+
+
+def _clamp_entropy(value: float) -> float:
+    """将 avg_entropy 钳位到 MySQL DECIMAL(10,4) 安全范围。
+
+    P4 寄存器累加值在 hash 碰撞或长时间运行后可能溢出，
+    导致 sum_e/pkts 计算出天文数字，超出列类型范围。
+    """
+    if value > _MAX_AVG_ENTROPY or value < 0:
+        return 0.0
+    return value
+
+
 def parse_raw_p4_hex(hex_str: str) -> dict:
     """
     vol_chunk 8B + ent_chunk 8B = 32 hex chars，大端 64 位:
@@ -120,6 +136,7 @@ def parse_raw_p4_hex(hex_str: str) -> dict:
     sum_e = ent_val & 0xFFFFFFFFFF
 
     avg_entropy = round(sum_e / pkts, 2) if pkts > 0 else 0.0
+    avg_entropy = _clamp_entropy(avg_entropy)
 
     return {
         "pkts": pkts,
@@ -293,7 +310,7 @@ def build_row(hash_key, src_ip, dst_ip, sp, dp, proto,
         "accumulated_bytes": accumulated_bytes,
         "global_pps": global_pps,
         "global_bps": global_bps,
-        "avg_entropy": avg_entropy,
+        "avg_entropy": _clamp_entropy(avg_entropy),
         "max_entropy": max_entropy,
         "min_entropy": min_entropy,
         "country": country,
@@ -336,6 +353,8 @@ def process_tables(unanalyzed_data: dict, analyzed_data: dict) -> dict:
                 )
             else:
                 new_avg_entropy = 0.0
+            # 防止热表累积脏值导致合并后溢出 DECIMAL(10,4)
+            new_avg_entropy = _clamp_entropy(new_avg_entropy)
 
             src_ip = hot[0]
             dst_ip = hot[1]

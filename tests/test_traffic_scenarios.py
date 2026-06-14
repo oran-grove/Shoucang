@@ -6,11 +6,26 @@ P4 虚拟机 — 全场景测试流量生成器
 覆盖黑白名单命中、多国家 IP、多部门员工、多端口威胁等级、
 多熵值、多时段行为等维度，测试完整的 P4→控制器→多智能体链路。
 
-P4 管线处理逻辑:
-  - src_ip 为内网 IP → 进入威胁检测管线
-    - blacklist_table 命中 src_ip → P4 硬件直接丢弃
-    - whitelist_table 命中 dst_ip → 绕过审计
-    - 否则 → audit_table 寄存器评分 → 超阈值触发 digest → 控制器处理
+双层黑/白名单架构:
+  数据库层 (MySQL blacklist / whitelist 表):
+    - 黑名单包含: 外部C2 IP + 内网被控IP (超集)
+    - 白名单包含: CDN/DNS/云服务/内网基础设施
+    - 消费者: data_bridge._get_ip_score() 对命中IP打分(0.0~9.5)
+
+  P4 硬件层 (通过 add_ip.py 从数据库下发):
+    - blacklist_table: 匹配 src_ip → drop (仅内网被控IP，约3条)
+    - whitelist_table: 匹配 dst_ip → 绕过审计 (信任的公共/内网服务)
+
+  流水线:
+    内网 src → blacklist_table? → DROP (硬件阻断)
+              ↓ 未命中
+            whitelist_table? → 绕过audit (零开销放行)
+              ↓ 未命中
+            audit_table 评分 → 超阈值 → digest → 控制器
+                                  ↓
+                            data_bridge 处理 → IP评分 + 端口评分 + GeoIP
+                                  ↓
+                            traffic_log → LiveScanOrchestrator → LLM三层管线
 
 用法:
     sudo python tests/p4_traffic_generator.py              # 全部场景
@@ -35,8 +50,8 @@ import sys
 # 配置
 # ============================================================
 IFACE = "veth_h1"
-PAUSE_SCENARIO = 2.0    # 场景间停顿(秒)
-PAUSE_PACKET = 0.005    # 发包间隔(秒)
+PAUSE_SCENARIO = 0.5    # 场景间停顿(秒)
+PAUSE_PACKET = 0.002    # 发包间隔(秒)
 MAX_PAYLOAD = 1400      # 不超过 veth MTU 1500 - IP头20 - UDP头8 - 余量
 
 # ============================================================
@@ -177,15 +192,21 @@ def _scenario(label: str, desc: str):
 
 
 # ============================================================
-# Group 1: P4 硬件丢弃 — 黑名单内网 IP 作为 src
+# Group 1: 黑名单 src_ip (内网被控主机) — 数据库黑名单 + P4 硬件阻断
+# ============================================================
+# 说明：项目有两层黑名单机制
+#   L0 P4 硬件: blacklist_table 匹配 src_ip → drop（需通过 add_ip.py 下发）
+#   L4 data_bridge: _get_ip_score() 对 src/dst 命中数据库黑名单的打高分
+# 本组测试内网被控 IP 作 src → 若 P4 表已编程则硬件丢弃；
+# 若未编程则 data_bridge 仍会对其打高危评分(7.5~9.5)
 # ============================================================
 def group1_p4_blacklist_drop():
-    """P4 blacklist_table 命中 src_ip → 硬件直接丢弃。
+    """内网黑名单 IP 作为 src — 测试双层阻断。
 
-    预期: 这些包在 P4 层被丢弃，不会产生 digest，不会进入 traffic_log。
-    测试 P4 硬件阻断是否正常工作。
+    数据库黑名单包含的内网 IP（横向移动跳板/可疑SMB/RDP横移），
+    P4 层若已下发表项则硬件丢弃；data_bridge 层必定打高危评分。
     """
-    _section("Group 1: P4 硬件黑名单丢弃 (P4 drop)")
+    _section("Group 1: 黑名单src_ip — 内网被控主机 (P4 drop + DB高危)")
 
     scenarios = [
         ("BL-DROP-01", "横向移动跳板机发包",
@@ -204,15 +225,18 @@ def group1_p4_blacklist_drop():
 
 
 # ============================================================
-# Group 2: P4 白名单绕过 — dst_ip 命中白名单
+# Group 2: 白名单 dst_ip — P4 绕过审计 + data_bridge 零分
+# ============================================================
+# P4 whitelist_table 匹配 dst_ip → 设置 is_whitelisted=1 → 跳过 audit_table
+# data_bridge._get_ip_score() 对白名单 IP 返回 0.0（零风险）
 # ============================================================
 def group2_p4_whitelist_bypass():
-    """P4 whitelist_table 命中 dst_ip → 绕过审计，不产生 digest。
+    """白名单 dst_ip — P4 绕过审计 + data_bridge 零风险评分。
 
-    预期: 这些包正常通过 P4，但不进入 audit 评分。
-    data_bridge 可能会从 polling 数据中捕获，但 IP 评分为 0。
+    P4 匹配 dst 到白名单后跳过 audit 寄存器评分；
+    data_bridge 对白名单 IP 打分 0.0，多智能体应判定为 safe。
     """
-    _section("Group 2: P4 白名单绕过 (bypass audit)")
+    _section("Group 2: 白名单dst_ip — P4绕过审计 + DB零分")
 
     scenarios = [
         ("WL-S01", "研发访问GitHub", _RD["李工程师"], _WL_DST["GitHub"],
@@ -241,16 +265,19 @@ def group2_p4_whitelist_bypass():
 
 
 # ============================================================
-# Group 3: 可疑流量 — 非黑名单内网 src + 黑名单 dst + 异常特征
+# Group 3: 数据库黑名单 dst_ip — P4正常通过 + data_bridge 高危评分
+# ============================================================
+# src 是正常内网IP（不在P4黑名单），dst 是数据库黑名单中的外部C2/恶意IP
+# P4 正常审计 → data_bridge._get_ip_score(dst_ip) → 7.5~9.5分
+# 多智能体 Layer1 应判定为 suspicious 或 dangerous
 # ============================================================
 def group3_suspicious():
-    """P4 层级正常通过（src 不在黑名单 + dst 不在白名单），
-    进入 audit 评分。data_bridge 和 LLM 管线应判定为 suspicious。
+    """数据库黑名单 dst_ip — P4 正常审计 + data_bridge 高危评分。
 
-    预期: P4 产生 digest → data_bridge 写 traffic_log →
-         多智能体 Layer 1 筛查 → suspicious → Layer 2 回溯
+    src 为正常员工 IP，dst 命中数据库黑名单（SOCKS代理/可疑VPS/Tor出口/挖矿），
+    data_bridge 对 dst_ip 打 7.5~9.5 威胁分 → 多智能体应判 suspicious。
     """
-    _section("Group 3: 可疑流量 (预期 → L1 suspicious → L2 回溯)")
+    _section("Group 3: 黑名单dst_ip — 可疑流量 (DB高危评分)")
 
     scenarios = [
         # (label, desc, src, dst, sp, dp, count, pkt_size, entropy)
@@ -279,15 +306,18 @@ def group3_suspicious():
 
 
 # ============================================================
-# Group 4: 恶意流量 — 各种已知攻击模式
+# Group 4: 已知攻击模式 — 高威胁黑名单 dst + 特征端口 + 高熵
+# ============================================================
+# 本组覆盖 C2通信 / 反弹Shell / APT / DNS隧道 / 僵尸网络 / 挖矿
+# dst_ip 命中数据库高威胁黑名单 + 端口为已知恶意端口(6666/4444/31337等)
 # ============================================================
 def group4_malicious():
-    """明确的恶意流量特征，预期多智能体判定为 malicious。
+    """已知攻击模式 — 高威胁 dst + 恶意端口 + 高熵。
 
-    预期: P4 digest → data_bridge 高威胁评分 →
-         Layer 1 → dangerous → 直接告警，或经 L2/L3 最终判定 malicious
+    data_bridge IP评分 8.5~9.5 + 端口评分 9~10 → 总威胁分应超阻断阈值。
+    多智能体 Layer1 应判 dangerous 直接告警。
     """
-    _section("Group 4: 恶意流量 (预期 → malicious → 告警)")
+    _section("Group 4: 已知攻击模式 — 恶意流量 (预期 → malicious)")
 
     scenarios = [
         ("MAL-M01", "赵总监→Cobalt Strike C2 (6666)",
@@ -395,10 +425,10 @@ def group6_cross_dept():
 # ============================================================
 
 GROUPS = {
-    1: ("P4硬件黑名单丢弃", group1_p4_blacklist_drop),
-    2: ("P4白名单绕过", group2_p4_whitelist_bypass),
-    3: ("可疑流量", group3_suspicious),
-    4: ("恶意流量", group4_malicious),
+    1: ("黑名单src_ip—内网被控主机", group1_p4_blacklist_drop),
+    2: ("白名单dst_ip—正常业务放行", group2_p4_whitelist_bypass),
+    3: ("黑名单dst_ip—可疑流量", group3_suspicious),
+    4: ("已知攻击模式—恶意流量", group4_malicious),
     5: ("边界情况", group5_edge_cases),
     6: ("跨部门对比", group6_cross_dept),
 }
