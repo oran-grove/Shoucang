@@ -1,6 +1,6 @@
 """
-第一类智能体队列调度器 — 逐条评判队列扫描
-==========================================
+多智能体逐条扫描调度器
+======================
 实时从 traffic_log 数据库拉取未分析的流量记录，
 逐条送入检测→关联→研判管线，并持久化分析结果。
 
@@ -10,7 +10,7 @@
 - 支持从指定位置开始扫描（oldest / newest / last_id:N）
 - 支持并发分析多条流量（max_concurrent_analyses 控制）
 - 支持管理员运行时开关（enabled 字段）
-- 分析结果回写 traffic_log（ai_analyzed / ai_verdict 字段）
+- 分析结果回写 traffic_log（可疑/恶意）或直接删除（安全）
 - 上次处理 ID 持久化到文件，重启后断点续扫
 
 用法:
@@ -48,7 +48,7 @@ _CHECKPOINT_FILE = PROJECT_ROOT / ".live_scan_checkpoint.json"
 
 class LiveScanOrchestrator:
     """
-    第一类智能体队列调度器 — 逐条评判队列扫描。
+    多智能体逐条扫描调度器。
 
     从 traffic_log 表中拉取未分析的流量记录（基于 id 游标），
     送入已启动的 Orchestrator 的 analyze_flow() 管线进行研判。
