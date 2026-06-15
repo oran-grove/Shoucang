@@ -505,10 +505,22 @@ async def api_menus():
 
 
 @app.get("/api/employees")
-async def api_employees_get():
+async def api_employees_get(
+    page: int = Query(1),
+    limit: int = Query(15),
+    number: str = Query(""),
+    ip: str = Query(""),
+    department: str = Query(""),
+    name: str = Query(""),
+):
     try:
-        rows = _db("lists_manager", "get_employees")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        filters = {}
+        for k in ("number", "ip", "department", "name"):
+            v = locals().get(k, "")
+            if v:
+                filters[k] = v
+        total, rows = _db("lists_manager", "get_employees", filters, page, limit)
+        return JSONResponse({"code": 0, "data": rows, "count": total})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -555,10 +567,13 @@ async def api_ip_map_get():
 # API: 黑白名单管理
 # ============================================================================
 @app.get("/api/blacklist")
-async def api_blacklist_get():
+async def api_blacklist_get(
+    page: int = Query(1),
+    limit: int = Query(10),
+):
     try:
-        rows = _db("lists_manager", "get_blacklist_detailed")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        result = _db("lists_manager", "get_blacklist_detailed", page, limit)
+        return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -584,10 +599,13 @@ async def api_blacklist_delete(item_id: int):
 
 
 @app.get("/api/whitelist")
-async def api_whitelist_get():
+async def api_whitelist_get(
+    page: int = Query(1),
+    limit: int = Query(10),
+):
     try:
-        rows = _db("lists_manager", "get_whitelist_detailed")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        result = _db("lists_manager", "get_whitelist_detailed", page, limit)
+        return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
