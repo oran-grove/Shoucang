@@ -6,6 +6,7 @@
   启动并协调以下系统层：
 
   Layer 1 — P4 硬件层 (p4_controller)
+    - 开机自检：清空交换机寄存器及黑白名单流表，确保从干净状态启动
     - Flask 守护进程 (端口 5000)：P4 控制面
     - pynng 子线程：监听 P4 交换机上报的实时行为特征
     - 定时器线程：每 100 秒通过 Thrift 拉取 P4 寄存器并重置
@@ -201,7 +202,11 @@ def start_p4_controller() -> threading.Thread:
             from p4_controller.control import (
                 app,
                 p4_listener_thread,
+                reset_switch_on_startup,
             )
+
+            # 0. 开机自检：清空交换机寄存器 + 黑白名单流表
+            reset_switch_on_startup()
 
             # 1. 启动 P4 pynng 监听子线程
             threading.Thread(
