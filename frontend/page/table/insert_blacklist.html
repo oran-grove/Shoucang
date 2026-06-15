@@ -76,13 +76,22 @@
                 layer = layui.layer;
 
             form.on('submit(saveBtn)', function (data) {
+                // 将空字符串的可选字段转为 null，避免后端校验失败
+                var payload = data.field;
+                if (payload.port === '') payload.port = null;
+                if (payload.attack_type === '') payload.attack_type = null;
+
                 fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data.field)
+                    body: JSON.stringify(payload)
                 })
                 .then(function(response) {
-                    if (!response.ok) throw new Error('网络响应错误');
+                    if (!response.ok) {
+                        return response.json().then(function(err) {
+                            throw new Error(err.detail?.[0]?.msg || err.msg || '请求失败(' + response.status + ')');
+                        });
+                    }
                     return response.json();
                 })
                 .then(function(result) {

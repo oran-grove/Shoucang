@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
@@ -299,6 +299,7 @@ class ConfigSaveRequest(BaseModel):
     config: dict
 
 
+
 class BlacklistAddRequest(BaseModel):
     ip: str
     threat_level: str = "高"
@@ -306,12 +307,32 @@ class BlacklistAddRequest(BaseModel):
     port: Optional[int] = None
     attack_type: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, data: dict) -> dict:
+        """将空字符串转为 None，避免 Optional[int] 字段校验失败。"""
+        if isinstance(data, dict):
+            for key in ("port",):
+                if data.get(key) in (None, ""):
+                    data[key] = None
+        return data
+
 
 class WhitelistAddRequest(BaseModel):
     ip: str
     reason: Optional[str] = "手动添加"
     port: Optional[int] = None
     trust_level: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, data: dict) -> dict:
+        """将空字符串转为 None，避免 Optional[int] 字段校验失败。"""
+        if isinstance(data, dict):
+            for key in ("port",):
+                if data.get(key) in (None, ""):
+                    data[key] = None
+        return data
 
 
 class TrafficAction(BaseModel):
@@ -566,7 +587,8 @@ async def api_employee_add(payload: EmployeeAddRequest):
 async def api_employee_update(emp_id: int, payload: EmployeeAddRequest):
     try:
         _db("lists_manager", "update_employee",
-            emp_id, payload.number, payload.ip, payload.department, payload.name)
+            emp_id, number=payload.number, ip=payload.ip,
+            department=payload.department, name=payload.name)
         return JSONResponse({"code": 0, "msg": "更新成功"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)

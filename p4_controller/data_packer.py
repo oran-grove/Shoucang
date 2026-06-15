@@ -2,6 +2,7 @@
 import logging
 import struct
 import socket
+from typing import cast
 
 try:
     from .add_ip import get_ip_label      # 包模式
@@ -255,10 +256,10 @@ def build_feature_vector(chunk):
         vector = ["Unknown"] * 8 + [0, 0, current_ts, current_ts, 0, 0, 0, 0, 0.0, 0, 9999, reason, "Normal"]
 
     # 3. 剥离状态，进行硬件级物理累加
-    old_pkts = vector[8]
-    old_bytes = vector[9]
-    initial_ts = vector[10]
-    last_ts = vector[11]
+    old_pkts = cast(int, vector[8])
+    old_bytes = cast(int, vector[9])
+    initial_ts = cast(int, vector[10])
+    last_ts = cast(int, vector[11])
 
     new_pkts = old_pkts + pkts
     new_bytes = old_bytes + bytes_len  # bytes_len 来自硬件上报的真实数据

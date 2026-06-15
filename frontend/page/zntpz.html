@@ -323,11 +323,25 @@
 
         // 配置表单提交
         form.on('submit(submitConfig)', function (data) {
+            // 将 layui 扁平 key（如 "screening[backend]"）转为嵌套结构
+            var raw = data.field;
+            var config = {};
+            for (var key in raw) {
+                if (!raw.hasOwnProperty(key)) continue;
+                var val = raw[key];
+                // 空字符串视为不修改
+                if (val === '') continue;
+                var match = key.match(/^(\w+)\[(\w+)\]$/);
+                if (match) {
+                    if (!config[match[1]]) config[match[1]] = {};
+                    config[match[1]][match[2]] = val;
+                }
+            }
             $.ajax({
                 url: '/api/config',
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify(data.field),
+                data: JSON.stringify({config: config}),
                 success: function (res) {
                     if (res.code === 0) {
                         layer.msg('保存成功', { icon: 1 });
