@@ -176,17 +176,17 @@ def telemetry_job():
     finally:
         transport.close()
 # ==========================================
-# 🧹 开机自启动：清空交换机哈希表
+# 🧹 开机自启动：清空交换机哈希表 + 清空 P4 流表黑白名单
 # ==========================================
 def reset_switch_on_startup():
-    """控制器启动时自动清空交换机双寄存器，确保从干净状态开始运行"""
+    """控制器启动时自动清空交换机双寄存器及黑白名单流表，确保从干净状态开始运行"""
     try:
         from bm_runtime.standard import Standard
     except ImportError:
         logger.warning("缺少 bm_runtime，跳过寄存器清空")
         return
 
-    logger.info("正在清空交换机哈希表（双寄存器全量归零）...")
+    logger.info("正在清空交换机状态（寄存器 + 黑白名单流表）...")
     transport = TTransport.TBufferedTransport(TSocket.TSocket('127.0.0.1', 9100))
     proto = TMultiplexedProtocol.TMultiplexedProtocol(
         TBinaryProtocol.TBinaryProtocol(transport), "standard")
@@ -194,11 +194,18 @@ def reset_switch_on_startup():
 
     try:
         transport.open()
+        # 1. 清空哈希寄存器
         client.bm_register_reset(0, 'MyIngress.reg_volume_score')
         client.bm_register_reset(0, 'MyIngress.reg_entropy_stat')
-        logger.info("交换机哈希表已归零，内存环境纯净。")
+        logger.info("交换机哈希表已归零。")
+
+        # 2. 清空 P4 流表黑白名单
+        client.bm_mt_clear_entries(0, 'MyIngress.blacklist_table', False)
+        logger.info("P4 黑名单流表已清空。")
+        client.bm_mt_clear_entries(0, 'MyIngress.whitelist_table', False)
+        logger.info("P4 白名单流表已清空。")
     except Exception as e:
-        logger.error("清空交换机哈希表失败（交换机是否已启动？）: %s", e)
+        logger.error("清空交换机状态失败（交换机是否已启动？）: %s", e)
     finally:
         transport.close()
 
