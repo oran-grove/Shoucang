@@ -494,12 +494,30 @@ async def api_config_reset():
 
 @app.get("/api/config/database")
 async def api_config_database_get():
-    return JSONResponse({"code": 0, "data": {}})
+    """返回当前数据库配置（用于 WebUI 表单预填）。"""
+    db = get_config("database")
+    return JSONResponse({
+        "code": 0,
+        "data": {
+            "host": db.host,
+            "port": db.port,
+            "user": db.user,
+            "password": db.password,
+            "database": db.database,
+            "charset": db.charset,
+        }
+    })
 
 
 @app.post("/api/config/database")
-async def api_config_database_save():
-    return JSONResponse({"code": 0, "msg": "数据库配置通过 config_user.json 管理"})
+async def api_config_database_save(request: Request):
+    """保存数据库配置到 config_user.json。"""
+    try:
+        body = await request.json()
+        save_config_dict({"database": body})
+        return JSONResponse({"code": 0, "msg": "数据库配置已保存"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 # ============================================================================
