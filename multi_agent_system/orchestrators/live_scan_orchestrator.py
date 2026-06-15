@@ -229,25 +229,25 @@ class LiveScanOrchestrator:
                 )
 
                 if verdict == "safe":
-                    # 安全流量：直接删除，不入 verdict 队列
                     self._enqueue_deletion(row_id)
                 else:
-                    # 可疑/恶意：判定结果入队 → 数据库批量 UPDATE
                     self._enqueue_verdict(row_id, verdict)
             else:
-                self._stats["total_safe"] += 1
-                # result 为 None 也视为安全，直接删除
-                self._enqueue_deletion(row_id)
+                # result 为 None 是异常情况，保留为可疑等待重试
+                self._stats["total_suspicious"] += 1
+                self._enqueue_verdict(row_id, "suspicious")
+                logger.warning("[LiveScan] id=%s 返回 None，标记为可疑", row_id)
+
+            # 成功 → 推进游标
+            if row_id > self._last_processed_id:
+                self._last_processed_id = row_id
 
         except Exception:
             self._stats["errors"] += 1
-            logger.exception("[LiveScan] 分析 id=%s 失败", row_id)
+            logger.exception("[LiveScan] 分析 id=%s 失败，不推进游标等待重试", row_id)
+            # 失败不推进游标 → 下次轮询自动重试，不操作数据库
 
-        finally:
-            # 无论成功失败都推进游标
-            if row_id > self._last_processed_id:
-                self._last_processed_id = row_id
-            self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
+        self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
 
     def _enqueue_verdict(self, row_id: int, verdict: str) -> None:
         """将判定结果放入队列，供 verdict_writer 批量 UPDATE 数据库。"""

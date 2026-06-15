@@ -326,6 +326,7 @@ async def start_multi_agent_system(
                 push_alert(
                     ip=src_ip,
                     label=" ".join(label_parts),
+                    source="AI研判",
                     details={
                         "verdict": verdict.verdict.value,
                         "severity": verdict.severity.value,
