@@ -68,13 +68,18 @@ class ScreeningAgent(BaseAgent):
         """
         对单条流量执行初步筛查。
 
+        解析失败时自动重试（最多 3 次），全部失败则抛出异常，
+        由上层 LiveScanOrchestrator 捕获后保留记录，下次轮询重新分析。
+
         Args:
             flow: 待分析的流量事件
 
         Returns:
             ThreatVerdict: 威胁判定结果
+
+        Raises:
+            RuntimeError: 多次重试后仍无法解析 LLM 返回值
         """
-        # 查询记忆系统中的匹配模式，注入提示词
         pattern_context = self._get_pattern_context(flow)
         user_prompt = f"请分析以下流量：\n{flow.to_prompt_text()}"
         if pattern_context:
@@ -83,40 +88,57 @@ class ScreeningAgent(BaseAgent):
                 f"{pattern_context}\n\n"
                 f"{user_prompt}"
             )
-        try:
-            raw = await self.call_llm(user_prompt)
-            parsed = self.extract_json_from_response(raw)
 
-            if "error" in parsed:
-                logger.warning("[%s] LLM 解析失败，标记为可疑: %s", self.name, parsed.get("raw", "")[:100])
-                return self._fallback_verdict(flow, "LLM解析失败，标记为可疑")
+        last_error = ""
+        for attempt in range(3):
+            try:
+                raw = await self.call_llm(user_prompt)
+                parsed = self.extract_json_from_response(raw)
 
-            verdict_raw = parsed.get("verdict", "suspicious").lower()
+                if "error" in parsed:
+                    last_error = f"JSON解析失败: {parsed.get('raw', '')[:100]}"
+                    logger.warning(
+                        "[%s] 第%d次解析失败: %s",
+                        self.name, attempt + 1, last_error,
+                    )
+                    continue  # 重试
 
-            if verdict_raw == "dangerous":
-                verdict = TrafficVerdict.MALICIOUS
-            elif verdict_raw == "suspicious":
-                verdict = TrafficVerdict.SUSPICIOUS
-            else:
-                verdict = TrafficVerdict.SAFE
+                verdict_raw = parsed.get("verdict", "suspicious").lower()
 
-            # 严重度：初步筛查统一标记为 medium，由 Layer 3 最终研判升级
-            severity = SeverityLevel.MEDIUM
+                if verdict_raw == "dangerous":
+                    verdict = TrafficVerdict.MALICIOUS
+                elif verdict_raw == "suspicious":
+                    verdict = TrafficVerdict.SUSPICIOUS
+                else:
+                    verdict = TrafficVerdict.SAFE
 
-            return ThreatVerdict(
-                flow_ids=[flow.flow_id],
-                verdict=verdict,
-                severity=severity,
-                confidence=float(parsed.get("confidence", 0.5)),
-                threat_type=parsed.get("threat_type", "未知"),
-                reasoning=parsed.get("reasoning", ""),
-                recommended_action="monitor",
-                extra={"screening_raw": parsed},
-            )
+                return ThreatVerdict(
+                    flow_ids=[flow.flow_id],
+                    verdict=verdict,
+                    severity=SeverityLevel.MEDIUM,
+                    confidence=float(parsed.get("confidence", 0.5)),
+                    threat_type=parsed.get("threat_type", "未知"),
+                    reasoning=parsed.get("reasoning", ""),
+                    recommended_action="monitor",
+                    extra={"screening_raw": parsed},
+                )
 
-        except Exception as e:
-            logger.exception("[%s] 分析异常: %s", self.name, e)
-            return self._fallback_verdict(flow, f"分析异常: {str(e)}")
+            except RuntimeError as e:
+                # LLM 调用失败（网络、认证等）→ 不重试，直接向上抛
+                logger.exception("[%s] LLM 调用失败: %s", self.name, e)
+                raise
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(
+                    "[%s] 第%d次调用异常: %s",
+                    self.name, attempt + 1, last_error,
+                )
+
+        # 3 次重试全部失败 → 抛出异常，由上层保留记录等待下次轮询
+        raise RuntimeError(
+            f"[{self.name}] 3 次重试全部失败: {last_error}"
+        )
 
     def _fallback_verdict(self, flow: FlowEvent, reason: str) -> ThreatVerdict:
         """LLM 不可用或解析失败时的降级判定"""

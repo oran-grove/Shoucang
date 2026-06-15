@@ -151,53 +151,70 @@ class AdjudicationAgent(BaseAgent):
             )
         user_prompt += "\n请结合以上信息给出最终威胁研判。"
 
-        try:
-            raw = await self.call_llm(user_prompt)
-            parsed = self.extract_json_from_response(raw)
+        last_error = ""
+        for attempt in range(3):
+            try:
+                raw = await self.call_llm(user_prompt)
+                parsed = self.extract_json_from_response(raw)
 
-            if "error" in parsed:
-                logger.warning("[%s] LLM 解析失败: %s", self.name, parsed.get("raw", "")[:100])
-                return self._fallback_verdict(flow, "LLM解析失败，标记为可疑")
+                if "error" in parsed:
+                    last_error = f"JSON解析失败: {parsed.get('raw', '')[:100]}"
+                    logger.warning(
+                        "[%s] 第%d次解析失败: %s",
+                        self.name, attempt + 1, last_error,
+                    )
+                    continue
 
-            verdict_raw = parsed.get("verdict", "suspicious").lower()
-            severity_raw = parsed.get("severity", "medium").lower()
+                verdict_raw = parsed.get("verdict", "suspicious").lower()
+                severity_raw = parsed.get("severity", "medium").lower()
 
-            verdict_map = {
-                "dangerous": TrafficVerdict.MALICIOUS,
-                "malicious": TrafficVerdict.MALICIOUS,
-                "suspicious": TrafficVerdict.SUSPICIOUS,
-                "safe": TrafficVerdict.SAFE,
-            }
-            severity_map = {
-                "critical": SeverityLevel.CRITICAL,
-                "high": SeverityLevel.HIGH,
-                "medium": SeverityLevel.MEDIUM,
-                "low": SeverityLevel.LOW,
-                "info": SeverityLevel.INFO,
-            }
+                verdict_map = {
+                    "dangerous": TrafficVerdict.MALICIOUS,
+                    "malicious": TrafficVerdict.MALICIOUS,
+                    "suspicious": TrafficVerdict.SUSPICIOUS,
+                    "safe": TrafficVerdict.SAFE,
+                }
+                severity_map = {
+                    "critical": SeverityLevel.CRITICAL,
+                    "high": SeverityLevel.HIGH,
+                    "medium": SeverityLevel.MEDIUM,
+                    "low": SeverityLevel.LOW,
+                    "info": SeverityLevel.INFO,
+                }
 
-            verdict = verdict_map.get(verdict_raw, TrafficVerdict.SUSPICIOUS)
-            severity = severity_map.get(severity_raw, SeverityLevel.MEDIUM)
+                verdict = verdict_map.get(verdict_raw, TrafficVerdict.SUSPICIOUS)
+                severity = severity_map.get(severity_raw, SeverityLevel.MEDIUM)
 
-            return ThreatVerdict(
-                flow_ids=[flow.flow_id],
-                verdict=verdict,
-                severity=severity,
-                confidence=float(parsed.get("confidence", 0.5)),
-                threat_type=parsed.get("threat_type", screening_result.threat_type if screening_result else "未知"),
-                reasoning=parsed.get("reasoning", ""),
-                evidence_summary=parsed.get("evidence_summary", []),
-                recommended_action=parsed.get("recommended_action", "monitor"),
-                extra={
-                    "adjudication_raw": parsed,
-                    "lookback_window_hours": lookback_window_hours,
-                    "related_record_count": len(related_context),
-                },
-            )
+                return ThreatVerdict(
+                    flow_ids=[flow.flow_id],
+                    verdict=verdict,
+                    severity=severity,
+                    confidence=float(parsed.get("confidence", 0.5)),
+                    threat_type=parsed.get("threat_type", screening_result.threat_type if screening_result else "未知"),
+                    reasoning=parsed.get("reasoning", ""),
+                    evidence_summary=parsed.get("evidence_summary", []),
+                    recommended_action=parsed.get("recommended_action", "monitor"),
+                    extra={
+                        "adjudication_raw": parsed,
+                        "lookback_window_hours": lookback_window_hours,
+                        "related_record_count": len(related_context),
+                    },
+                )
 
-        except Exception as e:
-            logger.exception("[%s] 研判异常: %s", self.name, e)
-            return self._fallback_verdict(flow, f"研判异常: {str(e)}")
+            except RuntimeError as e:
+                logger.exception("[%s] LLM 调用失败: %s", self.name, e)
+                raise
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(
+                    "[%s] 第%d次调用异常: %s",
+                    self.name, attempt + 1, last_error,
+                )
+
+        raise RuntimeError(
+            f"[{self.name}] 3 次重试全部失败: {last_error}"
+        )
 
     def _fallback_verdict(self, flow: FlowEvent, reason: str) -> ThreatVerdict:
         return ThreatVerdict(
