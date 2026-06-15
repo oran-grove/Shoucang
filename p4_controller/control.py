@@ -27,7 +27,7 @@ except ImportError:
     import data_packer          # 独立模式
     import analyzer
     import add_ip
-    from timer import start_timer_thread
+    from timer import start_timer_thread  # pyright: ignore
 
 app = Flask(__name__)
 
