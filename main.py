@@ -113,7 +113,7 @@ _global_state = {
     "verdict_write_queue": None,
     "verdict_stop_event": None,
     "backend_server": None,
-    "backend_thread": None,
+    "backend_port": None,
     "backend_port": 8080,
 }
 
@@ -140,7 +140,7 @@ def print_banner():
 # ============================================================
 # WebUI: FastAPI 统一后端
 # ============================================================
-def start_backend(port: int = 8080) -> threading.Thread:
+def start_backend(port: int = 8080) -> None:
     """
     启动 FastAPI 统一后端服务器：
       - REST API 端点（配置、员工、黑白名单、告警等）
@@ -156,37 +156,24 @@ def start_backend(port: int = 8080) -> threading.Thread:
 
     _global_state["backend_port"] = port
 
-    def _run_backend():
-        try:
-            from backend.api_server import start_in_thread as _backend_start_in_thread
+    try:
+        from backend.api_server import start_backend as _start
 
-            _backend_start_in_thread(host="0.0.0.0", port=port)
-            _logger.info(
-                _green(
-                    f"[WebUI] FastAPI 后端服务已启动 [OK] -> http://0.0.0.0:{port}"
-                )
+        _start(port=port)
+        _logger.info(
+            _green(f"[WebUI] FastAPI 后端服务已启动 [OK] -> http://0.0.0.0:{port}")
+        )
+    except OSError as e:
+        if hasattr(e, "errno") and e.errno == 10048:
+            _logger.warning(
+                _yellow(f"[WebUI] 端口 {port} 已被占用，使用 --frontend-port 指定其他端口")
             )
-        except OSError as e:
-            if hasattr(e, "errno") and e.errno == 10048:  # Address already in use
-                _logger.warning(
-                    _yellow(
-                        f"[WebUI] 端口 {port} 已被占用，"
-                        f"使用 --frontend-port 指定其他端口"
-                    )
-                )
-            else:
-                _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
-        except Exception as e:
+        else:
             _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
-            import traceback
-            traceback.print_exc()
-
-    thread = threading.Thread(
-        target=_run_backend, daemon=True, name="FastAPI-Backend"
-    )
-    thread.start()
-    _global_state["backend_thread"] = thread
-    return thread
+    except Exception as e:
+        _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
+        import traceback
+        traceback.print_exc()
 
 
 def stop_backend():
@@ -528,7 +515,7 @@ def health_check_loop():
             "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
             "data_gateway": _global_state.get("data_bridge") is not None,
-            "backend": _global_state.get("backend_thread") is not None,
+            "backend": _global_state.get("backend_port") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
         }
 
