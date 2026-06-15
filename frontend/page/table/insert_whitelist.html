@@ -33,6 +33,23 @@
         </div>
     </div>
     <div class="layui-form-item">
+        <label class="layui-form-label">端口号</label>
+        <div class="layui-input-block">
+            <input type="number" name="port" value="" class="layui-input" placeholder="信任端口号（可选）">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label">信任等级</label>
+        <div class="layui-input-block">
+          <select name="trust_level">
+            <option value=""></option>
+            <option value="trust" selected>信任</option>
+            <option value="high">高信任</option>
+            <option value="normal">普通</option>
+          </select>
+        </div>
+    </div>
+    <div class="layui-form-item">
         <label class="layui-form-label required">加白原因</label>
         <div class="layui-input-block">
             <input type="text" name="reason" lay-verify="required" value="手动添加" class="layui-input">

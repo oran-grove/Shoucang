@@ -297,12 +297,17 @@ class ConfigSaveRequest(BaseModel):
 
 class BlacklistAddRequest(BaseModel):
     ip: str
+    threat_level: str = "高"
     reason: Optional[str] = "手动添加"
+    port: Optional[int] = None
+    attack_type: Optional[str] = None
 
 
 class WhitelistAddRequest(BaseModel):
     ip: str
     reason: Optional[str] = "手动添加"
+    port: Optional[int] = None
+    trust_level: Optional[str] = None
 
 
 class TrafficAction(BaseModel):
@@ -581,7 +586,13 @@ async def api_blacklist_get(
 @app.post("/api/blacklist")
 async def api_blacklist_add(payload: BlacklistAddRequest):
     try:
-        _db("lists_manager", "add_to_db_blacklist", payload.ip, "frontend", payload.reason)
+        _db("lists_manager", "add_to_db_blacklist",
+            ip=payload.ip,
+            threat_level=payload.threat_level,
+            reason=payload.reason or "手动添加",
+            port=payload.port,
+            attack_type=payload.attack_type,
+        )
         return JSONResponse({"code": 0, "msg": f"已拉黑 {payload.ip}"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -613,9 +624,13 @@ async def api_whitelist_get(
 @app.post("/api/whitelist")
 async def api_whitelist_add(payload: WhitelistAddRequest):
     try:
-        target_ip = payload.ip
-        _db("lists_manager", "add_to_db_whitelist", target_ip, "frontend", payload.reason)
-        return JSONResponse({"code": 0, "msg": f"已加白 {target_ip}"})
+        _db("lists_manager", "add_to_db_whitelist",
+            ip=payload.ip,
+            reason=payload.reason or "手动添加",
+            port=payload.port,
+            trust_level=payload.trust_level,
+        )
+        return JSONResponse({"code": 0, "msg": f"已加白 {payload.ip}"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 

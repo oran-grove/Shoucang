@@ -44,6 +44,18 @@
         </div>
     </div>
     <div class="layui-form-item">
+        <label class="layui-form-label">端口号</label>
+        <div class="layui-input-block">
+            <input type="number" name="port" value="" class="layui-input" placeholder="恶意端口号（可选）">
+        </div>
+    </div>
+    <div class="layui-form-item">
+        <label class="layui-form-label">攻击类型</label>
+        <div class="layui-input-block">
+            <input type="text" name="attack_type" value="" class="layui-input" placeholder="例如: C2通信、钓鱼、挖矿（可选）">
+        </div>
+    </div>
+    <div class="layui-form-item">
         <label class="layui-form-label required">拉黑原因</label>
         <div class="layui-input-block">
             <input type="text" name="reason" lay-verify="required" value="手动添加" class="layui-input">
