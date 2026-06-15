@@ -203,15 +203,25 @@ class BlacklistItem(BaseModel):
 _alerts_lock = threading.Lock()
 _alerts_buffer: list = []  # 最近告警
 _MAX_ALERTS = 200
+_ALERT_TTL_SECONDS = 1800   # 告警自动过期时间：30 分钟
+_alert_id_counter = 0       # 持久递增 ID，避免重复
 
 
 def push_alert(ip: str, label: str, details: Optional[dict] = None):
-    """外部模块调用：推送告警到前端"""
+    """外部模块调用：推送告警到前端。相同 IP + label 会去重。"""
+    global _alert_id_counter
     with _alerts_lock:
+        # 去重：同 IP + 同 label 已存在则跳过
+        for a in _alerts_buffer:
+            if a["ip"] == ip and a["label"] == label:
+                a["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                return
+
+        _alert_id_counter += 1
         _alerts_buffer.insert(
             0,
             {
-                "id": len(_alerts_buffer) + 1,
+                "id": _alert_id_counter,
                 "ip": ip,
                 "label": label,
                 "details": details or {},
@@ -220,6 +230,66 @@ def push_alert(ip: str, label: str, details: Optional[dict] = None):
         )
         if len(_alerts_buffer) > _MAX_ALERTS:
             _alerts_buffer.pop()
+
+
+def dismiss_alert_by_id(alert_id: int) -> bool:
+    """根据 ID 移除单条告警。返回是否成功。"""
+    with _alerts_lock:
+        for i, a in enumerate(_alerts_buffer):
+            if a["id"] == alert_id:
+                _alerts_buffer.pop(i)
+                return True
+    return False
+
+
+def dismiss_alerts_for_ip(ip: str) -> int:
+    """移除指定 IP 的所有告警。返回移除的条数。"""
+    removed = 0
+    with _alerts_lock:
+        kept = []
+        for a in _alerts_buffer:
+            if a["ip"] == ip:
+                removed += 1
+            else:
+                kept.append(a)
+        _alerts_buffer[:] = kept
+    return removed
+
+
+def _expire_stale_alerts() -> int:
+    """移除超过 TTL 的过期告警。返回移除的条数。"""
+    cutoff = datetime.now()
+    removed = 0
+    with _alerts_lock:
+        kept = []
+        for a in _alerts_buffer:
+            try:
+                ts = datetime.strptime(a["timestamp"], "%Y-%m-%d %H:%M:%S")
+                if (cutoff - ts).total_seconds() > _ALERT_TTL_SECONDS:
+                    removed += 1
+                else:
+                    kept.append(a)
+            except Exception:
+                kept.append(a)
+        _alerts_buffer[:] = kept
+    return removed
+
+
+def _start_alert_expiry_thread() -> threading.Thread:
+    """启动告警自动过期后台线程（每 60 秒清理一次）。"""
+    def _expiry_loop():
+        while True:
+            time.sleep(60)
+            try:
+                n = _expire_stale_alerts()
+                if n > 0:
+                    logger.debug(f"告警自动过期: {n} 条")
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_expiry_loop, daemon=True)
+    t.start()
+    return t
 
 
 # ============================================================================
@@ -718,36 +788,42 @@ async def api_whitelist_delete(item_id: int):
 # ============================================================================
 @app.get("/api/traffic")
 async def api_traffic_get():
-    """获取可疑流量列表 — 通过 database 模块统一接口"""
+    """获取可疑流量列表 — 合并数据库 traffic_log + 告警缓冲区。"""
     data = []
+    seen_ips: set = set()
+
+    # 1. 数据库流量日志（仅未分析或可疑/恶意的）
     try:
         rows = _db("lists_manager", "get_traffic_logs", 200, 0)
         for row in rows:
             if isinstance(row.get("packet_time"), datetime):
                 row["packet_time"] = row["packet_time"].strftime("%Y-%m-%d %H:%M:%S")
+            src_ip = row.get("src_ip", "")
+            if src_ip:
+                seen_ips.add(src_ip)
             data.append(row)
     except Exception as e:
         logger.warning(f"查询 traffic_log 失败: {e}")
 
-    # 如果没有数据库数据，从告警缓冲区填充
-    if not data:
-        with _alerts_lock:
-            for alert in list(_alerts_buffer):
-                data.append(
-                    {
-                        "id": alert.get("id"),
-                        "src_ip": alert.get("ip"),
-                        "dst_ip": "",
-                        "src_port": "",
-                        "dst_port": "",
-                        "department": "",
-                        "protocol": "",
-                        "packet_time": alert.get("timestamp", ""),
-                        "traffic_size": 0,
-                        "is_blocked": 0,
-                        "entropy": 0,
-                    }
-                )
+    # 2. 告警缓冲区中尚未在 DB 里的条目（去重合并）
+    with _alerts_lock:
+        for alert in list(_alerts_buffer):
+            alert_ip = alert.get("ip", "")
+            if alert_ip and alert_ip not in seen_ips:
+                seen_ips.add(alert_ip)
+                data.append({
+                    "id": alert.get("id"),
+                    "src_ip": alert_ip,
+                    "dst_ip": "",
+                    "src_port": "",
+                    "dst_port": "",
+                    "department": "",
+                    "protocol": "",
+                    "packet_time": alert.get("timestamp", ""),
+                    "traffic_size": 0,
+                    "is_blocked": 0,
+                    "entropy": 0,
+                })
 
     return JSONResponse({"code": 0, "data": {"data": data}})
 
@@ -762,11 +838,11 @@ async def api_traffic_action(payload: TrafficAction):
     logger.info(f"流量事件操作: action={action}, id={item_id}, reason={reason}")
 
     target_ip = None
-
     ai_verdict = "unknown"
     ai_confidence = 0.0
-    if action == "拉黑" and item_id:
-        # 找到该事件的源 IP 和 AI 判定信息
+
+    # 找到该事件的源 IP
+    if item_id:
         try:
             rows = _db("lists_manager", "get_traffic_logs", 200, 0)
             for row in rows:
@@ -777,15 +853,15 @@ async def api_traffic_action(payload: TrafficAction):
         except Exception:
             pass
 
-        if target_ip:
-            # P4 硬件拉黑 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）
-            try:
-                from p4_controller.add_ip import add_to_blacklist as _p4_block
-                ok = _p4_block(target_ip, source="frontend", reason=reason)
-                if not ok:
-                    logger.warning(f"P4 拉黑 {target_ip} 返回失败（交换机可能未连接）")
-            except Exception as e:
-                logger.error(f"P4 硬件拉黑异常: {e}")
+    if action == "拉黑" and target_ip:
+        # P4 硬件拉黑 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）
+        try:
+            from p4_controller.add_ip import add_to_blacklist as _p4_block
+            ok = _p4_block(target_ip, source="frontend", reason=reason)
+            if not ok:
+                logger.warning(f"P4 拉黑 {target_ip} 返回失败（交换机可能未连接）")
+        except Exception as e:
+            logger.error(f"P4 硬件拉黑异常: {e}")
 
     # 更新流量记录的拦截状态
     if item_id:
@@ -793,6 +869,12 @@ async def api_traffic_action(payload: TrafficAction):
             _db("lists_manager", "update_traffic_action", item_id, action)
         except Exception:
             pass
+
+    # 清除前端告警缓冲区中该 IP 的对应条目
+    if target_ip:
+        n = dismiss_alerts_for_ip(target_ip)
+        if n > 0:
+            logger.info(f"已移除 {target_ip} 的 {n} 条告警")
 
     # -- 写入多智能体记忆系统 (自适应 Tier 0) --
     _record_to_memory_from_admin(item_id, action, reason, target_ip,
@@ -818,6 +900,23 @@ async def api_alert_receive(payload: AlertData):
     """接收实时告警推送"""
     push_alert(payload.ip, payload.label, payload.details)
     return JSONResponse({"status": "ok"})
+
+
+class DismissRequest(BaseModel):
+    alert_id: int = 0
+    ip: str = ""
+
+
+@app.post("/api/alert/dismiss")
+async def api_alert_dismiss(payload: DismissRequest):
+    """移除告警：按 ID 或按 IP"""
+    if payload.alert_id:
+        ok = dismiss_alert_by_id(payload.alert_id)
+        return JSONResponse({"code": 0, "msg": "已移除" if ok else "未找到该告警"})
+    if payload.ip:
+        n = dismiss_alerts_for_ip(payload.ip)
+        return JSONResponse({"code": 0, "msg": f"已移除 {n} 条告警"})
+    return JSONResponse({"code": 1, "msg": "请提供 alert_id 或 ip"}, status_code=400)
 
 
 # ============================================================================
@@ -907,6 +1006,10 @@ async def startup():
     else:
         _should_serve_static = False
         logger.warning(f"⚠️ 前端静态文件目录未找到: {_FRONTEND_ROOT}")
+
+    # 启动告警自动过期后台线程
+    _start_alert_expiry_thread()
+    logger.info("✅ 告警自动过期线程已启动 (TTL=%ds)", _ALERT_TTL_SECONDS)
 
 
 # 挂载静态资源目录

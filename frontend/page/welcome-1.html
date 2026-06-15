@@ -102,7 +102,10 @@
                 <div class="layui-card">
                     <div class="layui-card-header">
                         <i class="fa fa-exclamation-triangle icon" style="color:#FF5722;"></i>高危险警告
-                        <span style="float:right;font-weight:400;" id="warningCount">0 条</span>
+                        <span style="float:right;font-weight:400;">
+                            <span style="color:#999;font-size:12px;margin-right:10px;" id="alertRefreshTime">--:--:--</span>
+                            <span id="warningCount">0 条</span>
+                        </span>
                     </div>
                     <div class="layui-card-body" style="padding:0;">
                         <table class="layui-table" lay-skin="line" style="margin:0;">
@@ -116,10 +119,11 @@
                                     <th>来源 IP</th>
                                     <th>威胁等级</th>
                                     <th>原因</th>
+                                    <th style="width:30px;"></th>
                                 </tr>
                             </thead>
                             <tbody id="warningTbody">
-                                <tr><td colspan="3" style="text-align:center;color:#999;">正在加载…</td></tr>
+                                <tr><td colspan="4" style="text-align:center;color:#999;">正在加载…</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -176,7 +180,7 @@ layui.use(['layer', 'miniTab'], function () {
         var $tbody = $('#warningTbody');
         $('#warningCount').text(items.length + ' 条');
         if (!items.length) {
-            $tbody.html('<tr><td colspan="3" style="text-align:center;color:#999;">暂无高危险警告</td></tr>');
+            $tbody.html('<tr><td colspan="4" style="text-align:center;color:#999;">暂无高危险警告</td></tr>');
             return;
         }
         var levelClass = { 'high': 'level-high', 'medium': 'level-mid', 'low': 'level-low' };
@@ -185,17 +189,46 @@ layui.use(['layer', 'miniTab'], function () {
         $.each(items, function (i, item) {
             var lcls = levelClass[item.threat_level] || 'level-mid';
             var ltxt = levelText[item.threat_level]  || item.threat_level;
-            rows += '<tr data-id="' + (item.id || '') + '" style="cursor:pointer;">' +
-                '<td><span class="ip-segment">' + (item.ip || item.src_ip || '--') + '</span></td>' +
+            var alertId = item.id || '';
+            var alertIp = item.ip || item.src_ip || '--';
+            rows += '<tr data-id="' + alertId + '" data-ip="' + alertIp + '">' +
+                '<td><span class="ip-segment">' + alertIp + '</span></td>' +
                 '<td><span class="' + lcls + '">' + ltxt + '</span></td>' +
-                '<td>' + (item.reason || item.label || '--') + '</td>' +
+                '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (item.reason || item.label || '--') + '</td>' +
+                '<td style="width:30px;text-align:center;">' +
+                '<button class="dismiss-alert-btn" data-id="' + alertId + '" data-ip="' + alertIp +
+                '" style="background:none;border:none;color:#999;cursor:pointer;font-size:16px;" title="移除告警">&times;</button>' +
+                '</td>' +
                 '</tr>';
         });
         $tbody.html(rows);
 
-        // 点击行跳转到详情页
-        $tbody.find('tr[data-id]').on('click', function () {
+        // 点击行跳转到详情页（排除 dismiss 按钮）
+        $tbody.find('tr[data-id]').on('click', function (e) {
+            if ($(e.target).hasClass('dismiss-alert-btn')) return;
             window.location.href = '/page/dealing_jobs.html';
+        });
+
+        // dismiss 按钮
+        $tbody.find('.dismiss-alert-btn').on('click', function (e) {
+            e.stopPropagation();
+            var $btn = $(this);
+            var alertId = $btn.data('id');
+            var alertIp = $btn.data('ip');
+            $.ajax({
+                url: '/api/alert/dismiss',
+                type: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ alert_id: alertId || 0, ip: alertId ? '' : alertIp }),
+                success: function () {
+                    $btn.closest('tr').fadeOut(300, function () { $(this).remove(); });
+                    var remaining = $('#warningTbody tr').length;
+                    $('#warningCount').text(remaining + ' 条');
+                    if (!remaining) {
+                        $('#warningTbody').html('<tr><td colspan="4" style="text-align:center;color:#999;">暂无高危险警告</td></tr>');
+                    }
+                }
+            });
         });
     }
 
@@ -224,10 +257,15 @@ layui.use(['layer', 'miniTab'], function () {
                 } else {
                     renderWarnings(items);
                 }
+                // 更新刷新时间
+                var now = new Date();
+                $('#alertRefreshTime').text(now.getHours().toString().padStart(2,'0') + ':' +
+                    now.getMinutes().toString().padStart(2,'0') + ':' +
+                    now.getSeconds().toString().padStart(2,'0'));
             },
             error: function (xhr, status) {
                 var msg = status === 'timeout' ? '请求超时' : '无法连接后端';
-                $('#warningTbody').html('<tr><td colspan="3" style="text-align:center;color:#FF5722;">' + msg + '</td></tr>');
+                $('#warningTbody').html('<tr><td colspan="4" style="text-align:center;color:#FF5722;">' + msg + '</td></tr>');
             }
         });
     }
