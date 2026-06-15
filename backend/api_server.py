@@ -136,6 +136,10 @@ def _enrich_traffic_row(row: dict) -> dict:
     # 拦截状态
     row["block_text"] = "已拦截" if row.get("is_blocked") else "未拦截"
 
+    # AI 分析理由（截断显示）
+    reasoning = row.get("ai_reasoning", "") or ""
+    row["ai_reasoning"] = reasoning
+
     # 原因摘要
     parts = []
     emp = row.get("employee", "")
