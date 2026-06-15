@@ -898,7 +898,7 @@ def start_backend(port: int = 8080):
         app="backend.api_server:app",
         host="0.0.0.0",
         port=port,
-        log_level="info",
+        log_level="warning",
         loop="asyncio",
         reload=False,
     )

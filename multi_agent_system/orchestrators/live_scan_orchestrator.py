@@ -182,7 +182,7 @@ class LiveScanOrchestrator:
                 await asyncio.sleep(10.0)
 
     async def _interruptible_sleep(self, seconds: float) -> None:
-        """分段 sleep，每 1 秒检查 _running，支持快速优雅关闭。"""
+        """分段 sleep，每 1 秒检查 _running，支持快速安全关闭。"""
         remaining = seconds
         while remaining > 0 and self._running:
             await asyncio.sleep(min(1.0, remaining))

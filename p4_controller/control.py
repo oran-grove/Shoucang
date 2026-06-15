@@ -13,7 +13,7 @@ import pynng
 import requests
 from flask import Flask, request, jsonify
 
-# 🌟 剧情线 3：Thrift 直连 BMv2 交换机（替代 SSH）
+# Thrift 直连 BMv2 交换机（替代 SSH）
 from thrift.transport import TSocket, TTransport
 from thrift.protocol import TBinaryProtocol, TMultiplexedProtocol
 
@@ -49,8 +49,8 @@ telemetry_logger = logging.getLogger(__name__ + ".telemetry")
 # 🛠️ 本地网络执行组件
 # ==========================================
 def report_alert_to_frontend(ip_addr, label):
-    """【执行器】直接向前端大屏推送高危内鬼告警"""
-    logger.warning("发现高危外发！内鬼IP: %s | 触发标签: %s", ip_addr, label)
+    """直接向前端大屏推送高危内部威胁告警"""
+    logger.warning("发现高危外发：IP: %s | 触发标签: %s", ip_addr, label)
     try:
         payload = {"ip": ip_addr, "label": label}
         requests.post(FRONTEND_ALERT_API, json=payload, timeout=2)
@@ -59,7 +59,7 @@ def report_alert_to_frontend(ip_addr, label):
 
 
 # ==========================================
-# 🎬 剧情线 1：前端上帝之手 (API -> 对齐 add_ip 接口)
+# 前端 API 接口：黑白名单控制 (对齐 add_ip 接口)
 # ==========================================
 @app.route('/api/blacklist', methods=['POST'])
 def handle_frontend_blacklist():
@@ -84,23 +84,21 @@ def handle_frontend_blacklist():
 
 
 # ==========================================
-# 🎬 剧情线 2：P4 探针接收 -> 打包 -> 判官 -> 拉黑 & 本地前端上报
+# P4 探针接收 -> 打包 -> 分析评估 -> 拉黑 & 本地前端上报
 # ==========================================
 def p4_listener_thread():
-    """【写文件绝杀版】彻底解决 PyCharm 缓存憋日志问题"""
-    logger.info("剧情线 2：P4 pynng 接收总线已就位...")
+    """P4 探针监听线程：接收交换机上报的实时数据"""
+    logger.info("P4 pynng 接收总线已就位...")
 
     try:
-        # 把之前的业务逻辑全部安全地包裹起来
         with pynng.Sub0(dial=P4_SWITCH_IPC, recv_timeout=2000) as sub:
             sub.subscribe(b'')
-            logger.info("P4 硬件管道连接成功！开始巡逻...")
+            logger.info("P4 硬件管道连接成功，开始监听...")
 
             while True:
                 try:
                     msg = sub.recv()
                     logger.debug("收到 P4 上报原始报文，长度: %d 字节", len(msg))
-                    # 护住内部的数据处理
                     try:
                         with table_lock:
                             high_risk_flows = data_packer.process_p4_report(msg)
@@ -110,17 +108,16 @@ def p4_listener_thread():
 
                         for vector in high_risk_flows:
                             is_malicious, label = analyzer.evaluate(vector)
-                            logger.debug("判官评估完成: is_malicious=%s, label=%s", is_malicious, label)
+                            logger.debug("安全分析评估完成: is_malicious=%s, label=%s", is_malicious, label)
                             if is_malicious:
                                 src_ip = vector[0]
                                 add_ip.add_to_blacklist(src_ip, source="controller")
                                 report_alert_to_frontend(src_ip, label)
 
                     except Exception as proc_err:
-                        # 内部报错也强制写文件
-                        logger.error("数据解析层内爆: %s", proc_err, exc_info=True)
+                        logger.error("数据解析层错误: %s", proc_err, exc_info=True)
                         with open("crash.txt", "a", encoding="utf-8") as f:
-                            f.write(f"❌ 数据解析层内爆: {proc_err}\n")
+                            f.write(f"数据解析层错误: {proc_err}\n")
                             traceback.print_exc(file=f)
                         continue
 
@@ -128,18 +125,17 @@ def p4_listener_thread():
                     continue
 
     except Exception as global_err:
-        # 💥 这里的代码是专门针对 Exception in thread P4-Probe-Bus 的！
-        # 只要线程要死，临死前一定会把最精准的死因写进当前目录下的 crash.txt
-        logger.critical("后台巡逻线程遭遇致命内爆！已将尸体和死因写入本地 crash.txt 文件！", exc_info=True)
+        # 线程崩溃时，将错误详情写入当前目录下的 crash.txt
+        logger.critical("后台监听线程遭遇致命错误！已将错误详情写入本地 crash.txt 文件！", exc_info=True)
         with open("crash.txt", "w", encoding="utf-8") as f:
-            f.write(f"💥 警告！巡逻线程彻底崩溃！全局错误原因: {global_err}\n")
-            f.write("====== 以下为导致线程死亡的真正代码行数 ======\n")
+            f.write(f"警告！监听线程彻底崩溃！全局错误原因: {global_err}\n")
+            f.write("====== 以下为导致线程崩溃的 Traceback ======\n")
             traceback.print_exc(file=f)
 # ==========================================
-# 🎬 剧情线 3：定时器触发 -> 本地拉取 -> 硬件寄存器重置
+# 定时器触发 -> 本地拉取 -> 硬件寄存器重置
 # ==========================================
 def telemetry_job():
-    """100秒时间到！通过本地 Thrift 直连 BMv2 交换机（无需 SSH、无需文本解析）"""
+    """通过本地 Thrift 直连 BMv2 交换机拉取寄存器数据（无需 SSH、无需文本解析）"""
     # 动态导入从 VM 拷贝过来的 BMv2 Thrift stubs
     try:
         from bm_runtime.standard import Standard
@@ -147,7 +143,7 @@ def telemetry_job():
         telemetry_logger.error("缺少 bm_runtime 模块！请从 VM 拷贝 BMv2 Thrift 绑定到项目目录")
         return
 
-    telemetry_logger.info("剧情线 3：达到 100 秒节拍，Thrift 直连拉取寄存器...")
+    telemetry_logger.info("定时器触发，Thrift 直连拉取寄存器...")
 
     transport = TTransport.TBufferedTransport(TSocket.TSocket('127.0.0.1', 9100))
     # BMv2 simple_switch 使用 TMultiplexedProtocol，服务名固定为 "standard"
@@ -166,11 +162,11 @@ def telemetry_job():
         ent_data = b''.join(struct.pack('>Q', v) for v in ent_list)
         telemetry_logger.info(f"全量寄存器拉取成功！Vol: {len(vol_data)}B, Ent: {len(ent_data)}B")
 
-        # 安全上锁，扔给清洗中继器
+        # 安全上锁，交由数据处理模块
         with table_lock:
             data_packer.process_pulled_registers(vol_data, ent_data)
 
-        # 阅后即焚：重置寄存器，备战下一个 100 秒周期
+        # 重置寄存器，准备下一个采集周期
         client.bm_register_reset(0, 'MyIngress.reg_volume_score')
         client.bm_register_reset(0, 'MyIngress.reg_entropy_stat')
         telemetry_logger.info("寄存器重置成功，环境已清空。")
@@ -183,7 +179,7 @@ def telemetry_job():
 # 🧹 开机自启动：清空交换机哈希表
 # ==========================================
 def reset_switch_on_startup():
-    """控制器启动时自动清空交换机双寄存器，确保从干净状态开始巡逻"""
+    """控制器启动时自动清空交换机双寄存器，确保从干净状态开始运行"""
     try:
         from bm_runtime.standard import Standard
     except ImportError:
@@ -212,7 +208,7 @@ def reset_switch_on_startup():
 # ==========================================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("态势感知大脑中央调度总线控制器正在初始化...")
+    logger.info("SDN 态势感知中央调度控制器正在初始化...")
     logger.info("=" * 60)
 
     # 0. 开机自检：清空交换机哈希表，从零开始

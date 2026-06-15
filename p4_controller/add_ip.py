@@ -51,7 +51,7 @@ def _ip_to_bytes(ip_str: str) -> bytes:
 
 
 # ==========================================
-# 💀 黑名单下发模块 (双源调用 — Thrift 直连版)
+# 黑名单下发模块 (双源调用 — Thrift 直连版)
 #    - 数据库写入: database.add_to_db_blacklist()
 #    - P4 物理流表: Thrift 注入 exact drop 规则
 # ==========================================
@@ -61,17 +61,17 @@ def add_to_blacklist(ip: str, source: str, reason: str = "") -> bool:
                                              BmMatchParamType, BmAddEntryOptions)
 
     if source not in ["frontend", "controller"]:
-        logger.error("非法调用！未知的拉黑来源: %s", source)
+        logger.error("无效调用：未知的拉黑来源: %s", source)
         return False
 
     if is_whitelisted(ip):
-        logger.warning("行动取消！IP %s 拥有白名单免死金牌，%s 拉黑请求被驳回！", ip, source)
+        logger.warning("操作取消：IP %s 在白名单中，%s 拉黑请求被驳回！", ip, source)
         return False
 
     if is_blacklisted(ip):
         return True
 
-    logger.info("封杀执行！来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 流表...", source, ip)
+    logger.info("执行拉黑操作：来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 流表...", source, ip)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
     if not add_to_db_blacklist(ip, threat_level="高", reason=reason or f"由{source}触发"):
@@ -96,7 +96,7 @@ def add_to_blacklist(ip: str, source: str, reason: str = "") -> bool:
                 [],                             # action_data
                 BmAddEntryOptions()             # options
             )
-            logger.info("P4 黑名单流表注入成功！entry_handle=%s", entry_handle)
+            logger.info("P4 黑名单流表注入成功 entry_handle=%s", entry_handle)
         finally:
             transport.close()
     except Exception as e:
@@ -115,13 +115,13 @@ def add_to_whitelist(ip: str, source: str, reason: str = "") -> bool:
                                              BmMatchParamType, BmAddEntryOptions)
 
     if source != "frontend":
-        logger.warning("越权拦截！%s 试图下发白名单！只有前端拥有此权限。", source)
+        logger.warning("权限拒绝：%s 试图下发白名单，仅前端拥有此权限。", source)
         return False
 
     if is_whitelisted(ip):
         return True
 
-    logger.info("特权加白！来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 免检通道...", source, ip)
+    logger.info("执行加白操作：来源: %s | 目标 IP: %s | 正在通过 Thrift 下发 P4 免检通道...", source, ip)
 
     # 第一步：写入数据库（database 模块负责刷新常驻内存）
     if not add_to_db_whitelist(ip, reason=reason or f"由{source}手动加白"):
@@ -152,7 +152,7 @@ def add_to_whitelist(ip: str, source: str, reason: str = "") -> bool:
                 [],                             # action_data
                 BmAddEntryOptions()             # options
             )
-            logger.info("P4 免检通道开通成功！entry_handle=%s", entry_handle)
+            logger.info("P4 免检通道注入成功 entry_handle=%s", entry_handle)
         finally:
             transport.close()
     except Exception as e:
@@ -175,7 +175,7 @@ def get_ip_label(ip: str) -> float:
         from database import get_blacklist_threat_level
         level = get_blacklist_threat_level(ip)
         threat_score_map = {
-            "高": 9.5,   # C2/APT/僵尸网络 → 一票否决
+            "高": 9.5,   # C2/APT/僵尸网络 → 最高风险
             "中": 8.5,   # 恶意软件/钓鱼/挖矿/DNS隧道 → 接近否决，需叠加
             "低": 7.5,   # 代理/VPN/扫描引擎 → 明显可疑，但力度较轻
         }
