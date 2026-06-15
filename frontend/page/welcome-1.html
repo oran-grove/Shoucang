@@ -239,24 +239,7 @@ layui.use(['layer', 'miniTab'], function () {
             dataType: 'json',
             timeout: 10000,
             success: function (res) {
-                var items = res.data || [];
-                if (items.length === 0) {
-                    // fallback: try blacklist
-                    $.ajax({
-                        url: '/api/blacklist',
-                        type: 'GET',
-                        dataType: 'json',
-                        timeout: 10000,
-                        success: function(res2) {
-                            renderWarnings(res2.data || []);
-                        },
-                        error: function() {
-                            renderWarnings([]);
-                        }
-                    });
-                } else {
-                    renderWarnings(items);
-                }
+                renderWarnings(res.data || []);
                 // 更新刷新时间
                 var now = new Date();
                 $('#alertRefreshTime').text(now.getHours().toString().padStart(2,'0') + ':' +
