@@ -131,7 +131,7 @@ def _enrich_traffic_row(row: dict) -> dict:
         row["status_text"] = "待管理员处理"
 
     # 流量大小格式化
-    row["traffic_size_text"] = _fmt_bytes(row.get("traffic_size") or 0)
+    row["traffic_size_text"] = _fmt_bytes(row.get("accumulated_bytes") or 0)
 
     # 拦截状态
     row["block_text"] = "已拦截" if row.get("is_blocked") else "未拦截"
@@ -353,9 +353,41 @@ async def api_save_config(payload: ConfigSaveRequest):
 _SUPPORTED_BACKENDS = {"deepseek", "openai", "lmstudio"}
 
 
+class BackendSaveRequest(BaseModel):
+    backend: str
+    api_key: str = ""
+    model_name: str = ""
+    api_base: str = ""
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    timeout: float = 60.0
+    max_retries: int = 3
+
+
 @app.post("/api/config/backend")
-async def api_config_backend_save():
-    return JSONResponse({"code": 0, "msg": "通过 config_user.json 配置"})
+async def api_config_backend_save(payload: BackendSaveRequest):
+    """保存单个后端的配置到 config_user.json"""
+    backend_key = payload.backend.lower()
+    if backend_key not in _SUPPORTED_BACKENDS:
+        return JSONResponse(
+            {"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400,
+        )
+
+    # 将前端扁平的 payload 转换为 config 的嵌套结构
+    backend_fields = {}
+    for f in ("api_key", "model_name", "api_base", "temperature",
+              "max_tokens", "timeout", "max_retries"):
+        val = getattr(payload, f, None)
+        if val:
+            backend_fields[f] = val
+
+    updates = {"backends": {backend_key: backend_fields}}
+
+    try:
+        save_config_dict(updates)
+        return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 配置已保存"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.post("/api/config/backend/test")

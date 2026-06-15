@@ -18,7 +18,7 @@ def row_to_flow_event(row: dict) -> FlowEvent:
 
     traffic_log 表字段:
         id, src_ip, dst_ip, src_port, dst_port, department,
-        protocol, packet_time, traffic_size, is_blocked, entropy,
+        protocol, packet_time, is_blocked, entropy,
         src_tag, sp_tag, dp_tag, accumulated_pkts, accumulated_bytes,
         global_pps, global_bps, avg_entropy, country, employee, created_at, ...
     """
@@ -28,7 +28,7 @@ def row_to_flow_event(row: dict) -> FlowEvent:
     dst_port = row.get("dst_port") or 0
     protocol = row.get("protocol", "TCP")
     department = row.get("department", "")
-    byte_count = row.get("traffic_size") or 0
+    byte_count = row.get("accumulated_bytes") or 0
     accumulated_pkts = row.get("accumulated_pkts") or 0
     accumulated_bytes = row.get("accumulated_bytes") or 0
     global_pps = row.get("global_pps") or 0

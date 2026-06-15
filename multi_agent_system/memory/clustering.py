@@ -234,8 +234,8 @@ def _create_card_from_group(
         features = json.loads(features_json) if isinstance(features_json, str) else (features_json or {})
         if isinstance(features, dict) and features.get("byte_count"):
             traffic_sizes.append(features["byte_count"])
-        elif isinstance(features, dict) and features.get("traffic_size"):
-            traffic_sizes.append(features["traffic_size"])
+        elif isinstance(features, dict) and features.get("accumulated_bytes"):
+            traffic_sizes.append(features["accumulated_bytes"])
 
     feature_signature = {
         "department": dept,

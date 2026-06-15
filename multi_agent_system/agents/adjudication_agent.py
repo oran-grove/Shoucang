@@ -128,7 +128,7 @@ class AdjudicationAgent(BaseAgent):
                     context_lines.append(
                         f"[{i + 1}] {r.get('src_ip', '?')} -> {r.get('dst_ip', '?')} | "
                         f"协议={r.get('protocol', '?')} | "
-                        f"字节={r.get('traffic_size', r.get('byte_count', 0))} | "
+                        f"字节={r.get('accumulated_bytes', r.get('byte_count', 0))} | "
                         f"时间={r.get('created_at', r.get('packet_time', '?'))} | "
                         f"关联度={r.get('relevance', 0):.2f} | "
                         f"理由={r.get('match_reason', '')}"

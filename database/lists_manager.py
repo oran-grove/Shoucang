@@ -347,7 +347,7 @@ def get_traffic_logs(limit: int = 200,
 
             cursor.execute(
                 f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy, "
+                "protocol, packet_time, is_blocked, entropy, "
                 "ai_analyzed, ai_verdict, employee, country, "
                 "accumulated_pkts, accumulated_bytes "
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
@@ -433,7 +433,7 @@ def get_similar_flows_by_src_ip(
         with db_cursor() as (conn, cursor):
             cursor.execute(
                 "SELECT id, src_ip, dst_ip, src_port, dst_port, protocol, "
-                "traffic_size, department, entropy, created_at, packet_time "
+                "accumulated_bytes, department, entropy, created_at, packet_time "
                 "FROM traffic_log "
                 "WHERE src_ip = %s AND created_at >= %s "
                 "ORDER BY created_at DESC "

@@ -44,7 +44,7 @@ CREATE TABLE traffic_log (
     department VARCHAR(50) DEFAULT NULL COMMENT '部门',
     protocol VARCHAR(20) DEFAULT NULL COMMENT '协议',
     packet_time DATETIME NOT NULL COMMENT '包时间',
-    traffic_size INT DEFAULT NULL COMMENT '流量大小',
+    traffic_size INT DEFAULT NULL COMMENT '流量大小（已废弃—请使用 accumulated_bytes）',
     is_blocked TINYINT DEFAULT 0 COMMENT '是否拦截',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     entropy DECIMAL(5,4) DEFAULT NULL COMMENT '熵值',
