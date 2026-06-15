@@ -35,7 +35,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config.shared_config import PROJECT_ROOT
 
 from multi_agent_system import (
-    MultiAgentSystem, Orchestrator, OrchestratorConfig,
+    MultiAgentSystem, Orchestrator,
     FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel,
     BackendType,
     ScreeningAgent, BacktrackAgent, AdjudicationAgent, FeedbackAgent,
@@ -45,7 +45,7 @@ from multi_agent_system.orchestrators.live_scan_orchestrator import (
     LiveScanOrchestrator,
 )
 from multi_agent_system.orchestrators import row_to_flow_event
-from config.loader import load_config
+from config import get_config, FullConfig
 
 logging.basicConfig(
     level=logging.WARNING,  # 减少第三方库日志噪音
@@ -82,24 +82,25 @@ def _warn(msg: str) -> None:
 # 配置加载
 # ═══════════════════════════════════════════════════════════════
 
-def load_test_config() -> OrchestratorConfig:
-    """加载测试配置，优先使用 config_user.json（含用户的 API Key）。"""
-    user_path = PROJECT_ROOT / "config" / "config_user.json"
-    if user_path.exists():
-        return load_config(str(user_path))
-    return load_config()
+def load_test_config() -> FullConfig:
+    """加载测试配置（从统一配置缓存获取）。"""
+    return get_config()
 
 
-def _check_backend_available(config: OrchestratorConfig, bt: BackendType) -> bool:
+def _check_backend_available(config: FullConfig, bt: BackendType) -> bool:
     """检查指定后端是否有可用的 API Key。"""
-    be = config.default_backends.get(bt)
-    if be is None:
+    be = config.backends
+    if bt == BackendType.OPENAI:
+        be_cfg = be.openai
+    elif bt == BackendType.DEEPSEEK:
+        be_cfg = be.deepseek
+    elif bt == BackendType.LMSTUDIO:
+        return True  # LMSTUDIO 不需要 API Key
+    else:
         return False
-    if bt in (BackendType.OPENAI, BackendType.DEEPSEEK):
-        return bool(be.api_key and be.api_key.strip()
-                    and "sk-your-" not in be.api_key
-                    and "your-key" not in be.api_key)
-    return True  # LMSTUDIO 不需要 API Key
+    return bool(be_cfg.api_key and be_cfg.api_key.strip()
+                and "sk-your-" not in be_cfg.api_key
+                and "your-key" not in be_cfg.api_key)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -162,7 +163,7 @@ def build_sample_flows() -> list[FlowEvent]:
 # 测试 1: 三层分析管线（全真 API 调用）
 # ═══════════════════════════════════════════════════════════════
 
-async def test_pipeline(config: OrchestratorConfig):
+async def test_pipeline(config: FullConfig):
     """全真测试 L1筛查 → L2回溯 ⇄ L3研判 三层管线。
 
     使用 config_user.json 中的 DeepSeek API Key 进行真实 LLM 分析。
@@ -175,12 +176,12 @@ async def test_pipeline(config: OrchestratorConfig):
         _info("请在 config_user.json 的 backends.deepseek.api_key 中填入有效密钥")
         return
 
-    _info(f"后端: DeepSeek/{config.default_backends[BackendType.DEEPSEEK].model_name}")
-    _info(f"L1-筛查: {config.screening.backend.value}/{config.screening.model_name}")
-    _info(f"L2-回溯: {config.backtrack.backend.value}/{config.backtrack.model_name}")
-    _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
+    _info(f"后端: DeepSeek/{config.backends.deepseek.model_name}")
+    _info(f"L1-筛查: {config.screening.backend}/{config.screening.model_name}")
+    _info(f"L2-回溯: {config.backtrack.backend}/{config.backtrack.model_name}")
+    _info(f"L3-研判: {config.adjudication.backend}/{config.adjudication.model_name}")
 
-    system = MultiAgentSystem(config)
+    system = MultiAgentSystem()
     await system.start()
     _ok("系统启动完成")
 
@@ -232,7 +233,7 @@ async def test_pipeline(config: OrchestratorConfig):
 # 测试 2: 管理员反馈闭环 + 记忆系统
 # ═══════════════════════════════════════════════════════════════
 
-async def test_feedback(config: OrchestratorConfig):
+async def test_feedback(config: FullConfig):
     """测试管理员反馈闭环 + 记忆系统自适应学习。"""
     _h("测试 2: 管理员反馈 + 记忆系统")
 
@@ -241,7 +242,7 @@ async def test_feedback(config: OrchestratorConfig):
     agent = FeedbackAgent()
 
     # 注入后端
-    ds_cfg = config.default_backends.get(BackendType.DEEPSEEK)
+    ds_cfg = config.backends.deepseek
     if ds_cfg and _check_backend_available(config, BackendType.DEEPSEEK):
         from multi_agent_system.backends import DeepSeekBackend
         agent.set_backend(DeepSeekBackend(
@@ -308,7 +309,7 @@ async def test_feedback(config: OrchestratorConfig):
 # 测试 3: 三层智能体独立验证
 # ═══════════════════════════════════════════════════════════════
 
-async def test_agents_standalone(config: OrchestratorConfig):
+async def test_agents_standalone(config: FullConfig):
     """独立测试三个智能体的创建和基本功能。"""
     _h("测试 3: 三层智能体独立验证")
 
@@ -319,7 +320,7 @@ async def test_agents_standalone(config: OrchestratorConfig):
         return
 
     from multi_agent_system.backends import DeepSeekBackend
-    ds_cfg = config.default_backends[BackendType.DEEPSEEK]
+    ds_cfg = config.backends.deepseek
 
     backend = DeepSeekBackend(
         api_base=ds_cfg.api_base, api_key=ds_cfg.api_key,
@@ -402,7 +403,7 @@ async def test_agents_standalone(config: OrchestratorConfig):
     _ok("测试 3 完成")
 
 
-async def _test_agents_no_llm(config: OrchestratorConfig):
+async def _test_agents_no_llm(config: FullConfig):
     """仅验证智能体构造（不调用 LLM）。"""
     screening = ScreeningAgent(
         system_prompt=config.screening.system_prompt,
@@ -430,7 +431,7 @@ async def _test_agents_no_llm(config: OrchestratorConfig):
 # 测试 4: LiveScanOrchestrator 调度验证
 # ═══════════════════════════════════════════════════════════════
 
-def test_live_scan(config: OrchestratorConfig):
+def test_live_scan(config: FullConfig):
     """验证 LiveScanOrchestrator 的 DB row 转换和调度配置。"""
     _h("测试 4: LiveScanOrchestrator 逐条扫描调度")
 
@@ -531,11 +532,11 @@ def _detect_lmstudio(api_base: str = "http://localhost:1234/v1") -> bool:
         return False
 
 
-def test_lmstudio(config: OrchestratorConfig):
+def test_lmstudio(config: FullConfig):
     """LM Studio 模型管理功能测试。"""
     _h("测试 6: LM Studio 模型管理")
 
-    lm_cfg = config.default_backends.get(BackendType.LMSTUDIO)
+    lm_cfg = config.backends.lmstudio
     if lm_cfg is None:
         _warn("LM Studio 后端未在配置中注册，跳过")
         return
@@ -607,18 +608,18 @@ def test_lmstudio(config: OrchestratorConfig):
 # 测试 7: 系统整体状态
 # ═══════════════════════════════════════════════════════════════
 
-def test_status(config: OrchestratorConfig):
+def test_status(config: FullConfig):
     """打印系统配置摘要。"""
     _h("测试 7: 系统状态摘要")
 
     _info(f"DeepSeek: {'已配置' if _check_backend_available(config, BackendType.DEEPSEEK) else '未配置'}")
     _info(f"OpenAI:   {'已配置' if _check_backend_available(config, BackendType.OPENAI) else '未配置'}")
-    _info(f"LMStudio: {'已注册' if BackendType.LMSTUDIO in config.default_backends else '未注册'}")
+    _info(f"LMStudio: {'已注册' if hasattr(config.backends, 'lmstudio') else '未注册'}")
 
-    _info(f"L1-筛查: {config.screening.backend.value}/{config.screening.model_name}")
-    _info(f"L2-回溯: {config.backtrack.backend.value}/{config.backtrack.model_name}")
-    _info(f"L3-研判: {config.adjudication.backend.value}/{config.adjudication.model_name}")
-    _info(f"反馈:   {config.feedback.backend.value}/{config.feedback.model_name}")
+    _info(f"L1-筛查: {config.screening.backend}/{config.screening.model_name}")
+    _info(f"L2-回溯: {config.backtrack.backend}/{config.backtrack.model_name}")
+    _info(f"L3-研判: {config.adjudication.backend}/{config.adjudication.model_name}")
+    _info(f"反馈:   {config.feedback.backend}/{config.feedback.model_name}")
 
     def _fmt(w: float) -> str:
         if w < 1:
@@ -656,12 +657,12 @@ async def main():
 
     # 如果指定了 lmstudio host，更新配置
     if args.lmstudio_host != "http://localhost:1234/v1":
-        lm_cfg = config.default_backends.get(BackendType.LMSTUDIO)
+        lm_cfg = config.backends.lmstudio
         if lm_cfg:
             lm_cfg.api_base = args.lmstudio_host
 
     # 自动检测 LM Studio
-    _lm_cfg = config.default_backends.get(BackendType.LMSTUDIO)
+    _lm_cfg = config.backends.lmstudio
     _lm_base = _lm_cfg.api_base if _lm_cfg else "http://localhost:1234/v1"
     lmstudio_enabled = args.lmstudio or _detect_lmstudio(_lm_base)
 

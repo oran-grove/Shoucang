@@ -1,21 +1,15 @@
 """
-多智能体系统配置数据模型
-========================
-定义 LLM 后端配置、智能体配置等数据结构。
-支持在线 API 和 LM Studio 本地 AI 两种后端。
-
-三层智能体架构:
-  Layer 1 — ScreeningAgent: 初步筛查，多线程逐条分析
-  Layer 2 — BacktrackAgent: 历史回溯，查找相似数据并过滤关联度
-  Layer 3 — AdjudicationAgent: 最终研判，结合回溯数据二次判定
+配置数据模型 — 纯结构体定义
+===========================
+每个 JSON 配置节对应一个 dataclass，所有默认值在 dataclass 字段中定义。
 
 本模块是纯数据模型定义，不涉及文件 I/O。
-文件 I/O 由 config/loader.py 负责。
+文件 I/O 由 config/store.py 负责。
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 
 class BackendType(Enum):
@@ -25,45 +19,60 @@ class BackendType(Enum):
     DEEPSEEK = "deepseek"
 
 
+# ============================================================
+# 数据库配置
+# ============================================================
+
+@dataclass
+class DatabaseConfig:
+    """数据库连接配置"""
+    host: str = "localhost"
+    port: int = 3306
+    user: str = "root"
+    password: str = ""
+    database: str = "insider_threat_db"
+    charset: str = "utf8mb4"
+
+
+# ============================================================
+# LLM 后端配置
+# ============================================================
+
 @dataclass
 class LLMBackendConfig:
-    """
-    LLM 后端通用配置。
-    用于 OpenAI 兼容 API、LM Studio 本地模型、DeepSeek API 等。
-    """
-    backend_type: BackendType
+    """单个 LLM 后端的配置字段（OpenAI / LM Studio / DeepSeek 通用）"""
     model_name: str = "gpt-4o-mini"
     api_base: str = "https://api.openai.com/v1"
     api_key: str = ""
     temperature: float = 0.3
     max_tokens: int = 2048
-    max_context_tokens: int = 4096      # 模型最大上下文窗口（token 数），用于分批计算
+    max_context_tokens: int = 4096
     timeout: float = 60.0
     max_retries: int = 3
-    # LM Studio 通常部署在 localhost
-    # api_base: "http://localhost:1234/v1"
-    # api_key: "lm-studio"（占位即可）
+    # —— LM Studio 专有 ——
+    auto_load: bool = True
+    load_config: dict = field(default_factory=dict)
+    # —— DeepSeek 专有 ——
+    thinking_enabled: Optional[bool] = None
+    reasoning_effort: Optional[str] = None
+    include_reasoning: bool = False
 
-    # —— 模型智能加载（仅 LM Studio 后端有效）——
-    auto_load: bool = True                  # 是否在调用前自动加载模型
-    load_config: dict[str, Any] = field(default_factory=dict)  # 模型加载参数
-    # load_config 可包含: context_length, eval_batch_size, flash_attention,
-    #                     num_experts, offload_kv_cache_to_gpu, echo_load_config
 
-    # —— DeepSeek V4 专有参数 ——
-    thinking_enabled: Optional[bool] = None   # 思考模式开关 (True/False)，None 表示不显式设置
-    reasoning_effort: Optional[str] = None    # 推理强度: "high" | "max"
-    include_reasoning: bool = False           # 是否在回复中包含思考过程
+@dataclass
+class BackendsConfig:
+    """三个 LLM 后端的配置集合"""
+    openai: LLMBackendConfig = field(default_factory=LLMBackendConfig)
+    lmstudio: LLMBackendConfig = field(default_factory=LLMBackendConfig)
+    deepseek: LLMBackendConfig = field(default_factory=LLMBackendConfig)
 
 
 # ============================================================
 # 三层智能体配置
 # ============================================================
 
-
 @dataclass
 class ScreeningAgentConfig:
-    """Layer 1 — 初步筛查智能体配置"""
+    """Layer 1 — 初步筛查智能体"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
@@ -95,7 +104,7 @@ class ScreeningAgentConfig:
 
 @dataclass
 class BacktrackAgentConfig:
-    """Layer 2 — 历史回溯智能体配置"""
+    """Layer 2 — 历史回溯智能体"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
@@ -114,14 +123,14 @@ class BacktrackAgentConfig:
     )
     temperature: float = 0.3
     max_tokens: int = 2048
-    batch_context_ratio: float = 0.125         # 每批占上下文的 1/8（为深度思考预留）
-    lookback_windows: list[float] = field(default_factory=lambda: [0.5, 24, 168, 720, 2160])  # 30m, 1d, 7d, 30d, 90d
-    relevance_threshold: float = 0.6           # 关联度阈值（低于此值丢弃）
+    batch_context_ratio: float = 0.125
+    lookback_windows: list[float] = field(default_factory=lambda: [0.5, 24, 168, 720, 2160])
+    relevance_threshold: float = 0.6
 
 
 @dataclass
 class AdjudicationAgentConfig:
-    """Layer 3 — 最终研判智能体配置"""
+    """Layer 3 — 最终研判智能体"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
@@ -152,7 +161,7 @@ class AdjudicationAgentConfig:
 
 @dataclass
 class FeedbackAgentConfig:
-    """反馈智能体配置"""
+    """反馈智能体"""
     enabled: bool = True
     backend: BackendType = BackendType.DEEPSEEK
     model_name: str = "deepseek-v4-flash"
@@ -173,18 +182,21 @@ class FeedbackAgentConfig:
     max_tokens: int = 1024
 
 
+# ============================================================
+# 逐条扫描 / GeoIP 配置
+# ============================================================
+
 @dataclass
-class LiveScanAgentConfig:
-    """逐条评判队列扫描配置 — 定时触发 + 链式连续消费"""
-    enabled: bool = True                        # 管理员开关
-    idle_poll_interval_seconds: float = 600.0   # 空闲轮询间隔（默认 10 分钟）
-    batch_size_multiplier: float = 6.0          # 批次大小 = 并发数 × 倍数
-    max_concurrent_analyses: int = 8            # 最大并发分析数
-    start_from: str = "oldest"                  # "oldest" | "newest" | "last_id:N"
+class LiveScanConfig:
+    """逐条评判队列扫描配置"""
+    enabled: bool = True
+    idle_poll_interval_seconds: float = 600.0
+    batch_size_multiplier: float = 6.0
+    max_concurrent_analyses: int = 8
+    start_from: str = "oldest"
 
     @property
     def batch_size(self) -> int:
-        """动态计算批次大小 = 并发数 × 倍数（至少为并发数，确保每线程至少 1 条）"""
         return max(self.max_concurrent_analyses,
                    int(self.max_concurrent_analyses * self.batch_size_multiplier))
 
@@ -193,46 +205,141 @@ class LiveScanAgentConfig:
 class GeoipConfig:
     """GeoIP 数据库自动更新配置"""
     enabled: bool = True
-    update_interval_hours: int = 168          # 自动更新间隔（小时），7 天
-    download_url: str = (
-        "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
-    )
-    db_path: str = "data_gateway/GeoLite2-City.mmdb"  # 相对于项目根目录
+    update_interval_hours: int = 168
+    download_url: str = "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz"
+    db_path: str = "data_gateway/GeoLite2-City.mmdb"
 
+
+# ============================================================
+# 总配置（所有节的聚合）
+# ============================================================
 
 @dataclass
-class OrchestratorConfig:
-    """编排器总配置 — 三层智能体架构"""
+class FullConfig:
+    """所有配置节的聚合 — get_config() 无参调用时返回"""
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    backends: BackendsConfig = field(default_factory=BackendsConfig)
     screening: ScreeningAgentConfig = field(default_factory=ScreeningAgentConfig)
     backtrack: BacktrackAgentConfig = field(default_factory=BacktrackAgentConfig)
     adjudication: AdjudicationAgentConfig = field(default_factory=AdjudicationAgentConfig)
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
-    live_scan: LiveScanAgentConfig = field(default_factory=LiveScanAgentConfig)
+    live_scan: LiveScanConfig = field(default_factory=LiveScanConfig)
     geoip: GeoipConfig = field(default_factory=GeoipConfig)
-    # 全局后端连接池配置
-    default_backends: dict[BackendType, LLMBackendConfig] = field(default_factory=dict)
 
-    def __post_init__(self):
-        if BackendType.OPENAI not in self.default_backends:
-            self.default_backends[BackendType.OPENAI] = LLMBackendConfig(
-                backend_type=BackendType.OPENAI,
-                model_name="gpt-4o-mini",
-                api_base="https://api.openai.com/v1",
-                api_key="",
-            )
-        if BackendType.LMSTUDIO not in self.default_backends:
-            self.default_backends[BackendType.LMSTUDIO] = LLMBackendConfig(
-                backend_type=BackendType.LMSTUDIO,
-                model_name="qwen3.5-9b",
-                api_base="http://localhost:1234/v1",
-                api_key="lm-studio",
-            )
-        if BackendType.DEEPSEEK not in self.default_backends:
-            self.default_backends[BackendType.DEEPSEEK] = LLMBackendConfig(
-                backend_type=BackendType.DEEPSEEK,
-                model_name="deepseek-v4-flash",
-                api_base="https://api.deepseek.com",
-                api_key="",
-                timeout=120.0,
-                max_retries=5,
-            )
+    def to_dict(self) -> dict:
+        """序列化为 JSON 兼容的字典（枚举转字符串）。"""
+        return {
+            "database": {
+                "host": self.database.host,
+                "port": self.database.port,
+                "user": self.database.user,
+                "password": self.database.password,
+                "database": self.database.database,
+                "charset": self.database.charset,
+            },
+            "backends": {
+                "openai": _backend_to_dict(self.backends.openai),
+                "lmstudio": _backend_to_dict(self.backends.lmstudio),
+                "deepseek": _backend_to_dict(self.backends.deepseek),
+            },
+            "screening": _screening_to_dict(self.screening),
+            "backtrack": _backtrack_to_dict(self.backtrack),
+            "adjudication": _adjudication_to_dict(self.adjudication),
+            "feedback": _feedback_to_dict(self.feedback),
+            "live_scan": {
+                "enabled": self.live_scan.enabled,
+                "idle_poll_interval_seconds": self.live_scan.idle_poll_interval_seconds,
+                "batch_size_multiplier": self.live_scan.batch_size_multiplier,
+                "max_concurrent_analyses": self.live_scan.max_concurrent_analyses,
+                "start_from": self.live_scan.start_from,
+            },
+            "geoip": {
+                "enabled": self.geoip.enabled,
+                "update_interval_hours": self.geoip.update_interval_hours,
+                "download_url": self.geoip.download_url,
+                "db_path": self.geoip.db_path,
+            },
+        }
+
+
+def _backend_to_dict(be):
+    return {
+        "model_name": be.model_name,
+        "api_base": be.api_base,
+        "api_key": be.api_key,
+        "temperature": be.temperature,
+        "max_tokens": be.max_tokens,
+        "max_context_tokens": be.max_context_tokens,
+        "timeout": be.timeout,
+        "max_retries": be.max_retries,
+        "auto_load": be.auto_load,
+        "load_config": be.load_config,
+        "thinking_enabled": be.thinking_enabled,
+        "reasoning_effort": be.reasoning_effort,
+        "include_reasoning": be.include_reasoning,
+    }
+
+
+def _screening_to_dict(s):
+    return {
+        "enabled": s.enabled,
+        "backend": s.backend.value,
+        "model_name": s.model_name,
+        "system_prompt": s.system_prompt,
+        "temperature": s.temperature,
+        "max_tokens": s.max_tokens,
+        "max_context_tokens": s.max_context_tokens,
+        "confidence_threshold_dangerous": s.confidence_threshold_dangerous,
+        "confidence_threshold_suspicious": s.confidence_threshold_suspicious,
+    }
+
+
+def _backtrack_to_dict(b):
+    return {
+        "enabled": b.enabled,
+        "backend": b.backend.value,
+        "model_name": b.model_name,
+        "system_prompt": b.system_prompt,
+        "temperature": b.temperature,
+        "max_tokens": b.max_tokens,
+        "lookback_windows": b.lookback_windows,
+        "relevance_threshold": b.relevance_threshold,
+        "batch_context_ratio": b.batch_context_ratio,
+    }
+
+
+def _adjudication_to_dict(a):
+    return {
+        "enabled": a.enabled,
+        "backend": a.backend.value,
+        "model_name": a.model_name,
+        "system_prompt": a.system_prompt,
+        "temperature": a.temperature,
+        "max_tokens": a.max_tokens,
+    }
+
+
+def _feedback_to_dict(f):
+    return {
+        "enabled": f.enabled,
+        "backend": f.backend.value,
+        "model_name": f.model_name,
+        "system_prompt": f.system_prompt,
+        "temperature": f.temperature,
+        "max_tokens": f.max_tokens,
+    }
+
+
+__all__ = [
+    "BackendType",
+    "DatabaseConfig",
+    "LLMBackendConfig",
+    "BackendsConfig",
+    "ScreeningAgentConfig",
+    "BacktrackAgentConfig",
+    "AdjudicationAgentConfig",
+    "FeedbackAgentConfig",
+    "LiveScanConfig",
+    "GeoipConfig",
+    "FullConfig",
+]

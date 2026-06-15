@@ -1,8 +1,7 @@
 """
 数据库连接工具 — 供 database/ 内部模块共享使用
 ================================================
-提供统一的 MySQL 连接工厂和游标上下文管理器，
-消除 writer.py / lists_manager.py 中的重复代码。
+提供统一的 MySQL 连接工厂和游标上下文管理器。
 
 用法:
     from database.connection import db_connect, db_cursor
@@ -20,15 +19,27 @@
         rows = cursor.fetchall()  # list[dict]
 """
 
+import logging
 from contextlib import contextmanager
 
 import pymysql
-from config.shared_config import DB_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 def db_connect() -> pymysql.connections.Connection:
     """建立数据库连接（调用方负责关闭）。"""
-    return pymysql.connect(**DB_CONFIG, connect_timeout=5)
+    from config import get_config
+    db = get_config("database")
+    return pymysql.connect(
+        host=db.host,
+        user=db.user,
+        password=db.password,
+        database=db.database,
+        port=db.port,
+        charset=db.charset,
+        connect_timeout=5,
+    )
 
 
 @contextmanager

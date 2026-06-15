@@ -34,11 +34,18 @@ multi_agent_system/memory/data/patterns/retired/*.json
 multi_agent_system/memory/data/principles_candidate.json
 multi_agent_system/memory/data/changelog.jsonl
 multi_agent_system/memory/data/snapshots/*.json
+multi_agent_system/memory/data/feedback.db-shm
+multi_agent_system/memory/data/feedback.db-wal
 
 # ============================================================
 # Config — contains API keys, must NOT be committed
 # ============================================================
 config/config_user.json
+
+# ============================================================
+# P4 controller — runtime crash dump
+# ============================================================
+crash.txt
 
 # ============================================================
 # Live scan checkpoint
@@ -56,3 +63,12 @@ config/config_user.json
 # ============================================================
 .DS_Store
 Thumbs.db
+
+# ============================================================
+# AI assistants — personal config, varies per developer
+# ============================================================
+**/.codewhale/*
+!**/.codewhale/constitution.json
+.deepseek/
+.claude/
+CLAUDE.md

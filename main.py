@@ -47,7 +47,6 @@ import signal
 import sys
 import threading
 import time
-from pathlib import Path
 
 from multi_agent_system import MultiAgentSystem
 
@@ -114,7 +113,7 @@ _global_state = {
     "verdict_write_queue": None,
     "verdict_stop_event": None,
     "backend_server": None,
-    "backend_thread": None,
+    "backend_port": None,
     "backend_port": 8080,
 }
 
@@ -141,7 +140,7 @@ def print_banner():
 # ============================================================
 # WebUI: FastAPI 统一后端
 # ============================================================
-def start_backend(port: int = 8080) -> threading.Thread:
+def start_backend(port: int = 8080) -> None:
     """
     启动 FastAPI 统一后端服务器：
       - REST API 端点（配置、员工、黑白名单、告警等）
@@ -157,37 +156,24 @@ def start_backend(port: int = 8080) -> threading.Thread:
 
     _global_state["backend_port"] = port
 
-    def _run_backend():
-        try:
-            from backend.api_server import start_in_thread as _backend_start_in_thread
+    try:
+        from backend.api_server import start_backend as _start
 
-            _backend_start_in_thread(host="0.0.0.0", port=port)
-            _logger.info(
-                _green(
-                    f"[WebUI] FastAPI 后端服务已启动 [OK] -> http://0.0.0.0:{port}"
-                )
+        _start(port=port)
+        _logger.info(
+            _green(f"[WebUI] FastAPI 后端服务已启动 [OK] -> http://0.0.0.0:{port}")
+        )
+    except OSError as e:
+        if hasattr(e, "errno") and e.errno == 10048:
+            _logger.warning(
+                _yellow(f"[WebUI] 端口 {port} 已被占用，使用 --frontend-port 指定其他端口")
             )
-        except OSError as e:
-            if hasattr(e, "errno") and e.errno == 10048:  # Address already in use
-                _logger.warning(
-                    _yellow(
-                        f"[WebUI] 端口 {port} 已被占用，"
-                        f"使用 --frontend-port 指定其他端口"
-                    )
-                )
-            else:
-                _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
-        except Exception as e:
+        else:
             _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
-            import traceback
-            traceback.print_exc()
-
-    thread = threading.Thread(
-        target=_run_backend, daemon=True, name="FastAPI-Backend"
-    )
-    thread.start()
-    _global_state["backend_thread"] = thread
-    return thread
+    except Exception as e:
+        _logger.error(_red(f"[WebUI] 后端服务启动失败: {e}"))
+        import traceback
+        traceback.print_exc()
 
 
 def stop_backend():
@@ -276,23 +262,11 @@ async def start_multi_agent_system(
 
     _logger.info(_cyan("[Layer 2] 启动多智能体系统..."))
     try:
-        from config.loader import load_config
+        # 复用全局配置（已在 async_main 开头加载，store 自动返回缓存）
+        from config import get_config
+        config = get_config()  # FullConfig，不再次读盘
 
-        # 加载配置（默认 + 用户覆盖）
-        config_path = Path(__file__).parent / "config" / "config_user.json"
-        if config_path.exists():
-            config = load_config(str(config_path))
-        else:
-            _logger.warning(
-                _yellow("[Layer 2] config_user.json 不存在，使用默认配置")
-            )
-            config = load_config()
-
-        # 写入全局活跃配置单例
-        from config.active import set_active_config
-        set_active_config(config)
-
-        system = MultiAgentSystem(orchestrator_config=config)
+        system = MultiAgentSystem()  # 配置自动从缓存加载
         await system.start()
 
         _global_state["multi_agent_system"] = system
@@ -339,6 +313,7 @@ async def start_multi_agent_system(
                 push_alert(
                     ip=src_ip,
                     label=" ".join(label_parts),
+                    source="AI研判",
                     details={
                         "verdict": verdict.verdict.value,
                         "severity": verdict.severity.value,
@@ -370,6 +345,7 @@ async def start_multi_agent_system(
                 orchestrator=system._orchestrator,
                 config=config.live_scan,
                 verdict_queue=_global_state.get("verdict_write_queue"),
+                deletion_queue=_global_state.get("deletion_write_queue"),
             )
             _global_state["live_scanner"] = live_scanner
 
@@ -484,10 +460,10 @@ def _start_geoip_auto_update_thread(args: argparse.Namespace):
     """启动 GeoIP 数据库定期自动更新线程"""
     interval_hours = args.geoip_update_interval
     if interval_hours is None:
-        # 从全局活跃配置读取
+        # 从配置缓存读取
         try:
-            from config.active import get_active_config
-            geoip_cfg = get_active_config().geoip
+            from config import get_config
+            geoip_cfg = get_config("geoip")
             if not geoip_cfg.enabled:
                 _logger.info("[GeoIP] 配置文件中已禁用自动更新")
                 return
@@ -539,7 +515,7 @@ def health_check_loop():
             "multi_agent": _global_state.get("multi_agent_system") is not None,
             "live_scanner": _global_state.get("live_scanner") is not None,
             "data_gateway": _global_state.get("data_bridge") is not None,
-            "backend": _global_state.get("backend_thread") is not None,
+            "backend": _global_state.get("backend_port") is not None,
             "uptime": time.time() - _global_state.get("start_time", time.time()),
         }
 
@@ -584,13 +560,17 @@ async def async_main(args: argparse.Namespace):
     _global_state["backend_port"] = args.frontend_port
     print_banner()
 
-    # ---- 初始化：注入示例数据（黑名单/白名单/员工IP映射） ----
-    try:
-        from database.seed import seed_all
-        seed_all()
-        _logger.info(_green("[数据库] 示例数据注入完成"))
-    except Exception as e:
-        _logger.warning(_yellow(f"[数据库] 示例数据注入失败 (非致命): {e}"))
+    # ====== 0. 加载配置（必须最先执行，在数据库模块导入前完成）======
+
+    _logger.info(_cyan("[配置] 加载系统配置（单次读取，结构体缓存）..."))
+    from config import get_config
+    config = get_config()  # FullConfig — 触发文件加载，构建所有结构体
+
+    _logger.info(
+        _green(
+            f"[配置] 系统配置已加载 [OK] "
+        )
+    )
 
     # ---- 初始化：从 MySQL 加载黑白名单/IP映射到常驻内存 ----
     try:
@@ -606,6 +586,13 @@ async def async_main(args: argparse.Namespace):
     _global_state["verdict_write_queue"] = _vq
     _global_state["verdict_stop_event"] = _ve
     _logger.info(_green("[数据库] 判定批量写入器已启动 [OK]"))
+
+    # ---- 启动安全流量删除写入器 ----
+    from database.writer import start_deletion_writer, stop_deletion_writer as _stop_dw
+    _dq, _de = start_deletion_writer()
+    _global_state["deletion_write_queue"] = _dq
+    _global_state["deletion_stop_event"] = _de
+    _logger.info(_green("[数据库] 安全流量删除写入器已启动 [OK]"))
 
     # ---- 启动顺序 ----
 
@@ -715,12 +702,18 @@ async def async_main(args: argparse.Namespace):
     # 2. 停止多智能体系统
     await stop_multi_agent_system()
 
-    # 2.5 停止判定批量写入器（在多智能体之后、数据网关之前）
+    # 2.5 停止判定批量写入器 + 安全流量删除写入器（在多智能体之后、数据网关之前）
     _ve = _global_state.get("verdict_stop_event")
     if _ve is not None:
         from database.writer import stop_verdict_writer as _stop_vw
         _stop_vw(_ve)
         _logger.info(_green("[数据库] 判定批量写入器已停止"))
+
+    _de = _global_state.get("deletion_stop_event")
+    if _de is not None:
+        from database.writer import stop_deletion_writer as _stop_dw
+        _stop_dw(_de)
+        _logger.info(_green("[数据库] 安全流量删除写入器已停止"))
 
     # 3. 停止数据网关
     stop_data_gateway()

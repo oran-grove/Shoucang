@@ -4,7 +4,7 @@
 
 ## 概览
 
-传统 DLP 方案走到头了——要么纯硬件规则匹配，漏检太高；要么纯软件旁路分析，拦截来不及。守藏把 P4 交换机搬进数据面，在交换机 ASIC 里直接把流特征抠出来，由 P4 控制器和数据网关做毫秒级实时处理；判不准的，沉淀到 MySQL，由多智能体系统跑异步深度分析，挖出那些跨天、跨周、碎片拼图式的隐蔽泄密。关键是深度分析生成的策略能直接下发 P4 流表规则，让下一次同类攻击在硬件层就被截断。
+传统 DLP 方案要么纯硬件规则匹配，漏检太高；要么纯软件旁路分析，拦截来不及。守藏把 P4 交换机搬进数据面，在交换机 ASIC 里直接把流特征抠出来，由 P4 控制器和数据网关做毫秒级实时处理；判不准的，沉淀到 MySQL，由多智能体系统跑异步深度分析，挖出那些跨天、跨周、碎片拼图式的隐蔽泄密。深度分析生成的策略能直接下发 P4 流表规则，让下一次同类攻击在硬件层就被截断。
 
 ## 系统架构
 
@@ -28,7 +28,6 @@ graph TD
     classDef traffic fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#4a148c,rx:5,ry:5;
     classDef hardware fill:#eceff1,stroke:#455a64,stroke-width:2px,color:#263238,rx:5,ry:5;
     classDef agentBrain fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:5,ry:5;
-    classDef slowBrain fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1,rx:5,ry:5;
     classDef data fill:#fff8e1,stroke:#f57f17,stroke-width:2px,color:#e65100,rx:10,ry:10;
     classDef action fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#b71c1c,rx:5,ry:5;
     classDef alert fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#bf360c,rx:20,ry:20;
@@ -58,42 +57,33 @@ graph TD
         P4Switch -.->|匹配拦截规则| HardwareDrop
     end
 
-    subgraph Layer2 [多智能体系统 - 深度分析]
-        FastAgent(多智能体编排器):::agentBrain
-        RealTimeAnalysis{检测/关联/研判管线}:::agentBrain
+    subgraph Layer2 [多智能体系统 — 深度分析]
+        Orchestrator(多智能体编排器):::agentBrain
+        Pipeline{L1筛查 → L2回溯 ⇄ L3研判}:::agentBrain
         LogGenerator[生成实时流量日志]:::agentBrain
 
-        FeatureExtract -->|推送实时行为特征| FastAgent
-        FastAgent -->|毫秒级流测与匹配| RealTimeAnalysis
-        RealTimeAnalysis -->|安全: 丢弃特征| NormalFeature[释放特征缓存]:::traffic
+        FeatureExtract -->|推送实时行为特征| Orchestrator
+        Orchestrator -->|毫秒级流测与匹配| Pipeline
+        Pipeline -->|安全: 丢弃特征| NormalFeature[释放特征缓存]:::traffic
     end
 
-    RealTimeAnalysis -->|异常: 下发拦截规则| HardwareDrop
-    RealTimeAnalysis -->|未知: 记录数据| LogGenerator
+    Pipeline -->|异常: 下发拦截规则| HardwareDrop
+    Pipeline -->|未知: 记录数据| LogGenerator
 
-    subgraph Layer3 [深度分析子模块]
+    subgraph Layer3 [数据网关]
         direction LR
         HistoryLog[(历史日志数据库)]:::data
-        KnowledgeGraph[(安全知识图谱)]:::data
-        SlowAgent(基线画像 + 时序异常检测):::slowBrain
-        DeepAnalysis[异步深度关联分析<br/>挖掘长期/低频/碎片化泄密]:::slowBrain
-        StrategyUpdate[生成新拦截策略与特征模型]:::slowBrain
+        DataBridge[UDP数据接收 + GeoIP富化]:::agentBrain
+        BatchWriter[队列攒批写入MySQL]:::agentBrain
 
         LogGenerator -->|数据沉淀| HistoryLog
-        HistoryLog --> SlowAgent
-        KnowledgeGraph --> SlowAgent
-        SlowAgent --> DeepAnalysis
-        DeepAnalysis --> StrategyUpdate
+        DataBridge -->|业务富化| BatchWriter
+        BatchWriter -->|持久化| HistoryLog
     end
-
-    StrategyUpdate -.->|动态下发隐蔽威胁特征| FastAgent
-    StrategyUpdate -.->|动态下发P4流表拦截规则| P4Switch
-    StrategyUpdate ==>|推送泄密告警与分析报告| WebUI
 
     HistoryLog -->|多维统计与日志审计| WebUI
     ConfigMgr -.->|自定义规则| P4Switch
-    ConfigMgr -.->|更新检测阈值与运行配置| FastAgent
-    ConfigMgr -.->|更新Prompt/维护知识图谱| SlowAgent
+    ConfigMgr -.->|更新检测阈值与运行配置| Orchestrator
 ```
 
 ## 四层联动
@@ -101,24 +91,23 @@ graph TD
 | 层级 | 定位 | 技术栈 | 端口 |
 |------|------|--------|------|
 | **P4 硬件层** | 数据面包转发、特征提取、硬线速拦截 | P4 (BMv2) + pynng + Thrift + Flask | 5000 |
-| **多智能体系统（深度分析）** | 检测/关联/研判/反馈流水线 + 逐条分析扫描 | 五阶段管线 + LLM 后端（OpenAI/LMStudio/DeepSeek） | —（内部） |
-| **深度分析子模块** | 异步长周期分析、基线画像、策略反馈 | 基线画像 / 时序异常检测 + DeepSeek V4 | —（内部） |
-| **统一管理面** | Web 仪表盘、策略配置、告警处置、日志审计 | FastAPI + LayUI 纯静态前端 | 8080 |
-| **数据网关** | UDP 流量数据接收、GeoIP 富化、攒批入 MySQL | UDP socket + queue.Queue + PyMySQL | 9999 |
+| **多智能体系统** | L1筛查 → L2回溯 ⇄ L3研判 三层管线 + 逐条分析扫描 | 异步 LLM 后端（OpenAI/LMStudio/DeepSeek） | —（内部） |
+| **数据网关** | UDP 流量数据接收、P4 寄存器解析、GeoIP 富化、攒批入 MySQL | UDP socket + queue.Queue + PyMySQL | 9999 |
+| **统一管理面** | Web 仪表盘、策略配置、告警处置、日志审计、系统设置 | FastAPI + LayUI 纯静态前端 | 8080 |
 
-跨层闭环：深度分析子模块的策略输出可以直接向 P4 交换机下发流表规则，也可以反馈给检测阈值。管理面的人工处置（拉黑/加白）通过 FastAPI 后端注入 P4 硬件层。
+跨层闭环：深度分析生成的策略可直接向 P4 交换机下发流表规则，也可反馈给检测阈值。管理面的人工处置（拉黑/加白、配置修改）通过 FastAPI 后端同步至各子系统。
 
 ## 快速开始
 
 ```bash
-# 1. 创建虚拟环境，安装依赖
+# 1. 虚拟环境
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1      # Windows PowerShell
 pip install -r requirements.txt
 
 # 2. 初始化 MySQL 数据库
 mysql -u root -p -e "source database/create_database.sql"
-# 默认连接: root / 0918 @ localhost:3306 → insider_threat_db
+# 默认连接: root / (在 config_user.json 中设置密码) @ localhost:3306 → insider_threat_db
 
 # 3. 全量启动
 python main.py
@@ -127,37 +116,38 @@ python main.py
 # http://localhost:8080
 ```
 
-启动参数一览：
+启动参数：
 
 | 参数 | 作用 |
 |------|------|
 | `python main.py` | 全量启动（四层 + 前端） |
 | `--no-llm` | 禁用所有 LLM 智能体，仅保留 P4 + 数据网关 + 前端 |
-| `--no-slow-brain` | 仅禁用深度分析子模块（基线画像+时序异常） |
 | `--no-live-scan` | 禁用逐条分析队列扫描 |
 | `--no-p4` | 禁用 P4 控制器 |
-| `--no-data-gateway` | 禁用数据网关 (UDP :9999 + MySQL 写入) |
+| `--no-flow-data` | 禁用数据网关 (UDP :9999 + MySQL 写入) |
 | `--no-frontend` | 禁用 Web 前端 |
 | `--frontend-port 3000` | 指定前端端口（默认 8080） |
 | `--dry-run` | 打印启动配置，不实际运行 |
 | `--update-geoip-now` | 启动时立即更新 GeoIP 数据库 |
-| `--geoip-update-interval 168` | 自定义 GeoIP 更新间隔（小时），0 禁用 |
 
 ## 多智能体分析流水线
 
-多智能体系统的核心是一条五阶段固定流水线：
+核心是一条三层异步管线（`multi_agent_system/orchestrator.py`）：
 
 ```
-FlowEvent → 检测 → 关联 → 研判 → 规则自生成 → 反馈记录
+FlowEvent → L1筛查 → L2回溯 ⇄ L3研判 → 反馈记录
+                 ↓                    ↓
+              dangerous          safe/dangerous
+                 ↓                    ↓
+              前端告警            前端告警 / 丢弃
 ```
 
-- **检测**（始终执行）：轻量模型对单条流做快速判定。结论为 SAFE 则短路退出，不再进入后续阶段。
-- **关联**（仅 SUSPICIOUS/MALICIOUS 触发）：以 IP 为键缓冲时间窗口内的可疑流，攒够阈值后批量送入模型做关联分析。
-- **研判**：综合检测结果和关联结果，给出最终威胁判定和处置建议。
-- **规则自生成**：若置信度超过阈值且判定为 MALICIOUS，自动生成黑名单规则写入知识库。
-- **反馈记录**：归档判定结果，供管理员事后审查和标注。
+- **L1 筛查**（`agents/screening_agent.py`）：快速分类。`dangerous`→直接告警，`safe`→丢弃，`suspicious`→进入 L2。使用双阈值校准：恶意置信度阈值 0.85，可疑置信度阈值 0.50。
+- **L2 回溯**（`agents/backtrack_agent.py`）：查询 DB 中同源 IP 在回溯窗口内的历史相似记录，LLM 过滤关联度。回溯窗口：[0.5h, 24h, 168h, 720h, 2160h]。
+- **L3 研判**（`agents/adjudication_agent.py`）：综合原始流量 + 全部历史关联数据，最终判定。`safe`→丢弃，`dangerous`→告警，`suspicious`→扩展回溯窗口继续循环。
+- **反馈**（`agents/feedback_agent.py`）：处理管理员反馈，分析误报/漏报模式，自适应调整规则。
 
-每个智能体可以独立配置后端和模型——检测跑本地 qwen3.5-9b，研判调云端 GPT-4o，反馈用 DeepSeek V4，都是可行的异构组合。
+每个智能体可独立配置后端和模型——筛查跑 DeepSeek V4 Flash，研判跑 GPT-4o，反馈用本地 LM Studio，都是可行的异构组合。
 
 ## 配置管理
 
@@ -170,47 +160,53 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ```
 
 设计原则：
-- `config_default.json` 是权威参考，不直接编辑
-- 日常调参只动 `config_user.json`
-- 前端通过 REST API 读写配置，从不直接碰 JSON 文件
-- 子模块不直接读 JSON——统一走 `config/loader.py`
-
-支持三种 LLM 后端：**OpenAI**（含所有兼容 API）、**LM Studio**（本地模型，自动加载/卸载）、**DeepSeek V4**（支持 reasoning_effort 和 thinking 模式）。
+- `config_default.json` 是权威模板，日常调参只动 `config_user.json`
+- `config_user.json` 在 `.gitignore` 中，API 密钥和数据库密码不会外泄
+- 配置在内存中以类型化结构体（dataclass）缓存，通过 `get_config("section")` 按节获取
+- 前端通过 REST API 读写配置，后端通过 `save_config` / `save_config_dict` 写入并刷新缓存
+- 支持三种 LLM 后端：**OpenAI**（含所有兼容 API）、**LM Studio**（本地模型，自动加载/卸载）、**DeepSeek V4**（支持 reasoning_effort 和 thinking 模式）
 
 ## 项目结构
 
 ```
 .
 ├── main.py                    # 唯一入口，启动全部组件
-├── config/                    # 统一配置（schema + loader + shared）
+├── config/                    # 统一配置
 │   ├── config_default.json    #   出厂默认配置
-│   ├── config_user.json       #   用户覆盖配置
-│   ├── schema.py              #   数据模型定义
-│   ├── loader.py              #   加载/合并/校验/保存
-│   └── shared_config.py       #   数据库连接、路径等常量
+│   ├── config_user.json       #   用户覆盖配置（gitignored）
+│   ├── schema.py              #   配置结构体定义（DatabaseConfig、BackendsConfig 等）
+│   ├── store.py               #   ConfigStore 单例 + get_config / save_config API
+│   ├── loader.py              #   内部辅助（合并、校验、增量计算）
+│   └── shared_config.py       #   系统级常量（路径、批次参数、GeoIP 常量）
 ├── p4_controller/             # P4 硬件控制面
 │   ├── control.py             #   Flask 守护进程 + pynng 监听 + Thrift 遥测
-│   ├── add_ip.py              #   黑白名单操作的统一入口
-│   ├── analyzer.py            #   流量分析器
-│   └── data_packer.py         #   数据包处理（特征向量构建）
+│   ├── add_ip.py              #   SSH 远程注入 P4 流表规则
+│   ├── analyzer.py            #   流量特征提取 / 规则匹配
+│   └── data_packer.py         #   P4 寄存器数据打包 / 合并流表
 ├── multi_agent_system/        # 多智能体系统
-│   ├── __init__.py            #   MultiAgentSystem 主类
-│   ├── orchestrator.py        #   编排器（流水线调度）
-│   ├── agents/                #   检测 / 关联 / 研判 / 反馈 / 基线 / 时序
-│   ├── backends/               #   OpenAI / LMStudio / DeepSeek 后端
-│   ├── core/                  #   消息模型 + 知识库引擎
-│   └── bus/                   #   消息总线
+│   ├── orchestrator.py        #   编排器（三层管线调度）
+│   ├── agents/                #   screening / backtrack / adjudication / feedback
+│   ├── backends/              #   OpenAI / LMStudio / DeepSeek 后端
+│   ├── core/                  #   BaseAgent 基类 + 消息数据模型
+│   ├── memory/                #   模式卡片 / 聚类 / 进化 / 周度提取
+│   └── orchestrators/         #   LiveScanOrchestrator 逐条扫描调度
 ├── backend/                   # FastAPI 统一后端
 │   └── api_server.py          #   REST API + 前端静态文件托管
 ├── database/                  # 数据持久化
-│   ├── writer.py              #   队列攒批写入 MySQL
-│   ├── lists_manager.py       #   黑白名单 / IP 映射缓存
+│   ├── connection.py          #   数据库连接工厂（通过 get_config("database") 获取连接参数）
+│   ├── writer.py              #   双队列攒批写入（INSERT + UPDATE）
+│   ├── lists_manager.py       #   黑白名单 / IP 映射内存缓存
 │   └── create_database.sql    #   建库 DDL
-├── data_gateway/              # 数据网关 (UDP 接收 + GeoIP + DB 写入)
-│   └── data_bridge.py         #   流量数据合并 + GeoIP 富化
-├── p4_program/                # P4 交换机程序源码（独立编译）
+├── data_gateway/              # 数据网关
+│   └── data_bridge.py         #   UDP :9999 接收 + P4 寄存器解析 + GeoIP 富化
+├── frontend/                  # 纯静态前端（LayUI 2.6）
+│   ├── index.html             #   主框架
+│   ├── page/                  #   各功能页面（智能体配置、员工管理、IP管理、系统设置等）
+│   ├── lib/                   #   第三方库（LayUI、jQuery、Font Awesome、ECharts）
+│   └── api/                   #   前端静态 API mock（init.json 菜单配置等）
+├── bm_runtime/                # BMv2 交换机 Thrift 运行时（自动生成）
+├── p4_program/                # P4 交换机程序源码
 │   └── data_platform.txt
-├── frontend/                  # 纯静态前端（LayUI）
 └── requirements.txt
 ```
 
@@ -228,8 +224,8 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 
 ## 约束与约定
 
-- **数据库**：MySQL 是唯一数据源。所有 DB 访问必须通过 `database/` 模块暴露的接口，禁止各模块私自打开连接。
-- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码中硬编码。
+- **数据库**：MySQL 是唯一数据源。所有 DB 访问通过 `database/` 模块暴露的接口，禁止各模块私自打开连接。
+- **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。数据库密码在 `config_user.json` 的 `database.password` 字段配置，`database/connection.py` 通过 `get_config("database")` 直接获取，各模块不直接读取配置文件。
 - **P4 控制器**：模块支持 `try: from . import` 双模式导入（包内/独立运行），修改时保持兼容。
 - **GeoIP**：`GeoLite2-City.mmdb` 通过 jsDelivr CDN 每 7 天自动更新，`maxminddb` 包缺失时自动降级跳过。
 - **前端**：无构建工具，FastAPI 直接托管 `frontend/` 目录。前端通过 REST API 与后端通信，不直接读配置或数据库。

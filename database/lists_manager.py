@@ -348,31 +348,14 @@ def get_traffic_logs(limit: int = 200,
             cursor.execute(
                 f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
                 "protocol, packet_time, traffic_size, is_blocked, entropy, "
-                "ai_analyzed, ai_verdict "
+                "ai_analyzed, ai_verdict, employee, country, "
+                "accumulated_pkts, accumulated_bytes "
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
                 params + [limit, offset],
             )
             return list(cursor.fetchall())
     except Exception as e:
         print(f"❌ [数据库] 查询流量日志失败: {e}")
-        return []
-
-
-def get_traffic_for_deep_analysis(lookback_days: int = 30) -> list:
-    """拉取指定天数内的流量数据，用于深度分析（基线画像 + 时序异常）。"""
-    try:
-        with db_cursor() as (conn, cursor):
-            cursor.execute(
-                "SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy "
-                "FROM traffic_log "
-                "WHERE packet_time >= DATE_SUB(NOW(), INTERVAL %s DAY) "
-                "ORDER BY src_ip, packet_time ASC",
-                (lookback_days,),
-            )
-            return list(cursor.fetchall())
-    except Exception as e:
-        print(f"❌ [数据库] 深度分析流量拉取失败: {e}")
         return []
 
 
@@ -461,3 +444,22 @@ def get_similar_flows_by_src_ip(
     except Exception:
         print(f"❌ [数据库] 查询相似流量失败 (src_ip={src_ip})")
         return []
+
+
+def delete_traffic_by_ids(ids: list[int]) -> int:
+    """批量删除 traffic_log 记录（用于安全流量清理）。返回实际删除行数。"""
+    if not ids:
+        return 0
+    try:
+        with db_cursor() as (conn, cursor):
+            placeholders = ", ".join(["%s"] * len(ids))
+            sql = f"DELETE FROM traffic_log WHERE id IN ({placeholders})"
+            cursor.execute(sql, ids)
+            deleted = cursor.rowcount
+            conn.commit()
+            if deleted:
+                print(f"   🧹 安全流量清理: {deleted} 条")
+            return deleted
+    except Exception as e:
+        print(f"   ❌ 安全流量清理失败: {e}")
+        return 0

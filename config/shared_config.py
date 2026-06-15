@@ -27,7 +27,7 @@ class DbConfig(TypedDict):
 DB_CONFIG: DbConfig = {
     'host': 'localhost',
     'user': 'root',
-    'password': '123321Hao!',
+    'password': '',
     'database': 'insider_threat_db',
     'port': 3306,
     'charset': 'utf8mb4',

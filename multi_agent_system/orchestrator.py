@@ -16,9 +16,14 @@ import logging
 from typing import Callable, Optional, cast
 from uuid import uuid4
 
-from .config import (
+from config.schema import (
+    AdjudicationAgentConfig,
+    BackendsConfig,
     BackendType,
-    OrchestratorConfig,
+    BacktrackAgentConfig,
+    FeedbackAgentConfig,
+    LLMBackendConfig,
+    ScreeningAgentConfig,
 )
 from .backends.base import LoadModelConfig
 from .core.message import (
@@ -65,24 +70,35 @@ class Orchestrator:
 
     def __init__(
         self,
-        config: Optional[OrchestratorConfig] = None,
+        backends: Optional[BackendsConfig] = None,
+        screening: Optional[ScreeningAgentConfig] = None,
+        backtrack: Optional[BacktrackAgentConfig] = None,
+        adjudication: Optional[AdjudicationAgentConfig] = None,
+        feedback: Optional[FeedbackAgentConfig] = None,
         alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = None,
         db_query_callback: Optional[Callable[[str, int, int, int], list[dict]]] = None,
     ):
-        self.config = config or OrchestratorConfig()
+        self.backends_cfg = backends or BackendsConfig()
+        self.screening_cfg = screening or ScreeningAgentConfig()
+        self.backtrack_cfg = backtrack or BacktrackAgentConfig()
+        self.adjudication_cfg = adjudication or AdjudicationAgentConfig()
+        self.feedback_cfg = feedback or FeedbackAgentConfig()
         self._backends: dict[BackendType, BaseLLMBackend] = {}
         self._agents: dict[str, object] = {}
         self._running = False
         self.alert_callback: Optional[Callable[[ThreatVerdict, FlowEvent], None]] = alert_callback
-        # DB查询回调：供 Layer 2 查询历史相似记录
-        # 签名: (src_ip: str, lookback_hours: int, max_records: int, min_similarity: float) -> list[dict]
         self._db_query_callback: Optional[Callable[..., list[dict]]] = db_query_callback
 
     # ========== 初始化 ==========
 
     def _init_backends(self) -> None:
         """根据配置创建 LLM 后端实例"""
-        for backend_type, backend_cfg in self.config.default_backends.items():
+        _backend_entries = [
+            (BackendType.OPENAI, self.backends_cfg.openai),
+            (BackendType.LMSTUDIO, self.backends_cfg.lmstudio),
+            (BackendType.DEEPSEEK, self.backends_cfg.deepseek),
+        ]
+        for backend_type, backend_cfg in _backend_entries:
             if backend_type in (BackendType.OPENAI, BackendType.DEEPSEEK):
                 if not backend_cfg.api_key or not backend_cfg.api_key.strip():
                     logger.warning(
@@ -140,7 +156,7 @@ class Orchestrator:
         """创建三层智能体并注入依赖"""
 
         # --- Layer 1: 筛查智能体 ---
-        scr_cfg = self.config.screening
+        scr_cfg = self.screening_cfg
         screening_agent = ScreeningAgent(
             name="ScreeningAgent",
             system_prompt=scr_cfg.system_prompt,
@@ -154,7 +170,7 @@ class Orchestrator:
         self._agents["screening"] = screening_agent
 
         # --- Layer 2: 回溯智能体 ---
-        bk_cfg = self.config.backtrack
+        bk_cfg = self.backtrack_cfg
         bk_ctx = self._get_backend_context_tokens(bk_cfg.backend)
         backtrack_agent = BacktrackAgent(
             name="BacktrackAgent",
@@ -170,7 +186,7 @@ class Orchestrator:
         self._agents["backtrack"] = backtrack_agent
 
         # --- Layer 3: 研判智能体 ---
-        adj_cfg = self.config.adjudication
+        adj_cfg = self.adjudication_cfg
         adj_ctx = self._get_backend_context_tokens(adj_cfg.backend)
         adjudication_agent = AdjudicationAgent(
             name="AdjudicationAgent",
@@ -185,7 +201,7 @@ class Orchestrator:
         self._agents["adjudication"] = adjudication_agent
 
         # --- 反馈智能体 ---
-        fb_cfg = self.config.feedback
+        fb_cfg = self.feedback_cfg
         feedback_agent = FeedbackAgent(
             name="FeedbackAgent",
             system_prompt=fb_cfg.system_prompt,
@@ -198,14 +214,13 @@ class Orchestrator:
 
     def _get_backend_context_tokens(self, backend_type: BackendType) -> int:
         """获取指定后端的 max_context_tokens，降级到默认值。"""
-        backend = self._backends.get(backend_type)
-        if backend and hasattr(backend, 'default_model'):
-            # 从 LLMBackendConfig 读取（_inject_agent_deps 会同步模型名）
-            pass
-        # 直接从 config 读取（初始化阶段 backend 可能尚未构建）
-        be_cfg = self.config.default_backends.get(backend_type)
-        if be_cfg:
-            return be_cfg.max_context_tokens
+        # 从 BackendsConfig 结构体读取（初始化阶段 backend 可能尚未构建）
+        if backend_type == BackendType.OPENAI:
+            return self.backends_cfg.openai.max_context_tokens
+        elif backend_type == BackendType.LMSTUDIO:
+            return self.backends_cfg.lmstudio.max_context_tokens
+        elif backend_type == BackendType.DEEPSEEK:
+            return self.backends_cfg.deepseek.max_context_tokens
         return 4096
 
     def _inject_agent_deps(self, agent, backend_type: BackendType) -> None:
@@ -313,7 +328,7 @@ class Orchestrator:
         logger.info("[%s] L1 判定可疑，进入 L2 历史回溯...", pipeline_id)
 
         # ========== Layer 2 ⇄ Layer 3 循环 ==========
-        backtrack_cfg = self.config.backtrack
+        backtrack_cfg = self.backtrack_cfg
         lookback_windows = list(backtrack_cfg.lookback_windows)
         total_windows = len(lookback_windows)
         lookback_hours: float = 0.0

@@ -1,6 +1,6 @@
 """
-第一类智能体队列调度器 — 逐条评判队列扫描
-==========================================
+多智能体逐条扫描调度器
+======================
 实时从 traffic_log 数据库拉取未分析的流量记录，
 逐条送入检测→关联→研判管线，并持久化分析结果。
 
@@ -10,7 +10,7 @@
 - 支持从指定位置开始扫描（oldest / newest / last_id:N）
 - 支持并发分析多条流量（max_concurrent_analyses 控制）
 - 支持管理员运行时开关（enabled 字段）
-- 分析结果回写 traffic_log（ai_analyzed / ai_verdict 字段）
+- 分析结果回写 traffic_log（可疑/恶意）或直接删除（安全）
 - 上次处理 ID 持久化到文件，重启后断点续扫
 
 用法:
@@ -48,7 +48,7 @@ _CHECKPOINT_FILE = PROJECT_ROOT / ".live_scan_checkpoint.json"
 
 class LiveScanOrchestrator:
     """
-    第一类智能体队列调度器 — 逐条评判队列扫描。
+    多智能体逐条扫描调度器。
 
     从 traffic_log 表中拉取未分析的流量记录（基于 id 游标），
     送入已启动的 Orchestrator 的 analyze_flow() 管线进行研判。
@@ -63,10 +63,12 @@ class LiveScanOrchestrator:
         orchestrator,  # Orchestrator 实例
         config,  # LiveScanAgentConfig
         verdict_queue: Optional[queue.Queue] = None,
+        deletion_queue: Optional[queue.Queue] = None,
     ):
         self._orchestrator = orchestrator
         self._config = config
         self._verdict_queue: Optional[queue.Queue] = verdict_queue
+        self._deletion_queue: Optional[queue.Queue] = deletion_queue
 
         self._running = False
         self._scan_task: Optional[asyncio.Task] = None
@@ -226,20 +228,26 @@ class LiveScanOrchestrator:
                     row_id, row.get("src_ip", "?"), verdict, result.confidence,
                 )
 
-                # 判定结果入队 → 数据库批量写入
-                self._enqueue_verdict(row_id, verdict)
+                if verdict == "safe":
+                    self._enqueue_deletion(row_id)
+                else:
+                    self._enqueue_verdict(row_id, verdict)
             else:
-                self._stats["total_safe"] += 1
+                # result 为 None 是异常情况，保留为可疑等待重试
+                self._stats["total_suspicious"] += 1
+                self._enqueue_verdict(row_id, "suspicious")
+                logger.warning("[LiveScan] id=%s 返回 None，标记为可疑", row_id)
+
+            # 成功 → 推进游标
+            if row_id > self._last_processed_id:
+                self._last_processed_id = row_id
 
         except Exception:
             self._stats["errors"] += 1
-            logger.exception("[LiveScan] 分析 id=%s 失败", row_id)
+            logger.exception("[LiveScan] 分析 id=%s 失败，不推进游标等待重试", row_id)
+            # 失败不推进游标 → 下次轮询自动重试，不操作数据库
 
-        finally:
-            # 无论成功失败都推进游标
-            if row_id > self._last_processed_id:
-                self._last_processed_id = row_id
-            self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
+        self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
 
     def _enqueue_verdict(self, row_id: int, verdict: str) -> None:
         """将判定结果放入队列，供 verdict_writer 批量 UPDATE 数据库。"""
@@ -254,6 +262,15 @@ class LiveScanOrchestrator:
                 "traffic_id": row_id,
                 "ai_verdict": ai_verdict,
             })
+        except queue.Full:
+            pass  # 队列满时丢弃，避免阻塞扫描管线
+
+    def _enqueue_deletion(self, row_id: int) -> None:
+        """将安全流量的 ID 放入删除队列，供 deletion_writer 批量 DELETE。"""
+        if self._deletion_queue is None:
+            return
+        try:
+            self._deletion_queue.put_nowait(row_id)
         except queue.Full:
             pass  # 队列满时丢弃，避免阻塞扫描管线
 

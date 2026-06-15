@@ -124,7 +124,7 @@ class ScreeningAgent(BaseAgent):
             flow_ids=[flow.flow_id],
             verdict=TrafficVerdict.SUSPICIOUS,
             severity=SeverityLevel.LOW,
-            confidence=0.3,
+            confidence=0.5,
             threat_type="未知",
             reasoning=reason,
             recommended_action="monitor",
@@ -133,6 +133,9 @@ class ScreeningAgent(BaseAgent):
     def classify_threshold(self, verdict: ThreatVerdict) -> str:
         """
         使用置信度阈值重新校准判定。
+
+        原则：只有 LLM 明确说 safe 才返回 safe（触发删除）。
+        可疑/危险的即便置信度不足也不降级为 safe，防止误删。
 
         Returns:
             "dangerous" / "suspicious" / "safe"
@@ -143,7 +146,8 @@ class ScreeningAgent(BaseAgent):
             return "dangerous"
         if verdict.confidence >= self.confidence_threshold_suspicious:
             return "suspicious"
-        return "safe"
+        # 非 safe 但置信度不足 → 保留为可疑，不降级删除
+        return "suspicious"
 
     @staticmethod
     def _get_pattern_context(flow: FlowEvent) -> str:

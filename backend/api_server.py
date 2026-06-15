@@ -7,37 +7,14 @@
 
 所有数据库访问通过 database 模块统一接口，不直接连接数据库。
 
-API 端点映射：
-  GET    /api/init           → 系统初始化信息
-  GET    /api/config          → 读取用户配置
-  POST   /api/config          → 保存用户配置
-  POST   /api/config/backend  → 保存后端大模型配置
-  POST   /api/config/reset    → 重置默认配置
-  GET    /api/employees       → 员工列表查询
-  POST   /api/employees       → 新增员工
-  PUT    /api/employees/{id}  → 编辑员工
-  DELETE /api/employees/{id}  → 删除员工
-  GET    /api/blacklist       → 黑名单列表
-  POST   /api/blacklist       → 加入黑名单
-  DELETE /api/blacklist/{id}  → 移除黑名单
-  GET    /api/whitelist       → 白名单列表
-  POST   /api/whitelist       → 加入白名单
-  DELETE /api/whitelist/{id}  → 移除白名单
-  GET    /api/traffic         → 流量/可疑事件列表
-  POST   /api/traffic         → 处理可疑事件（拉黑/忽视）
-  GET    /api/alerts          → 告警列表
-  POST   /api/alert           → 接收实时告警
-  POST   /api/clear           → 清理缓存
-  GET    /api/menus           → 菜单权限数据
-  GET    /api/ip_map          → IP-部门映射
-  GET    /api/status          → 系统状态 (CPU/RAM/网络)
-  GET    /api/health          → 健康检查
+告警数据以 traffic_log 表为唯一数据源。
 """
 
 import json
 import logging
 import os
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -47,87 +24,54 @@ from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# ---- 路径配置 ----
 from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
 
-# ---- 统一配置加载（通过 config 模块）----
-from config.loader import (
-    load_config_dict,
-    save_config_dict,
-    reset_user_config,
-)
+from config import get_config, reset_config, save_config_dict
 
 logger = logging.getLogger("UnifiedBackend")
 
 # ---- 系统性能采样（后台线程，避免阻塞异步事件循环）----
 _perf_lock = threading.Lock()
 _perf_cache = {
-    "cpu": 0.0,
-    "ram": 0.0,
-    "up_bytes": 0,   # 真实吞吐率 (bytes/s)
-    "down_bytes": 0,
+    "cpu": "0.0",
+    "ram": "0.0",
+    "up": "--",
+    "down": "--",
+    "updated": 0.0,
 }
-_last_net = None     # (bytes_sent, bytes_recv, timestamp)
-_perf_running = True
+_PERF_INTERVAL = 2.0
 
 
-def _perf_sampler(interval: float = 2.0):
-    """后台线程：周期性采样 CPU / RAM / 网络吞吐率"""
-    import time as _time
-    global _last_net, _perf_running
-
-    # 预热 psutil CPU 采样（第一次调用总是 0）
-    try:
-        import psutil
-        psutil.cpu_percent(interval=0.1)
-    except Exception:
-        pass
-
-    while _perf_running:
+def _perf_sampler():
+    """后台线程：采集系统 CPU/RAM/网络速率"""
+    import psutil
+    while True:
         try:
-            import psutil
-
-            # CPU / RAM — 瞬时快照
-            cpu = round(psutil.cpu_percent(interval=0.0), 1)
-            mem = psutil.virtual_memory()
-            ram = round(mem.percent, 1)
-
-            # 网络吞吐率 — 差分计算
-            net = psutil.net_io_counters()
-            now = _time.monotonic()
-            if _last_net is not None:
-                prev_sent, prev_recv, prev_time = _last_net
-                delta = now - prev_time
-                if delta > 1e-6:
-                    up_bytes = int((net.bytes_sent - prev_sent) / delta)
-                    down_bytes = int((net.bytes_recv - prev_recv) / delta)
-                else:
-                    up_bytes = 0
-                    down_bytes = 0
-            else:
-                up_bytes = 0
-                down_bytes = 0
-            _last_net = (net.bytes_sent, net.bytes_recv, now)
-
+            cpu = psutil.cpu_percent(interval=None)
+            ram = psutil.virtual_memory().percent
+            net_start = psutil.net_io_counters()
+            time.sleep(1)
+            net_end = psutil.net_io_counters()
+            up_speed = (net_end.bytes_sent - net_start.bytes_sent) / 1024
+            down_speed = (net_end.bytes_recv - net_start.bytes_recv) / 1024
             with _perf_lock:
-                _perf_cache["cpu"] = cpu
-                _perf_cache["ram"] = ram
-                _perf_cache["up_bytes"] = up_bytes
-                _perf_cache["down_bytes"] = down_bytes
+                _perf_cache["cpu"] = f"{cpu:.1f}"
+                _perf_cache["ram"] = f"{ram:.1f}"
+                _perf_cache["up"] = f"{up_speed:.1f} KB/s" if up_speed < 1024 else f"{up_speed/1024:.1f} MB/s"
+                _perf_cache["down"] = f"{down_speed:.1f} KB/s" if down_speed < 1024 else f"{down_speed/1024:.1f} MB/s"
+                _perf_cache["updated"] = time.time()
         except Exception:
             pass
+        time.sleep(_PERF_INTERVAL)
 
-        _time.sleep(interval)
 
-
-_perf_thread = threading.Thread(target=_perf_sampler, daemon=True, name="PerfSampler")
+_perf_thread = threading.Thread(target=_perf_sampler, daemon=True)
 _perf_thread.start()
 
-# ---- FastAPI 应用 ----
-app = FastAPI(title="守藏API", version="3.0.0", docs_url=None, redoc_url=None)
+# ---- FastAPI 应用实例 ----
+app = FastAPI(title="守藏 API", version="3.1.0")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -136,132 +80,242 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_should_serve_static = False
+_server_instance = None
 
 # ============================================================================
-# 数据模型
+# 统一数据转换：traffic_log 行 → 前端响应（中文字段）
 # ============================================================================
-class ConfigSaveRequest(BaseModel):
-    detection: Optional[dict] = None
-    correlation: Optional[dict] = None
-    judgment: Optional[dict] = None
-    feedback: Optional[dict] = None
-    backends: Optional[dict] = None
-    deep_analysis: Optional[dict] = None
+
+# ai_verdict → 人类可读
+_VERDICT_MAP = {2: "恶意", 1: "可疑", 0: "安全", None: "未分析"}
+_LEVEL_MAP = {"high": "高危", "medium": "中危", "low": "低危"}
+_VERDICT_TO_LEVEL = {2: "high", 1: "medium", 0: "low"}
 
 
-class BackendConfigSave(BaseModel):
-    backend: str
-    api_key: Optional[str] = None
-    model_name: Optional[str] = None
-    api_base: Optional[str] = None
-    auto_load: Optional[bool] = None
-    context_length: Optional[int] = None
-    flash_attention: Optional[bool] = None
+def _fmt_bytes(b: int) -> str:
+    if b is None:
+        b = 0
+    if b >= 1048576:
+        return f"{b / 1048576:.1f} MB"
+    if b >= 1024:
+        return f"{b / 1024:.1f} KB"
+    return f"{b} B"
 
 
-class EmployeeCreate(BaseModel):
-    number: str
-    ip: str
-    department: str
-    name: str
+def _enrich_traffic_row(row: dict) -> dict:
+    """将 traffic_log 数据库行补充为前端友好的格式。
 
+    保留原始英文字段以确保现有 JS 代码兼容，
+    同时增加中文显示字段。
+    """
+    av_raw = row.get("ai_verdict")
+    av: Optional[int] = int(av_raw) if av_raw is not None else None
 
-class EmployeeUpdate(BaseModel):
-    number: Optional[str] = None
-    ip: Optional[str] = None
-    department: Optional[str] = None
-    name: Optional[str] = None
+    # 威胁等级
+    level_key = _VERDICT_TO_LEVEL.get(av, "medium") if av is not None else "medium"
+    row["threat_level"] = level_key
+    row["threat_level_text"] = _LEVEL_MAP.get(level_key, "中危")
 
+    # 判定结果
+    row["verdict_text"] = _VERDICT_MAP.get(av, "未分析") if av is not None else "未分析"
 
-class BlacklistAdd(BaseModel):
-    ip: str
-    reason: Optional[str] = "手动添加"
+    # 处理状态：区分 AI 分析阶段 vs 管理员处理阶段
+    ai_done = row.get("ai_analyzed")
+    is_blocked = row.get("is_blocked")
+    if is_blocked:
+        row["status_text"] = "已拉黑"
+    elif not ai_done:
+        row["status_text"] = "等待 AI 分析"
+    else:
+        row["status_text"] = "待管理员处理"
 
+    # 流量大小格式化
+    row["traffic_size_text"] = _fmt_bytes(row.get("traffic_size") or 0)
 
-class WhitelistAdd(BaseModel):
-    ip: str
-    reason: Optional[str] = "手动添加"
+    # 拦截状态
+    row["block_text"] = "已拦截" if row.get("is_blocked") else "未拦截"
 
+    # 原因摘要
+    parts = []
+    emp = row.get("employee", "")
+    dept = row.get("department", "")
+    if emp:
+        parts.append(emp)
+    if dept and dept != emp:
+        parts.append(f"({dept})")
+    if row.get("dst_ip"):
+        target = row["dst_ip"]
+        country = row.get("country", "")
+        if country:
+            target = f"{target}[{country}]"
+        parts.append(f"→ {target}")
+    if row.get("dst_port"):
+        parts.append(f":{row['dst_port']}")
+    if not parts:
+        parts.append(row.get("src_ip", ""))
+    row["reason"] = " ".join(parts)
 
-class AlertData(BaseModel):
-    ip: str
-    label: str
-    details: Optional[dict] = None
-
-
-class TrafficAction(BaseModel):
-    event: str  # "忽视" or "拉黑"
-    reason: str
-    id: Optional[int] = None
-
-
-class BlacklistItem(BaseModel):
-    id: int
-
-
-# ============================================================================
-# 配置读写
-# ============================================================================
-# 配置缓存（避免每次请求都读磁盘）
-_config_cache: dict | None = None
-
-
-def _read_config_user() -> dict:
-    """读取用户配置（首次从磁盘加载，后续返回缓存副本）。"""
-    global _config_cache
-    if _config_cache is None:
-        _config_cache = load_config_dict()
-    return _config_cache
-
-
-def _save_config_user(config: dict) -> None:
-    """保存配置到磁盘并刷新缓存。"""
-    global _config_cache
-    save_config_dict(config)
-    _config_cache = config
-
-
-# ============================================================================
-# 内存告警缓冲区（接收 P4 控制面的实时告警）
-# ============================================================================
-_alerts_lock = threading.Lock()
-_alerts_buffer: list = []  # 最近告警
-_MAX_ALERTS = 200
-
-
-def push_alert(ip: str, label: str, details: Optional[dict] = None):
-    """外部模块调用：推送告警到前端"""
-    with _alerts_lock:
-        _alerts_buffer.insert(
-            0,
-            {
-                "id": len(_alerts_buffer) + 1,
-                "ip": ip,
-                "label": label,
-                "details": details or {},
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-        if len(_alerts_buffer) > _MAX_ALERTS:
-            _alerts_buffer.pop()
+    return row
 
 
 # ============================================================================
 # Database 模块统一调用接口
 # ============================================================================
 def _db(module_name: str, func_name: str, *args, **kwargs):
-    """
-    通用数据库模块调用包装。
-    所有数据库操作必须通过 database 模块，禁止直接连接数据库。
-    """
+    """通用的 database 模块调用包装器"""
+    import importlib
     try:
-        import importlib
         mod = importlib.import_module(f"database.{module_name}")
-        func = getattr(mod, func_name)
-        return func(*args, **kwargs)
+        fn = getattr(mod, func_name)
+        return fn(*args, **kwargs)
     except Exception as e:
-        logger.error(f"[数据库] {module_name}.{func_name} 调用失败: {e}")
+        logger.error(f"database.{module_name}.{func_name} 调用失败: {e}")
         raise
+
+
+# ============================================================================
+# 内存告警缓冲区（仅用于 P4 控制面实时推送的暂存）
+# ============================================================================
+_alerts_lock = threading.Lock()
+_alerts_buffer: list = []
+_MAX_ALERTS = 200
+_ALERT_TTL_SECONDS = 1800
+_alert_id_counter = 0
+
+
+def push_alert(ip: str, label: str, details: Optional[dict] = None,
+               source: str = ""):
+    """外部模块调用：推送告警到前端。"""
+    global _alert_id_counter
+    details = details or {}
+
+    threat_level = (
+        details.get("severity")
+        or details.get("threat_level")
+        or "medium"
+    )
+    if threat_level in ("critical",):
+        threat_level = "high"
+    elif threat_level not in ("high", "medium", "low"):
+        threat_level = "medium"
+
+    with _alerts_lock:
+        for a in _alerts_buffer:
+            if a["ip"] == ip and a["label"] == label:
+                a["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                return
+
+        _alert_id_counter += 1
+        _alerts_buffer.insert(0, {
+            "id": _alert_id_counter,
+            "ip": ip,
+            "label": label,
+            "threat_level": threat_level,
+            "source": source or "系统",
+            "details": details,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        if len(_alerts_buffer) > _MAX_ALERTS:
+            _alerts_buffer.pop()
+
+
+def dismiss_alert_by_id(alert_id: int) -> bool:
+    with _alerts_lock:
+        for i, a in enumerate(_alerts_buffer):
+            if a["id"] == alert_id:
+                _alerts_buffer.pop(i)
+                return True
+    return False
+
+
+def dismiss_alerts_for_ip(ip: str) -> int:
+    removed = 0
+    with _alerts_lock:
+        kept = []
+        for a in _alerts_buffer:
+            if a["ip"] == ip:
+                removed += 1
+            else:
+                kept.append(a)
+        _alerts_buffer[:] = kept
+    return removed
+
+
+def _expire_stale_alerts() -> int:
+    cutoff = datetime.now()
+    removed = 0
+    with _alerts_lock:
+        kept = []
+        for a in _alerts_buffer:
+            try:
+                ts = datetime.strptime(a["timestamp"], "%Y-%m-%d %H:%M:%S")
+                if (cutoff - ts).total_seconds() > _ALERT_TTL_SECONDS:
+                    removed += 1
+                else:
+                    kept.append(a)
+            except Exception:
+                kept.append(a)
+        _alerts_buffer[:] = kept
+    return removed
+
+
+def _start_alert_expiry_thread() -> threading.Thread:
+    def _expiry_loop():
+        while True:
+            time.sleep(60)
+            try:
+                n = _expire_stale_alerts()
+                if n > 0:
+                    logger.debug(f"告警自动过期: {n} 条")
+            except Exception:
+                pass
+    t = threading.Thread(target=_expiry_loop, daemon=True)
+    t.start()
+    return t
+
+
+# ---- Pydantic 模型 ----
+class AlertData(BaseModel):
+    ip: str
+    label: str
+    details: Optional[dict] = None
+
+
+class DismissRequest(BaseModel):
+    alert_id: int = 0
+    ip: str = ""
+
+
+class BackendTestRequest(BaseModel):
+    backend: str
+
+
+class ConfigSaveRequest(BaseModel):
+    config: dict
+
+
+class BlacklistAddRequest(BaseModel):
+    ip: str
+    reason: Optional[str] = "手动添加"
+
+
+class WhitelistAddRequest(BaseModel):
+    ip: str
+    reason: Optional[str] = "手动添加"
+
+
+class TrafficAction(BaseModel):
+    event: str
+    id: int = 0
+    reason: Optional[str] = None
+
+
+class EmployeeAddRequest(BaseModel):
+    number: str
+    ip: str
+    department: str
+    name: str
 
 
 # ============================================================================
@@ -269,21 +323,14 @@ def _db(module_name: str, func_name: str, *args, **kwargs):
 # ============================================================================
 @app.get("/api/init")
 async def api_init():
-    """返回系统初始化信息：homeInfo, logoInfo, menuInfo"""
-    init_file = _FRONTEND_ROOT / "api" / "init.json"
-    if init_file.exists():
-        return JSONResponse(json.loads(init_file.read_text(encoding="utf-8")))
-    return JSONResponse(
-        {
-            "homeInfo": {"title": "首页", "href": "page/welcome-1.html"},
-            "logoInfo": {
-                "title": "守藏",
-                "image": "images/logo.png",
-                "href": "",
-            },
-            "menuInfo": [],
+    return JSONResponse({
+        "code": 0,
+        "msg": "系统就绪",
+        "data": {
+            "systemName": "守藏",
+            "version": "3.1.0",
         }
-    )
+    })
 
 
 # ============================================================================
@@ -291,333 +338,210 @@ async def api_init():
 # ============================================================================
 @app.get("/api/config")
 async def api_get_config():
-    """获取当前用户配置"""
-    config = _read_config_user()
-    return JSONResponse({"code": 0, "data": config})
+    return JSONResponse({"code": 0, "data": get_config().to_dict()})
 
 
 @app.post("/api/config")
 async def api_save_config(payload: ConfigSaveRequest):
-    """保存用户配置（部分更新）"""
-    config = _read_config_user()
-    data = payload.model_dump(exclude_none=True)
+    try:
+        save_config_dict(payload.config)
+        return JSONResponse({"code": 0, "msg": "保存成功"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
-    for section, fields in data.items():
-        if isinstance(fields, dict) and section in config:
-            for key, value in fields.items():
-                if key in config[section]:
-                    orig_type = type(config[section][key])
-                    try:
-                        if orig_type == bool:
-                            config[section][key] = bool(value)
-                        elif orig_type == int:
-                            config[section][key] = int(value)
-                        elif orig_type == float:
-                            config[section][key] = float(value)
-                        else:
-                            config[section][key] = str(value)
-                    except (ValueError, TypeError):
-                        config[section][key] = value
 
-    _save_config_user(config)
-    return JSONResponse({"code": 0, "msg": "保存成功"})
+_SUPPORTED_BACKENDS = {"deepseek", "openai", "lmstudio"}
 
 
 @app.post("/api/config/backend")
-async def api_save_backend_config(payload: BackendConfigSave):
-    """单独保存某个后端的 API 密钥 / 模型配置"""
-    config = _read_config_user()
-    if "backends" not in config:
-        config["backends"] = {}
-
-    backend_name = payload.backend
-    if backend_name not in config["backends"]:
-        config["backends"][backend_name] = {}
-
-    update_data = payload.model_dump(exclude_none=True)
-    update_data.pop("backend", None)
-
-    for key, value in update_data.items():
-        if key in ("auto_load", "flash_attention"):
-            config["backends"][backend_name][key] = bool(value)
-        elif key == "context_length":
-            config["backends"][backend_name][key] = int(value) if value else 4096
-        elif key == "api_base":
-            config["backends"][backend_name]["api_base"] = str(value)
-        elif key == "api_key":
-            config["backends"][backend_name]["api_key"] = str(value)
-        elif key == "model_name":
-            config["backends"][backend_name]["model_name"] = str(value)
-        else:
-            config["backends"][backend_name][key] = value
-
-    _save_config_user(config)
-    return JSONResponse({"code": 0, "msg": f"后端 '{backend_name}' 配置已保存"})
-
-
-class BackendTestRequest(BaseModel):
-    backend: str
+async def api_config_backend_save():
+    return JSONResponse({"code": 0, "msg": "通过 config_user.json 配置"})
 
 
 @app.post("/api/config/backend/test")
 async def api_config_backend_test(payload: BackendTestRequest):
-    """测试指定后端的连接性"""
-    config = _read_config_user()
-    backends = config.get("backends", {})
-    backend_cfg = backends.get(payload.backend)
+    backend_key = payload.backend.lower()
+    if backend_key not in _SUPPORTED_BACKENDS:
+        return JSONResponse(
+            {"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400,
+        )
 
-    if not backend_cfg:
-        return JSONResponse({"code": 1, "msg": f"后端 '{payload.backend}' 未配置"}, status_code=400)
+    app_config = get_config()
+    backend_cfg = getattr(app_config.backends, backend_key, None)
 
-    api_key = backend_cfg.get("api_key", "")
-    model_name = backend_cfg.get("model_name", "")
-    api_base = backend_cfg.get("api_base", "")
-
-    if not api_key:
-        return JSONResponse({"code": 1, "msg": f"后端 '{payload.backend}' 未配置 API 密钥"}, status_code=400)
-
-    # 根据后端类型构造测试请求
-    import httpx
-
-    if payload.backend == "deepseek":
-        url = api_base or "https://api.deepseek.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_name or "deepseek-chat",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    elif payload.backend == "openai":
-        url = api_base or "https://api.openai.com/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": model_name or "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    elif payload.backend == "lmstudio":
-        url = (api_base or "http://localhost:1234") + "/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}" if api_key else "",
-            "Content-Type": "application/json",
-        }
-        if not api_key:
-            del headers["Authorization"]
-        body = {
-            "model": model_name or "local-model",
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-        }
-    else:
-        return JSONResponse({"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400)
+    if backend_cfg is None or not backend_cfg.api_key:
+        return JSONResponse(
+            {"code": 1, "msg": f"后端 '{payload.backend}' 未配置 API 密钥"}, status_code=400,
+        )
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code == 200:
-                return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 连接成功"})
-            else:
-                detail = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-                return JSONResponse({"code": 1, "msg": f"连接失败: {detail}"}, status_code=502)
-    except httpx.ConnectError:
-        return JSONResponse({"code": 1, "msg": f"无法连接到 {url}"}, status_code=502)
-    except httpx.TimeoutException:
-        return JSONResponse({"code": 1, "msg": f"连接 {url} 超时"}, status_code=504)
+        backend = _build_backend_for_test(backend_key, backend_cfg)
+    except ValueError as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=400)
+
+    try:
+        await backend.chat(
+            system_prompt="",
+            user_prompt="ping",
+            model=backend_cfg.model_name,
+            max_tokens=1,
+        )
+        return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 连接成功"})
+    except RuntimeError as e:
+        return JSONResponse({"code": 1, "msg": f"连接失败: {str(e)[:300]}"}, status_code=502)
     except Exception as e:
         return JSONResponse({"code": 1, "msg": f"连接测试异常: {str(e)}"}, status_code=500)
+    finally:
+        await _close_backend(backend)
+
+
+def _build_backend_for_test(backend_key: str, cfg):
+    from multi_agent_system.backends.openai_backend import OpenAIBackend
+    from multi_agent_system.backends.deepseek_backend import DeepSeekBackend
+    from multi_agent_system.backends.lmstudio_backend import LMStudioBackend
+
+    if backend_key == "deepseek":
+        return DeepSeekBackend(
+            api_key=cfg.api_key,
+            api_base=cfg.api_base or "https://api.deepseek.com",
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "deepseek-v4-flash",
+            default_thinking_enabled=getattr(cfg, "thinking_enabled", None),
+            default_reasoning_effort=getattr(cfg, "reasoning_effort", None),
+            include_reasoning=getattr(cfg, "include_reasoning", False),
+        )
+    elif backend_key == "openai":
+        return OpenAIBackend(
+            api_base=cfg.api_base or "https://api.openai.com/v1",
+            api_key=cfg.api_key,
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "gpt-4o-mini",
+        )
+    elif backend_key == "lmstudio":
+        return LMStudioBackend(
+            api_base=cfg.api_base or "http://localhost:1234/v1",
+            api_key=cfg.api_key or "lm-studio",
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
+            default_model=cfg.model_name or "local-model",
+            auto_load=False,
+        )
+    else:
+        raise ValueError(f"不支持的后端: {backend_key}")
+
+
+async def _close_backend(backend) -> None:
+    try:
+        if hasattr(backend, "aclose"):
+            await backend.aclose()
+        elif hasattr(backend, "close"):
+            backend.close()
+    except Exception:
+        pass
 
 
 @app.post("/api/config/reset")
 async def api_config_reset():
-    """重置为默认配置 — 直接删除 config_user.json"""
-    global _config_cache
-    reset_user_config()
-    _config_cache = None  # 下次读取时重新加载纯默认配置
-    return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
+    try:
+        reset_config()
+        return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
+
+
+@app.get("/api/config/database")
+async def api_config_database_get():
+    return JSONResponse({"code": 0, "data": {}})
+
+
+@app.post("/api/config/database")
+async def api_config_database_save():
+    return JSONResponse({"code": 0, "msg": "数据库配置通过 config_user.json 管理"})
 
 
 # ============================================================================
-# API: 菜单/权限
+# API: 员工管理
 # ============================================================================
 @app.get("/api/menus")
 async def api_menus():
-    menus_file = _FRONTEND_ROOT / "api" / "menus.json"
-    if menus_file.exists():
-        return JSONResponse(json.loads(menus_file.read_text(encoding="utf-8")))
-    return JSONResponse({"code": 0, "count": 0, "data": []})
+    menu_path = _FRONTEND_ROOT / "api" / "menus.json"
+    if menu_path.exists():
+        return JSONResponse(json.loads(menu_path.read_text(encoding="utf-8")))
+    return JSONResponse({"code": 0, "data": []})
 
 
-# ============================================================================
-# API: 员工管理（→ database.lists_manager）
-# ============================================================================
 @app.get("/api/employees")
-async def api_employees(
-    number: Optional[str] = None,
-    ip: Optional[str] = None,
-    department: Optional[str] = None,
-    name: Optional[str] = None,
-    page: int = Query(1, ge=1),
-    limit: int = Query(15, ge=1, le=200),
-):
-    """
-    员工列表查询 — 通过 database 模块统一接口
-    支持按字段过滤 + 分页
-    """
-    filters = {}
-    if number:
-        filters["number"] = number
-    if ip:
-        filters["ip"] = ip
-    if department:
-        filters["department"] = department
-    if name:
-        filters["name"] = name
-
+async def api_employees_get():
     try:
-        total, rows = _db("lists_manager", "get_employees", filters, page, limit)
-        return JSONResponse({"code": 0, "count": total, "data": rows})
+        rows = _db("lists_manager", "get_employees")
+        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
     except Exception as e:
-        logger.error(f"查询员工列表失败: {e}")
-        # 数据库不可用时从内存映射降级
-        try:
-            raw = _db("lists_manager", "get_ip_dept_map")
-            data = []
-            for ip_addr, (emp_name, dept) in raw.items():
-                data.append(
-                    {"number": "", "ip": ip_addr, "department": dept, "name": emp_name}
-                )
-            total = len(data)
-            start = (page - 1) * limit
-            end = start + limit
-            paged = data[start:end]
-            return JSONResponse({"code": 0, "count": total, "data": paged})
-        except Exception:
-            return JSONResponse({"code": 1, "msg": str(e), "count": 0, "data": []})
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.post("/api/employees")
-async def api_employee_create(emp: EmployeeCreate):
-    """新增员工"""
+async def api_employee_add(payload: EmployeeAddRequest):
     try:
-        ok = _db("lists_manager", "add_employee",
-                 emp.number, emp.ip, emp.department, emp.name)
-        if ok:
-            return JSONResponse({"code": 0, "msg": "添加成功"})
-        return JSONResponse({"code": 1, "msg": "添加失败"}, status_code=500)
+        _db("lists_manager", "add_employee",
+            payload.number, payload.ip, payload.department, payload.name)
+        return JSONResponse({"code": 0, "msg": "添加成功"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.put("/api/employees/{emp_id}")
-async def api_employee_update(emp_id: int, emp: EmployeeUpdate):
-    """编辑员工"""
-    data = emp.model_dump(exclude_none=True)
-    if not data:
-        return JSONResponse({"code": 1, "msg": "无更新字段"}, status_code=400)
+async def api_employee_update(emp_id: int, payload: EmployeeAddRequest):
     try:
-        ok = _db("lists_manager", "update_employee", emp_id, **data)
-        if ok:
-            return JSONResponse({"code": 0, "msg": "更新成功"})
-        return JSONResponse({"code": 1, "msg": "更新失败"}, status_code=500)
+        _db("lists_manager", "update_employee",
+            emp_id, payload.number, payload.ip, payload.department, payload.name)
+        return JSONResponse({"code": 0, "msg": "更新成功"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.delete("/api/employees/{emp_id}")
 async def api_employee_delete(emp_id: int):
-    """删除员工"""
     try:
-        ok = _db("lists_manager", "delete_employee", emp_id)
-        if ok:
-            return JSONResponse({"code": 0, "msg": "删除成功"})
-        return JSONResponse({"code": 1, "msg": "删除失败"}, status_code=500)
+        _db("lists_manager", "delete_employee", emp_id)
+        return JSONResponse({"code": 0, "msg": "删除成功"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
+
+
+@app.get("/api/ip_map")
+async def api_ip_map_get():
+    try:
+        data = _db("lists_manager", "get_ip_dept_map")
+        return JSONResponse({"code": 0, "data": data})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 # ============================================================================
-# API: IP映射（→ database.lists_manager）
-# ============================================================================
-@app.get("/api/ip_map")
-async def api_ip_map():
-    """返回完整 IP-部门映射"""
-    try:
-        # 优先从数据库明细查询
-        total, rows = _db("lists_manager", "get_employees", {}, 1, 10000)
-        return JSONResponse({"code": 0, "data": rows})
-    except Exception:
-        try:
-            raw = _db("lists_manager", "get_ip_dept_map")
-            data = []
-            for ip_addr, (emp_name, dept) in raw.items():
-                data.append(
-                    {
-                        "id": 0,
-                        "number": "",
-                        "ip": ip_addr,
-                        "department": dept,
-                        "name": emp_name,
-                    }
-                )
-            return JSONResponse({"code": 0, "data": data})
-        except Exception as e:
-            return JSONResponse({"code": 1, "msg": str(e), "data": []})
-
-
-# ============================================================================
-# API: 黑名单管理（→ database.lists_manager）
+# API: 黑白名单管理
 # ============================================================================
 @app.get("/api/blacklist")
 async def api_blacklist_get():
-    """查询黑名单列表 — 通过 database 模块统一接口"""
     try:
         rows = _db("lists_manager", "get_blacklist_detailed")
-        return JSONResponse({"code": 0, "count": len(rows), "data": rows})
+        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
     except Exception as e:
-        logger.error(f"查询黑名单失败: {e}")
-        # 降级：从内存集合返回
-        try:
-            bl = _db("lists_manager", "get_blacklist")
-            data = [
-                {
-                    "id": i,
-                    "ip_address": ip,
-                    "threat_level": "高",
-                    "reason": "系统自动",
-                    "port": None,
-                    "attack_type": None,
-                }
-                for i, ip in enumerate(sorted(bl))
-            ]
-            return JSONResponse({"code": 0, "count": len(data), "data": data})
-        except Exception:
-            return JSONResponse({"code": 0, "count": 0, "data": []})
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.post("/api/blacklist")
-async def api_blacklist_add(payload: BlacklistAdd):
-    """加入黑名单 — DB 写入（由 add_ip.add_to_blacklist 统一完成，P4 尽力下发）"""
-    target_ip = payload.ip
-
+async def api_blacklist_add(payload: BlacklistAddRequest):
     try:
-        from p4_controller.add_ip import add_to_blacklist as _p4_block
-        _p4_block(target_ip, source="frontend", reason=payload.reason or "手动添加")
+        _db("lists_manager", "add_to_db_blacklist", payload.ip, "frontend", payload.reason)
+        return JSONResponse({"code": 0, "msg": f"已拉黑 {payload.ip}"})
     except Exception as e:
-        logger.error(f"拉黑异常: {e}")
-        return JSONResponse({"code": 1, "msg": f"拉黑失败: {e}"}, status_code=500)
-
-    return JSONResponse({"code": 0, "msg": f"已成功拉黑 {target_ip}"})
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.delete("/api/blacklist/{item_id}")
 async def api_blacklist_delete(item_id: int):
-    """移除黑名单"""
     try:
         ok = _db("lists_manager", "remove_from_blacklist", item_id)
         if ok:
@@ -627,53 +551,27 @@ async def api_blacklist_delete(item_id: int):
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
-# ============================================================================
-# API: 白名单管理（→ database.lists_manager）
-# ============================================================================
 @app.get("/api/whitelist")
 async def api_whitelist_get():
-    """查询白名单列表 — 通过 database 模块统一接口"""
     try:
         rows = _db("lists_manager", "get_whitelist_detailed")
-        return JSONResponse({"code": 0, "count": len(rows), "data": rows})
+        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
     except Exception as e:
-        logger.error(f"查询白名单失败: {e}")
-        try:
-            wl = _db("lists_manager", "get_whitelist")
-            data = [
-                {
-                    "id": i,
-                    "ip_address": ip,
-                    "reason": "",
-                    "port": None,
-                    "trust_level": "trust",
-                }
-                for i, ip in enumerate(sorted(wl))
-            ]
-            return JSONResponse({"code": 0, "count": len(data), "data": data})
-        except Exception:
-            return JSONResponse({"code": 0, "count": 0, "data": []})
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.post("/api/whitelist")
-async def api_whitelist_add(payload: WhitelistAdd):
-    """加入白名单 — P4 流表 + 数据库写入（由 add_ip.add_to_whitelist 统一完成）"""
-    target_ip = payload.ip
-
+async def api_whitelist_add(payload: WhitelistAddRequest):
     try:
-        from p4_controller.add_ip import add_to_whitelist as _p4_unblock
-        if not _p4_unblock(target_ip, source="frontend", reason=payload.reason or "手动添加"):
-            return JSONResponse({"code": 1, "msg": f"加白 {target_ip} 失败（P4 交换机可能未连接）"}, status_code=500)
+        target_ip = payload.ip
+        _db("lists_manager", "add_to_db_whitelist", target_ip, "frontend", payload.reason)
+        return JSONResponse({"code": 0, "msg": f"已加白 {target_ip}"})
     except Exception as e:
-        logger.error(f"P4 解封异常: {e}")
-        return JSONResponse({"code": 1, "msg": f"加白失败: {e}"}, status_code=500)
-
-    return JSONResponse({"code": 0, "msg": f"已加白 {target_ip}"})
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.delete("/api/whitelist/{item_id}")
 async def api_whitelist_delete(item_id: int):
-    """移除白名单"""
     try:
         ok = _db("lists_manager", "remove_from_whitelist", item_id)
         if ok:
@@ -684,40 +582,21 @@ async def api_whitelist_delete(item_id: int):
 
 
 # ============================================================================
-# API: 流量/可疑事件管理（→ database.lists_manager）
+# API: 流量事件 — 统一数据源 (traffic_log 表)
 # ============================================================================
 @app.get("/api/traffic")
 async def api_traffic_get():
-    """获取可疑流量列表 — 通过 database 模块统一接口"""
+    """获取流量事件列表（数据库为唯一数据源）。"""
     data = []
     try:
         rows = _db("lists_manager", "get_traffic_logs", 200, 0)
         for row in rows:
             if isinstance(row.get("packet_time"), datetime):
                 row["packet_time"] = row["packet_time"].strftime("%Y-%m-%d %H:%M:%S")
+            _enrich_traffic_row(row)
             data.append(row)
     except Exception as e:
         logger.warning(f"查询 traffic_log 失败: {e}")
-
-    # 如果没有数据库数据，从告警缓冲区填充
-    if not data:
-        with _alerts_lock:
-            for alert in list(_alerts_buffer):
-                data.append(
-                    {
-                        "id": alert.get("id"),
-                        "src_ip": alert.get("ip"),
-                        "dst_ip": "",
-                        "src_port": "",
-                        "dst_port": "",
-                        "department": "",
-                        "protocol": "",
-                        "packet_time": alert.get("timestamp", ""),
-                        "traffic_size": 0,
-                        "is_blocked": 0,
-                        "entropy": 0,
-                    }
-                )
 
     return JSONResponse({"code": 0, "data": {"data": data}})
 
@@ -729,14 +608,13 @@ async def api_traffic_action(payload: TrafficAction):
     item_id = payload.id
     reason = payload.reason or "手动操作"
 
-    logger.info(f"流量事件操作: action={action}, id={item_id}, reason={reason}")
+    logger.info(f"流量事件操作: action={action}, id={item_id}")
 
     target_ip = None
-
     ai_verdict = "unknown"
     ai_confidence = 0.0
-    if action == "拉黑" and item_id:
-        # 找到该事件的源 IP 和 AI 判定信息
+
+    if item_id:
         try:
             rows = _db("lists_manager", "get_traffic_logs", 200, 0)
             for row in rows:
@@ -747,24 +625,26 @@ async def api_traffic_action(payload: TrafficAction):
         except Exception:
             pass
 
-        if target_ip:
-            # P4 硬件拉黑 + 数据库写入（由 add_ip.add_to_blacklist 统一完成）
-            try:
-                from p4_controller.add_ip import add_to_blacklist as _p4_block
-                ok = _p4_block(target_ip, source="frontend", reason=reason)
-                if not ok:
-                    logger.warning(f"P4 拉黑 {target_ip} 返回失败（交换机可能未连接）")
-            except Exception as e:
-                logger.error(f"P4 硬件拉黑异常: {e}")
+    if action == "拉黑" and target_ip:
+        try:
+            from p4_controller.add_ip import add_to_blacklist as _p4_block
+            ok = _p4_block(target_ip, source="frontend", reason=reason)
+            if not ok:
+                logger.warning(f"P4 拉黑 {target_ip} 返回失败（交换机可能未连接）")
+        except Exception as e:
+            logger.error(f"P4 硬件拉黑异常: {e}")
 
-    # 更新流量记录的拦截状态
     if item_id:
         try:
             _db("lists_manager", "update_traffic_action", item_id, action)
         except Exception:
             pass
 
-    # -- 写入多智能体记忆系统 (自适应 Tier 0) --
+    if target_ip:
+        n = dismiss_alerts_for_ip(target_ip)
+        if n > 0:
+            logger.info(f"已移除 {target_ip} 的 {n} 条告警")
+
     _record_to_memory_from_admin(item_id, action, reason, target_ip,
                                  ai_verdict, ai_confidence)
 
@@ -772,102 +652,99 @@ async def api_traffic_action(payload: TrafficAction):
 
 
 # ============================================================================
-# API: 告警管理
+# API: 告警管理（向后兼容 — 重定向到统一 traffic 端点）
 # ============================================================================
 @app.get("/api/alerts")
 async def api_alerts_get():
-    """获取告警列表"""
-    with _alerts_lock:
-        return JSONResponse(
-            {"code": 0, "count": len(_alerts_buffer), "data": list(_alerts_buffer)}
-        )
+    """获取告警列表 — 数据库为唯一数据源。"""
+    data = []
+    try:
+        rows = _db("lists_manager", "get_traffic_logs", 200, 0)
+        for row in rows:
+            if isinstance(row.get("packet_time"), datetime):
+                row["packet_time"] = row["packet_time"].strftime("%Y-%m-%d %H:%M:%S")
+            _enrich_traffic_row(row)
+            data.append(row)
+    except Exception as e:
+        logger.warning(f"查询 traffic_log 失败: {e}")
+
+    return JSONResponse({"code": 0, "count": len(data), "data": data})
 
 
 @app.post("/api/alert")
 async def api_alert_receive(payload: AlertData):
-    """接收实时告警推送"""
-    push_alert(payload.ip, payload.label, payload.details)
+    """接收实时告警推送（P4 控制面）"""
+    source = "AI研判" if (payload.label and "[L3-研判]" in payload.label) else "P4控制面"
+    push_alert(payload.ip, payload.label, payload.details, source=source)
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/api/alert/dismiss")
+async def api_alert_dismiss(payload: DismissRequest):
+    """移除告警"""
+    if payload.alert_id:
+        ok = dismiss_alert_by_id(payload.alert_id)
+        return JSONResponse({"code": 0, "msg": "已移除" if ok else "未找到该告警"})
+    if payload.ip:
+        n = dismiss_alerts_for_ip(payload.ip)
+        return JSONResponse({"code": 0, "msg": f"已移除 {n} 条告警"})
+    return JSONResponse({"code": 1, "msg": "请提供 alert_id 或 ip"}, status_code=400)
+
+
 # ============================================================================
-# API: 清理缓存
+# API: 清理缓存 & 健康检查 & 系统状态
 # ============================================================================
 @app.post("/api/clear")
 async def api_clear():
-    """清理服务端缓存"""
     with _alerts_lock:
         _alerts_buffer.clear()
     return JSONResponse({"code": 1, "msg": "服务端清理缓存成功"})
 
 
-# ============================================================================
-# API: 健康检查
-# ============================================================================
 @app.get("/api/health")
 async def api_health():
-    return JSONResponse({"status": "ok", "version": "3.0.0"})
+    return JSONResponse({"status": "ok", "version": "3.1.0"})
 
 
-# ============================================================================
-# API: 系统状态（CPU / RAM / 网络速率）
-# ============================================================================
 @app.get("/api/status")
 async def api_status():
-    """返回系统资源使用情况（非阻塞），供 welcome-1.html 仪表盘使用"""
     with _perf_lock:
         cpu = _perf_cache["cpu"]
         ram = _perf_cache["ram"]
-        up_bytes = _perf_cache["up_bytes"]
-        down_bytes = _perf_cache["down_bytes"]
+        up = _perf_cache["up"]
+        down = _perf_cache["down"]
+    return JSONResponse({"code": 0, "data": {"cpu": cpu, "ram": ram, "up": up, "down": down}})
 
-    # 检查 psutil 是否可用（_perf_sampler 静默失败时 cache 全为 0）
+
+# ============================================================================
+# 管理员反馈 → 记忆系统
+# ============================================================================
+def _record_to_memory_from_admin(item_id, action, reason, target_ip,
+                                 ai_verdict, ai_confidence):
     try:
-        import psutil
-        _psutil_ok = True
-    except ImportError:
-        _psutil_ok = False
-
-    if not _psutil_ok:
-        return JSONResponse(
-            {
-                "cpu": cpu,
-                "ram": ram,
-                "up": "不可用",
-                "down": "不可用",
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "note": "psutil 未安装，系统状态不可用",
-            }
+        from multi_agent_system.memory import get_store
+        store = get_store()
+        store.record_feedback(
+            traffic_id=item_id,
+            ai_verdict=str(ai_verdict) if ai_verdict else "unknown",
+            ai_confidence=float(ai_confidence) if ai_confidence else 0.0,
+            ai_reasoning="",
+            ai_threat_type="",
+            admins_action=action,
+            admin_note=reason or "",
+            ai_correct=(action == "拉黑"),
+            src_ip=target_ip or "",
+            dst_ip="",
+            department="",
+            protocol="",
         )
-
-    def fmt_bytes(b: float) -> str:
-        if b >= 1073741824:
-            return f"{b / 1073741824:.2f} GB/s"
-        if b >= 1048576:
-            return f"{b / 1048576:.2f} MB/s"
-        if b >= 1024:
-            return f"{b / 1024:.1f} KB/s"
-        return f"{int(b)} B/s"
-
-    return JSONResponse(
-        {
-            "cpu": cpu,
-            "ram": ram,
-            "up": fmt_bytes(up_bytes),
-            "down": fmt_bytes(down_bytes),
-            "up_bytes": up_bytes,
-            "down_bytes": down_bytes,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
+    except Exception as e:
+        logger.warning(f"写入反馈记忆失败: {e}")
 
 
 # ============================================================================
-# 前端静态文件 + SPA fallback
+# 启动 & 静态文件
 # ============================================================================
-_should_serve_static = False
-
-
 @app.on_event("startup")
 async def startup():
     global _should_serve_static
@@ -878,8 +755,10 @@ async def startup():
         _should_serve_static = False
         logger.warning(f"⚠️ 前端静态文件目录未找到: {_FRONTEND_ROOT}")
 
+    _start_alert_expiry_thread()
+    logger.info("✅ 告警自动过期线程已启动 (TTL=%ds)", _ALERT_TTL_SECONDS)
 
-# 挂载静态资源目录
+
 if _FRONTEND_ROOT.exists():
     _static_dirs_check = ["lib", "css", "js", "images", "error"]
     _mounted_any = False
@@ -899,123 +778,87 @@ if _FRONTEND_ROOT.exists():
 async def favicon():
     favicon_path = _FRONTEND_ROOT / "images" / "favicon.ico"
     if favicon_path.exists():
-        return FileResponse(favicon_path)
-    raise HTTPException(404)
+        return FileResponse(str(favicon_path))
+    raise HTTPException(status_code=404)
 
 
 @app.get("/")
 @app.get("/index.html")
-async def index_page():
-    index_path = _FRONTEND_ROOT / "index.html"
-    if index_path.exists():
-        return HTMLResponse(index_path.read_text(encoding="utf-8"))
-    raise HTTPException(404)
+async def index():
+    if not _should_serve_static:
+        return HTMLResponse("<h2>前端文件未找到</h2>", status_code=404)
+    return FileResponse(str(_FRONTEND_ROOT / "index.html"))
 
 
 @app.get("/page/{filename:path}")
 async def serve_page(filename: str):
+    if not _should_serve_static:
+        return HTMLResponse("<h2>前端文件未找到</h2>", status_code=404)
     file_path = _FRONTEND_ROOT / "page" / filename
     if file_path.exists() and file_path.is_file():
-        content_type = "text/html" if filename.endswith(".html") else None
-        if content_type:
-            return HTMLResponse(file_path.read_text(encoding="utf-8"))
-        return FileResponse(file_path)
-    raise HTTPException(404)
+        return FileResponse(str(file_path))
+    raise HTTPException(status_code=404)
 
 
 @app.get("/api/{filename:path}")
-async def serve_api_file(filename: str):
-    """为旧的直接 API 文件访问提供降级（如 init.json 等）"""
+async def serve_api_json(filename: str):
     file_path = _FRONTEND_ROOT / "api" / filename
     if file_path.exists() and file_path.is_file():
-        if filename.endswith(".json"):
-            return JSONResponse(json.loads(file_path.read_text(encoding="utf-8")))
-        return FileResponse(file_path)
-    raise HTTPException(404)
+        return FileResponse(str(file_path))
+    return JSONResponse({"code": 0, "data": []})
 
 
 @app.get("/page/table/{filename:path}")
 async def serve_table_page(filename: str):
+    if not _should_serve_static:
+        return HTMLResponse("<h2>前端文件未找到</h2>", status_code=404)
     file_path = _FRONTEND_ROOT / "page" / "table" / filename
     if file_path.exists() and file_path.is_file():
-        if filename.endswith(".html"):
-            return HTMLResponse(file_path.read_text(encoding="utf-8"))
-        return FileResponse(file_path)
-    raise HTTPException(404)
+        return FileResponse(str(file_path))
+    raise HTTPException(status_code=404)
 
 
 # ============================================================================
-# 启动函数（main.py 调用）
+# 服务器入口
 # ============================================================================
-_server_instance = None
-
-
-def start(host: str = "0.0.0.0", port: int = 8080, **kwargs):
-    """
-    启动 FastAPI 后端服务器（同步阻塞）。
-    由 main.py 在独立线程或进程中调用。
-    """
+def start_backend(port: int = 8080):
     import uvicorn
-
     global _server_instance
 
     config = uvicorn.Config(
-        app,
-        host=host,
+        app="backend.api_server:app",
+        host="0.0.0.0",
         port=port,
         log_level="info",
-        **kwargs,
+        loop="asyncio",
+        reload=False,
     )
     _server_instance = uvicorn.Server(config)
-    _server_instance.run()
+    _srv = _server_instance  # 局部捕获，消除 Optional 类型歧义
 
+    def _run():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_srv.serve())
 
-def _record_to_memory_from_admin(
-    traffic_id: Optional[int], action: str, reason: str, target_ip: Optional[str],
-    ai_verdict: str = "unknown", ai_confidence: float = 0.0,
-) -> None:
-    """将管理员操作写入多智能体记忆系统"""
-    try:
-        from multi_agent_system.memory import get_store
-
-        # 推断 AI 是否正确（基于管理员动作）
-        # 拉黑 → 管理员确认有异常；忽视 → 管理员认为是误报
-        ai_correct = action == "拉黑"
-
-        get_store().record_feedback(
-            ai_verdict=ai_verdict,
-            ai_confidence=ai_confidence,
-            admins_action=action,
-            ai_correct=ai_correct,
-            admin_note=reason,
-            src_ip=target_ip or "",
-            traffic_id=traffic_id,
-        )
-    except Exception:
-        pass  # 记忆系统不可用不影响 API 响应
-
-
-def start_in_thread(host: str = "0.0.0.0", port: int = 8080):
-    """在后台线程中启动 FastAPI"""
-    t = threading.Thread(
-        target=start,
-        args=(host, port),
-        kwargs={"log_config": None},
-        daemon=True,
-        name="UnifiedBackend",
-    )
+    t = threading.Thread(target=_run, daemon=True)
     t.start()
-    return t
+    logger.info("✅ 后端服务已启动: http://0.0.0.0:%d", port)
+    return _server_instance
 
 
-# ============================================================================
-# 直接运行入口
-# ============================================================================
+def stop_backend():
+    global _server_instance
+    if _server_instance:
+        _server_instance.should_exit = True
+        logger.info("后端服务已停止")
+
+
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
-    logger.info(f"启动统一后端服务器 http://0.0.0.0:8080")
-    logger.info(f"前端根目录: {_FRONTEND_ROOT}")
-    start(host="0.0.0.0", port=8080)
+    start_backend()
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        stop_backend()

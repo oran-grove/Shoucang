@@ -70,6 +70,16 @@
     }
   },
 
+  "database": {
+    "_comment": "数据库连接配置 — 默认从 config/shared_config.py 读取，可在此文件中覆盖。密码为空时使用 shared_config 的默认值。团队成员各自在 config_user.json 中设置自己的密码（不会被提交到 Git）。此配置段不通过 WebUI 编辑，请手动修改 JSON 文件。",
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "database": "insider_threat_db",
+    "charset": "utf8mb4"
+  },
+
   "screening": {
     "_comment": "Layer 1 — 初步筛查智能体 — 逐条快速研判",
     "enabled": true,

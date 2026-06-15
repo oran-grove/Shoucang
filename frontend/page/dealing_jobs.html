@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <title>可疑事件处理</title>
@@ -15,10 +15,9 @@
         .kv-val   { color: #333; word-break: break-all; }
         .expand-icon { cursor: pointer; font-size: 16px; color: #1E9FFF; transition: transform .2s; display: inline-block; }
         .expand-icon.rotated { transform: rotate(90deg); }
-        .level-serious  { color:#fff;background:#FF5722;padding:2px 8px;border-radius:3px;font-size:12px; }
-        .level-high     { color:#fff;background:#FF7844;padding:2px 8px;border-radius:3px;font-size:12px; }
-        .level-medium   { color:#fff;background:#FFB800;padding:2px 8px;border-radius:3px;font-size:12px; }
-        .level-low      { color:#fff;background:#5FB878;padding:2px 8px;border-radius:3px;font-size:12px; }
+        .level-high   { color:#fff;background:#FF5722;padding:2px 8px;border-radius:3px;font-size:12px; }
+        .level-medium { color:#fff;background:#FFB800;padding:2px 8px;border-radius:3px;font-size:12px; }
+        .level-low    { color:#fff;background:#5FB878;padding:2px 8px;border-radius:3px;font-size:12px; }
         .ip-segment { font-family:'Consolas','Monaco',monospace; font-size:14px; color:#1E9FFF; }
         .main-row { cursor: pointer; }
         .main-row:hover { background: #f5f7fa !important; }
@@ -28,7 +27,7 @@
 <div class="layuimini-container">
     <div class="layuimini-main">
         <blockquote class="layui-elem-quote">
-            请处理可疑事件<br>
+            请处理可疑事件 — 点击行展开详情，判定后执行忽视或拉黑
         </blockquote>
         <div>
             <div class="layui-btn-group" style="margin-bottom:10px;">
@@ -37,27 +36,29 @@
             </div>
             <table class="layui-table" lay-skin="line">
                 <colgroup>
-                    <col width="80">
+                    <col width="55">
                     <col width="160">
-                    <col width="100">
-                    <col width="180">
-                    <col width="60">
-                    <col width="130">
+                    <col width="170">
+                    <col width="75">
+                    <col width="155">
+                    <col width="40">
+                    <col width="120">
                     <col>
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>来源 IP</th>
+                        <th>编号</th>
+                        <th>来源 IP / 员工</th>
+                        <th>目的 IP / 国家</th>
                         <th>威胁等级</th>
                         <th>时间</th>
-                        <th style="text-align:center;">展开</th>
+                        <th style="text-align:center;">详</th>
                         <th style="text-align:center;">操作</th>
-                        <th>详情</th>
+                        <th>判定摘要</th>
                     </tr>
                 </thead>
                 <tbody id="traffic-tbody">
-                    <tr><td colspan="7" style="text-align:center;color:#999;">正在加载…</td></tr>
+                    <tr><td colspan="8" style="text-align:center;color:#999;">正在加载…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -72,51 +73,86 @@ layui.use(['layer'], function () {
         layer = layui.layer;
 
     var $tbody = $('#traffic-tbody');
-    var shownFields = ['id', 'src_ip', 'threat_level', 'packet_time'];
-    var levelClass = { 'serious': 'level-serious', 'high': 'level-high', 'medium': 'level-medium', 'low': 'level-low' };
-    var levelText  = { 'serious': '严重', 'high': '高危', 'medium': '中危', 'low': '低危' };
+    var levelClass = { 'high': 'level-high', 'medium': 'level-medium', 'low': 'level-low' };
 
+    // 中文字段映射
     var fieldNameMap = {
-        'id': 'ID',
-        'src_ip': '来源IP',
-        'dst_ip': '目的IP',
+        'id': '记录编号',
+        'src_ip': '来源 IP',
+        'dst_ip': '目的 IP',
         'src_port': '源端口',
         'dst_port': '目的端口',
         'protocol': '协议',
-        'packet_size': '数据包大小',
-        'packet_time': '时间',
-        'threat_level': '威胁等级',
-        'detection_score': '检测分数',
-        'correlation_score': '关联分数',
-        'judgment_result': '判定结果',
-        'reason': '原因',
-        'description': '描述',
-        'employee_id': '工号',
         'department': '部门',
-        'action': '操作'
+        'employee': '员工',
+        'country': '国家/地区',
+        'traffic_size_text': '流量大小',
+        'traffic_size': '流量(字节)',
+        'entropy': '载荷熵值',
+        'threat_level_text': '威胁等级',
+        'verdict_text': 'AI 判定',
+        'status_text': '处理状态',
+        'block_text': '拦截状态',
+        'packet_time': '发生时间',
+        'created_at': '入库时间',
+        'reason': '摘要',
     };
+
+    // 详情区不显示的内部字段
+    var skipFields = [
+        'src_ip', 'threat_level', 'threat_level_text', 'packet_time',
+        'verdict_text', 'status_text', 'reason',
+        'hash_idx', 'src_tag', 'sp_tag', 'dp_tag',
+        'ai_analyzed', 'ai_verdict', 'is_blocked',
+        'accumulated_pkts', 'accumulated_bytes',
+        'global_pps', 'global_bps'
+    ];
 
     function renderTable(data) {
         var rows = '';
         $.each(data, function (i, item) {
-            var thLevel = item.threat_level || '';
+            var thLevel = item.threat_level || 'medium';
             var lcls = levelClass[thLevel] || 'level-medium';
-            var ltxt = levelText[thLevel]  || thLevel || '--';
+            var ltxt = item.threat_level_text || '中危';
+            var statusText = item.status_text || '';
+            var statusBadge = statusText === '待管理员处理'
+                ? ' <span style="color:#fa541c;font-size:11px;">待处理</span>'
+                : statusText === '已拉黑'
+                ? ' <span style="color:#999;font-size:11px;">已拉黑</span>'
+                : '';
 
-            // 未被展示在主列的剩余字段
+            // 来源: IP + 员工 + 部门
+            var srcDisplay = '<span class="ip-segment">' + (item.src_ip || '--') + '</span>';
+            if (item.employee) {
+                srcDisplay += '<br><span style="font-size:11px;color:#666;">' + item.employee + '</span>';
+            }
+            if (item.department) {
+                srcDisplay += '<span style="font-size:11px;color:#999;"> (' + item.department + ')</span>';
+            }
+
+            // 目的: IP + 国家
+            var dstDisplay = '<span style="font-family:Consolas,Monaco,monospace;font-size:13px;color:#333;">' + (item.dst_ip || '--') + '</span>';
+            if (item.country) {
+                dstDisplay += '<br><span style="font-size:11px;color:#666;">' + item.country + '</span>';
+            }
+
+            // 详情区
             var kvHtml = '';
             $.each(item, function (k, v) {
-                if (shownFields.indexOf(k) !== -1) return;
+                if (skipFields.indexOf(k) !== -1) return;
+                if (v == null || v === '') return;
+                var displayName = fieldNameMap[k] || k;
                 kvHtml += '<div class="kv-item">' +
-                    '<span class="kv-key">' + (fieldNameMap[k] || k) + '：</span>' +
-                    '<span class="kv-val">' + (v != null ? v : '--') + '</span>' +
+                    '<span class="kv-key">' + displayName + '：</span>' +
+                    '<span class="kv-val">' + v + '</span>' +
                     '</div>';
             });
 
             rows +=
                 '<tr class="main-row" data-row="' + i + '" data-id="' + (item.id || '') + '">' +
                     '<td>' + (item.id != null ? item.id : '--') + '</td>' +
-                    '<td><span class="ip-segment">' + (item.src_ip || '--') + '</span></td>' +
+                    '<td>' + srcDisplay + statusBadge + '</td>' +
+                    '<td>' + dstDisplay + '</td>' +
                     '<td><span class="' + lcls + '">' + ltxt + '</span></td>' +
                     '<td>' + (item.packet_time || '--') + '</td>' +
                     '<td style="text-align:center;"><i class="layui-icon layui-icon-right expand-icon" data-row="' + i + '"></i></td>' +
@@ -124,10 +160,12 @@ layui.use(['layer'], function () {
                         '<button class="layui-btn layui-btn-primary layui-btn-xs btn-ignore" data-row="' + i + '">忽视</button>' +
                         '<button class="layui-btn layui-btn-danger layui-btn-xs btn-block" data-row="' + i + '">拉黑</button>' +
                     '</td>' +
-                    '<td></td>' +
+                    '<td style="font-size:12px;color:#666;">' +
+                        (item.verdict_text || '') + ' · ' + (item.status_text || '') +
+                    '</td>' +
                 '</tr>' +
                 '<tr class="detail-row" data-row="' + i + '">' +
-                    '<td colspan="7" class="detail-cell">' +
+                    '<td colspan="8" class="detail-cell">' +
                         '<div class="kv-list">' + kvHtml + '</div>' +
                     '</td>' +
                 '</tr>';
@@ -159,22 +197,21 @@ layui.use(['layer'], function () {
                     var respData = res.data || {};
                     var list = respData.data;
                     if (!list || !list.length) {
-                        $tbody.html('<tr><td colspan="7" style="text-align:center;color:#999;">暂无数据</td></tr>');
+                        $tbody.html('<tr><td colspan="8" style="text-align:center;color:#999;">暂无待处理事件</td></tr>');
                     } else {
                         renderTable(list);
                     }
                 } else {
-                    $tbody.html('<tr><td colspan="7" style="text-align:center;color:#FF5722;">加载失败: ' + (res.msg || '未知错误') + '</td></tr>');
+                    $tbody.html('<tr><td colspan="8" style="text-align:center;color:#FF5722;">加载失败: ' + (res.msg || '未知错误') + '</td></tr>');
                 }
             },
-            error: function (xhr, status) {
-                var msg = status === 'timeout' ? '请求超时' : '无法连接后端';
-                $tbody.html('<tr><td colspan="7" style="text-align:center;color:#FF5722;">' + msg + '</td></tr>');
+            error: function () {
+                $tbody.html('<tr><td colspan="8" style="text-align:center;color:#FF5722;">无法连接后端服务</td></tr>');
             }
         });
     }
 
-    // ==================== 忽视 / 拉黑 弹出层 ====================
+    // ==================== 忽视 / 拉黑 ====================
     function openActionPopup(eventName, rowIdx) {
         var $row = $tbody.find('.main-row[data-row="' + rowIdx + '"]');
         var itemId = $row.data('id');
@@ -182,81 +219,74 @@ layui.use(['layer'], function () {
 
         var content = '<div style="padding: 20px 25px;">' +
             '<div style="margin-bottom:12px;font-size:14px;color:#333;">' +
-                '对 <b style="color:#1E9FFF;">' + srcIp + '</b> 执行 <b style="color:#FF5722;">' + eventName + '</b> 操作' +
+                '对 <b style="color:#1E9FFF;">' + srcIp + '</b> 执行 <b style="color:#FF5722;">' + eventName + '</b>' +
             '</div>' +
             '<div class="layui-form-item" style="margin-top:15px;">' +
                 '<label class="layui-form-label" style="width:80px;">理由</label>' +
                 '<div class="layui-input-block" style="margin-left:110px;">' +
-                    '<textarea id="popup-reason" placeholder="请输入理由" class="layui-textarea" style="min-height:80px;"></textarea>' +
+                    '<textarea id="popup-reason" placeholder="请输入理由（可选）" class="layui-textarea" style="min-height:80px;"></textarea>' +
                 '</div>' +
             '</div>' +
             '<div style="text-align:right;margin-top:20px;">' +
-                '<button class="layui-btn layui-btn-sm" id="popup-submit">提交</button>' +
+                '<button class="layui-btn layui-btn-sm" id="popup-submit">确认</button>' +
                 '<button class="layui-btn layui-btn-sm layui-btn-primary" id="popup-cancel">取消</button>' +
             '</div>' +
         '</div>';
 
-        var popupIndex = layer.open({
+        var popupIdx = layer.open({
             type: 1,
-            area: ['500px', '300px'],
-            title: eventName,
-            shade: 0.6,
-            shadeClose: true,
-            maxmin: true,
-            anim: 0,
+            title: eventName + '操作',
+            area: ['450px', '320px'],
             content: content,
+            btn: [],
             success: function (layero) {
-                $('#popup-submit', layero).on('click', function () {
-                    var reason = $('#popup-reason', layero).val();
-                    if (!reason || !reason.trim()) {
-                        layer.msg('请输入理由', {icon: 2});
-                        return;
-                    }
-                    $.ajax({
-                        url: '/api/traffic',
-                        type: 'POST',
-                        contentType: 'application/json',
-                        data: JSON.stringify({
-                            event: eventName,
-                            reason: reason.trim(),
-                            id: itemId
-                        }),
-                        dataType: 'json',
-                        timeout: 10000,
-                        success: function (res) {
-                            if (res.code === '0' || res.code === 0) {
-                                layer.msg('操作成功', {icon: 1});
-                                layer.close(popupIndex);
-                                loadTrafficData();
-                            } else {
-                                layer.msg('操作失败: ' + (res.msg || '未知错误'), {icon: 2});
-                            }
-                        },
-                        error: function () {
-                            layer.msg('请求失败，请检查网络', {icon: 2});
-                        }
-                    });
+                layero.find('#popup-submit').on('click', function () {
+                    var reason = layero.find('#popup-reason').val();
+                    layer.close(popupIdx);
+                    submitAction(eventName, itemId, srcIp, reason);
                 });
-                $('#popup-cancel', layero).on('click', function () {
-                    layer.close(popupIndex);
+                layero.find('#popup-cancel').on('click', function () {
+                    layer.close(popupIdx);
                 });
             }
         });
     }
 
-    // 忽视按钮
-    $tbody.on('click', '.btn-ignore', function (e) {
-        e.stopPropagation();
-        openActionPopup('忽视', $(this).data('row'));
-    });
+    function submitAction(action, itemId, srcIp, reason) {
+        $.ajax({
+            url: '/api/traffic',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                event: action,
+                id: itemId,
+                reason: reason || '手动操作'
+            }),
+            success: function (res) {
+                if (res.code === 0 || res.code === '0') {
+                    layer.msg(action + '成功');
+                    loadTrafficData();
+                } else {
+                    layer.msg('操作失败: ' + (res.msg || '未知'));
+                }
+            },
+            error: function () {
+                layer.msg('请求失败');
+            }
+        });
+    }
 
-    // 拉黑按钮
+    // ==================== 事件绑定 ====================
     $tbody.on('click', '.btn-block', function (e) {
         e.stopPropagation();
         openActionPopup('拉黑', $(this).data('row'));
     });
 
-    // 行点击展开/折叠
+    $tbody.on('click', '.btn-ignore', function (e) {
+        e.stopPropagation();
+        openActionPopup('忽视', $(this).data('row'));
+    });
+
     $tbody.on('click', '.main-row', function () {
         toggleRow($(this).data('row'));
     });
@@ -266,17 +296,17 @@ layui.use(['layer'], function () {
         toggleRow($(this).data('row'));
     });
 
-    $('#btn-expand').click(function () {
+    $('#btn-expand').on('click', function () {
         $tbody.find('.detail-row').addClass('show');
         $tbody.find('.expand-icon').addClass('rotated');
     });
 
-    $('#btn-fold').click(function () {
+    $('#btn-fold').on('click', function () {
         $tbody.find('.detail-row').removeClass('show');
         $tbody.find('.expand-icon').removeClass('rotated');
     });
 
-    // 初始化
+    // ==================== 初始化 ====================
     loadTrafficData();
     setInterval(loadTrafficData, 30000);
 });
