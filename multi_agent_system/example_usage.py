@@ -365,10 +365,10 @@ async def test_agents_standalone(config: FullConfig):
 
     similar_records = [
         {"id": 101, "src_ip": "192.168.1.100", "dst_ip": "45.33.32.156",
-         "protocol": "TCP", "traffic_size": 5000000, "entropy": 7.8,
+         "protocol": "TCP", "accumulated_bytes": 5000000, "entropy": 7.8,
          "department": "财务部", "created_at": "2026-06-07 02:00:00"},
         {"id": 102, "src_ip": "192.168.1.100", "dst_ip": "8.8.8.8",
-         "protocol": "UDP", "traffic_size": 500, "entropy": 6.0,
+         "protocol": "UDP", "accumulated_bytes": 500, "entropy": 6.0,
          "department": "财务部", "created_at": "2026-06-06 23:00:00"},
     ]
     matched: list = []
@@ -438,7 +438,7 @@ def test_live_scan(config: FullConfig):
     db_row = {
         "id": 12345, "src_ip": "192.168.1.100", "dst_ip": "203.0.113.42",
         "src_port": 49152, "dst_port": 443, "protocol": "TCP",
-        "department": "财务部", "traffic_size": 50000, "entropy": 7.5,
+        "department": "财务部", "accumulated_bytes": 50000, "entropy": 7.5,
         "src_tag": "internal", "sp_tag": "suspicious", "dp_tag": "external",
         "accumulated_pkts": 1200, "accumulated_bytes": 800000,
         "global_pps": 350, "global_bps": 5000000, "avg_entropy": 6.8,

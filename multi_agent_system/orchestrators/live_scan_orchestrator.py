@@ -182,7 +182,7 @@ class LiveScanOrchestrator:
                 await asyncio.sleep(10.0)
 
     async def _interruptible_sleep(self, seconds: float) -> None:
-        """分段 sleep，每 1 秒检查 _running，支持快速优雅关闭。"""
+        """分段 sleep，每 1 秒检查 _running，支持快速安全关闭。"""
         remaining = seconds
         while remaining > 0 and self._running:
             await asyncio.sleep(min(1.0, remaining))
@@ -231,11 +231,11 @@ class LiveScanOrchestrator:
                 if verdict == "safe":
                     self._enqueue_deletion(row_id)
                 else:
-                    self._enqueue_verdict(row_id, verdict)
+                    self._enqueue_verdict(row_id, verdict,
+                                          reasoning=result.reasoning)
             else:
-                # result 为 None 是异常情况，保留为可疑等待重试
                 self._stats["total_suspicious"] += 1
-                self._enqueue_verdict(row_id, "suspicious")
+                self._enqueue_verdict(row_id, "suspicious", reasoning="")
                 logger.warning("[LiveScan] id=%s 返回 None，标记为可疑", row_id)
 
             # 成功 → 推进游标
@@ -249,7 +249,8 @@ class LiveScanOrchestrator:
 
         self._stats["last_scan_time"] = datetime.now(timezone.utc).isoformat()
 
-    def _enqueue_verdict(self, row_id: int, verdict: str) -> None:
+    def _enqueue_verdict(self, row_id: int, verdict: str,
+                         reasoning: str = "") -> None:
         """将判定结果放入队列，供 verdict_writer 批量 UPDATE 数据库。"""
         if self._verdict_queue is None:
             return
@@ -261,9 +262,10 @@ class LiveScanOrchestrator:
             self._verdict_queue.put_nowait({
                 "traffic_id": row_id,
                 "ai_verdict": ai_verdict,
+                "ai_reasoning": reasoning[:2000],
             })
         except queue.Full:
-            pass  # 队列满时丢弃，避免阻塞扫描管线
+            pass
 
     def _enqueue_deletion(self, row_id: int) -> None:
         """将安全流量的 ID 放入删除队列，供 deletion_writer 批量 DELETE。"""

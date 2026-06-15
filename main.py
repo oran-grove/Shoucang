@@ -100,7 +100,7 @@ def _bold(s: str) -> str:
 
 
 # ============================================================
-# 全局组件引用（用于优雅关闭）
+# 全局组件引用（用于系统关闭）
 # ============================================================
 _global_state = {
     "data_bridge": None,
@@ -124,15 +124,15 @@ _global_state = {
 def print_banner():
     """打印系统启动横幅"""
     banner = r"""
-+============================================================================+
-|              守藏 — 基于P4的异构多智能体反泄密平台  启动中...                       |
-|                                                                            |
-|  Layer 1  P4 硬件层        -> pynng 监听 + Flask(:5000) + 遥测              |
-|  Layer 2  多智能体系统       -> L1筛查 → L2回溯 ⇄ L3研判 三层管线             |
-|  Layer 3  数据网关          -> DataBridge UDP:9999 + MySQL 攒批写入          |
-|  WebUI    前端可视化         -> FastAPI(:8080) 仪表盘 / REST API / 静态资源   |
-|  跨层联动                   -> 研判结果生成策略 -> P4 流表下发 / 检测阈值更新   |
-+============================================================================+
++================================================================================+
+|              守藏 — 基于P4的异构多智能体反泄密平台  启动中...                  |
+|                                                                                |
+|  Layer 1  P4 硬件层        -> pynng 监听 + Flask(:5000) + 遥测                 |
+|  Layer 2  多智能体系统       -> L1筛查 → L2回溯 ⇄ L3研判 三层管线              |
+|  Layer 3  数据网关          -> DataBridge UDP:9999 + MySQL 攒批写入            |
+|  WebUI    前端可视化         -> FastAPI(:8080) 仪表盘 / REST API / 静态资源    |
+|  跨层联动                   -> 研判结果生成策略 -> P4 流表下发 / 检测阈值更新  |
++================================================================================+
 """
     print(banner)
 
@@ -177,7 +177,7 @@ def start_backend(port: int = 8080) -> None:
 
 
 def stop_backend():
-    """优雅关闭 FastAPI 后端服务器"""
+    """关闭 FastAPI 后端服务器"""
     server = _global_state.get("backend_server")
     if server is not None:
         try:
@@ -381,7 +381,7 @@ async def start_multi_agent_system(
 
 
 async def stop_multi_agent_system():
-    """优雅关闭多智能体系统"""
+    """关闭多智能体系统"""
     live_scanner = _global_state.get("live_scanner")
     if live_scanner is not None:
         try:
@@ -433,7 +433,7 @@ def start_data_gateway() -> bool:
 
 
 def stop_data_gateway():
-    """优雅关闭数据网关"""
+    """关闭数据网关"""
     bridge = _global_state.get("data_bridge")
     if bridge is not None:
         try:
@@ -535,13 +535,13 @@ def health_check_loop():
 
 
 # ============================================================
-# 信号处理（优雅关闭）
+# 信号处理（系统关闭）
 # ============================================================
 def _setup_signal_handlers(loop: asyncio.AbstractEventLoop):
     """注册 SIGINT / SIGTERM 回调"""
 
     def _shutdown():
-        _logger.info(_yellow("\n[!] 收到终止信号，开始优雅关闭..."))
+        _logger.info(_yellow("\n[!] 收到终止信号，开始关闭系统..."))
         _global_state["shutdown_requested"].set()
 
     try:
@@ -674,7 +674,7 @@ async def async_main(args: argparse.Namespace):
     print("    P4 控制面 (Flask)   -> http://0.0.0.0:5000")
     print("    数据网关 (UDP)         -> 0.0.0.0:9999")
     print()
-    print("  按 Ctrl+C 优雅关闭系统")
+    print("  按 Ctrl+C 安全关闭系统")
     print("=" * 76)
     print()
 
@@ -684,13 +684,13 @@ async def async_main(args: argparse.Namespace):
             await asyncio.sleep(1)
 
     except KeyboardInterrupt:
-        _logger.info(_yellow("\n收到 Ctrl+C，开始优雅关闭..."))
+        _logger.info(_yellow("\n收到 Ctrl+C，开始关闭系统..."))
     finally:
         _global_state["shutdown_requested"].set()
 
-    # ---- 优雅关闭流程 ----
+    # ---- 系统关闭流程 ----
     _logger.info(_yellow("=" * 60))
-    _logger.info(_yellow("正在执行优雅关闭流程..."))
+    _logger.info(_yellow("正在执行系统关闭流程..."))
 
     # 1. 停止自适应后台任务
     evolution_task.cancel()
@@ -725,7 +725,7 @@ async def async_main(args: argparse.Namespace):
     _logger.info("等待后台线程退出...")
     await asyncio.sleep(2)
 
-    _logger.info(_green("系统已完全关闭。再见！"))
+    _logger.info(_green("系统已完全关闭。"))
     print()
     print("=" * 76)
     print("  系统已安全关闭 [OK]".center(76))

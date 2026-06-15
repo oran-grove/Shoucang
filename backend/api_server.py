@@ -131,10 +131,14 @@ def _enrich_traffic_row(row: dict) -> dict:
         row["status_text"] = "待管理员处理"
 
     # 流量大小格式化
-    row["traffic_size_text"] = _fmt_bytes(row.get("traffic_size") or 0)
+    row["traffic_size_text"] = _fmt_bytes(row.get("accumulated_bytes") or 0)
 
     # 拦截状态
     row["block_text"] = "已拦截" if row.get("is_blocked") else "未拦截"
+
+    # AI 分析理由（截断显示）
+    reasoning = row.get("ai_reasoning", "") or ""
+    row["ai_reasoning"] = reasoning
 
     # 原因摘要
     parts = []
@@ -297,12 +301,17 @@ class ConfigSaveRequest(BaseModel):
 
 class BlacklistAddRequest(BaseModel):
     ip: str
+    threat_level: str = "高"
     reason: Optional[str] = "手动添加"
+    port: Optional[int] = None
+    attack_type: Optional[str] = None
 
 
 class WhitelistAddRequest(BaseModel):
     ip: str
     reason: Optional[str] = "手动添加"
+    port: Optional[int] = None
+    trust_level: Optional[str] = None
 
 
 class TrafficAction(BaseModel):
@@ -353,9 +362,41 @@ async def api_save_config(payload: ConfigSaveRequest):
 _SUPPORTED_BACKENDS = {"deepseek", "openai", "lmstudio"}
 
 
+class BackendSaveRequest(BaseModel):
+    backend: str
+    api_key: str = ""
+    model_name: str = ""
+    api_base: str = ""
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    timeout: float = 60.0
+    max_retries: int = 3
+
+
 @app.post("/api/config/backend")
-async def api_config_backend_save():
-    return JSONResponse({"code": 0, "msg": "通过 config_user.json 配置"})
+async def api_config_backend_save(payload: BackendSaveRequest):
+    """保存单个后端的配置到 config_user.json"""
+    backend_key = payload.backend.lower()
+    if backend_key not in _SUPPORTED_BACKENDS:
+        return JSONResponse(
+            {"code": 1, "msg": f"不支持的后端: {payload.backend}"}, status_code=400,
+        )
+
+    # 将前端扁平的 payload 转换为 config 的嵌套结构
+    backend_fields = {}
+    for f in ("api_key", "model_name", "api_base", "temperature",
+              "max_tokens", "timeout", "max_retries"):
+        val = getattr(payload, f, None)
+        if val:
+            backend_fields[f] = val
+
+    updates = {"backends": {backend_key: backend_fields}}
+
+    try:
+        save_config_dict(updates)
+        return JSONResponse({"code": 0, "msg": f"后端 '{payload.backend}' 配置已保存"})
+    except Exception as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
 @app.post("/api/config/backend/test")
@@ -473,10 +514,22 @@ async def api_menus():
 
 
 @app.get("/api/employees")
-async def api_employees_get():
+async def api_employees_get(
+    page: int = Query(1),
+    limit: int = Query(15),
+    number: str = Query(""),
+    ip: str = Query(""),
+    department: str = Query(""),
+    name: str = Query(""),
+):
     try:
-        rows = _db("lists_manager", "get_employees")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        filters = {}
+        for k in ("number", "ip", "department", "name"):
+            v = locals().get(k, "")
+            if v:
+                filters[k] = v
+        total, rows = _db("lists_manager", "get_employees", filters, page, limit)
+        return JSONResponse({"code": 0, "data": rows, "count": total})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -523,10 +576,13 @@ async def api_ip_map_get():
 # API: 黑白名单管理
 # ============================================================================
 @app.get("/api/blacklist")
-async def api_blacklist_get():
+async def api_blacklist_get(
+    page: int = Query(1),
+    limit: int = Query(10),
+):
     try:
-        rows = _db("lists_manager", "get_blacklist_detailed")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        result = _db("lists_manager", "get_blacklist_detailed", page, limit)
+        return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -534,7 +590,13 @@ async def api_blacklist_get():
 @app.post("/api/blacklist")
 async def api_blacklist_add(payload: BlacklistAddRequest):
     try:
-        _db("lists_manager", "add_to_db_blacklist", payload.ip, "frontend", payload.reason)
+        _db("lists_manager", "add_to_db_blacklist",
+            ip=payload.ip,
+            threat_level=payload.threat_level,
+            reason=payload.reason or "手动添加",
+            port=payload.port,
+            attack_type=payload.attack_type,
+        )
         return JSONResponse({"code": 0, "msg": f"已拉黑 {payload.ip}"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -552,10 +614,13 @@ async def api_blacklist_delete(item_id: int):
 
 
 @app.get("/api/whitelist")
-async def api_whitelist_get():
+async def api_whitelist_get(
+    page: int = Query(1),
+    limit: int = Query(10),
+):
     try:
-        rows = _db("lists_manager", "get_whitelist_detailed")
-        return JSONResponse({"code": 0, "data": rows, "count": len(rows)})
+        result = _db("lists_manager", "get_whitelist_detailed", page, limit)
+        return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -563,9 +628,13 @@ async def api_whitelist_get():
 @app.post("/api/whitelist")
 async def api_whitelist_add(payload: WhitelistAddRequest):
     try:
-        target_ip = payload.ip
-        _db("lists_manager", "add_to_db_whitelist", target_ip, "frontend", payload.reason)
-        return JSONResponse({"code": 0, "msg": f"已加白 {target_ip}"})
+        _db("lists_manager", "add_to_db_whitelist",
+            ip=payload.ip,
+            reason=payload.reason or "手动添加",
+            port=payload.port,
+            trust_level=payload.trust_level,
+        )
+        return JSONResponse({"code": 0, "msg": f"已加白 {payload.ip}"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
@@ -829,7 +898,7 @@ def start_backend(port: int = 8080):
         app="backend.api_server:app",
         host="0.0.0.0",
         port=port,
-        log_level="info",
+        log_level="warning",
         loop="asyncio",
         reload=False,
     )

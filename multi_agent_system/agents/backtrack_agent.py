@@ -193,7 +193,7 @@ class BacktrackAgent(BaseAgent):
                 f"时间={r.get('created_at', r.get('packet_time', '?'))} | "
                 f"源={r.get('src_ip', '?')} -> 目标={r.get('dst_ip', '?')} | "
                 f"协议={r.get('protocol', '?')} | "
-                f"字节={r.get('traffic_size', r.get('byte_count', 0))} | "
+                f"字节={r.get('accumulated_bytes', r.get('byte_count', 0))} | "
                 f"熵={r.get('entropy', r.get('entropy_score', 0))} | "
                 f"部门={r.get('department', '?')}"
             )

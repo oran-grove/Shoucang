@@ -183,32 +183,40 @@ def add_to_db_whitelist(ip: str,
 # ============================================================================
 # 明细查询（前端列表展示用 — 返回完整字段）
 # ============================================================================
-def get_blacklist_detailed() -> list:
-    """查询黑名单完整明细列表。"""
+def get_blacklist_detailed(page: int = 1, limit: int = 10) -> dict:
+    """查询黑名单完整明细列表（分页）。返回: {"total": N, "rows": [...]}"""
     try:
         with db_cursor() as (conn, cursor):
+            cursor.execute("SELECT COUNT(*) AS cnt FROM blacklist")
+            total = (cursor.fetchone() or {}).get("cnt", 0)
+            offset = (page - 1) * limit
             cursor.execute(
                 "SELECT id, ip_address, threat_level, reason, port, attack_type "
-                "FROM blacklist ORDER BY id DESC"
+                "FROM blacklist ORDER BY id DESC LIMIT %s OFFSET %s",
+                (limit, offset),
             )
-            return list(cursor.fetchall())
+            return {"total": total, "rows": list(cursor.fetchall())}
     except Exception as e:
         print(f"❌ [数据库] 查询黑名单明细失败: {e}")
-        return []
+        return {"total": 0, "rows": []}
 
 
-def get_whitelist_detailed() -> list:
-    """查询白名单完整明细列表。"""
+def get_whitelist_detailed(page: int = 1, limit: int = 10) -> dict:
+    """查询白名单完整明细列表（分页）。返回: {"total": N, "rows": [...]}"""
     try:
         with db_cursor() as (conn, cursor):
+            cursor.execute("SELECT COUNT(*) AS cnt FROM whitelist")
+            total = (cursor.fetchone() or {}).get("cnt", 0)
+            offset = (page - 1) * limit
             cursor.execute(
                 "SELECT id, ip_address, reason, port, trust_level "
-                "FROM whitelist ORDER BY id DESC"
+                "FROM whitelist ORDER BY id DESC LIMIT %s OFFSET %s",
+                (limit, offset),
             )
-            return list(cursor.fetchall())
+            return {"total": total, "rows": list(cursor.fetchall())}
     except Exception as e:
         print(f"❌ [数据库] 查询白名单明细失败: {e}")
-        return []
+        return {"total": 0, "rows": []}
 
 
 # ============================================================================
@@ -347,8 +355,8 @@ def get_traffic_logs(limit: int = 200,
 
             cursor.execute(
                 f"SELECT id, src_ip, dst_ip, src_port, dst_port, department, "
-                "protocol, packet_time, traffic_size, is_blocked, entropy, "
-                "ai_analyzed, ai_verdict, employee, country, "
+                "protocol, packet_time, is_blocked, entropy, "
+                "ai_analyzed, ai_verdict, ai_reasoning, employee, country, "
                 "accumulated_pkts, accumulated_bytes "
                 f"FROM traffic_log{where} ORDER BY id DESC LIMIT %s OFFSET %s",
                 params + [limit, offset],
@@ -433,7 +441,7 @@ def get_similar_flows_by_src_ip(
         with db_cursor() as (conn, cursor):
             cursor.execute(
                 "SELECT id, src_ip, dst_ip, src_port, dst_port, protocol, "
-                "traffic_size, department, entropy, created_at, packet_time "
+                "accumulated_bytes, department, entropy, created_at, packet_time "
                 "FROM traffic_log "
                 "WHERE src_ip = %s AND created_at >= %s "
                 "ORDER BY created_at DESC "

@@ -78,11 +78,11 @@ PORT_LABELS = {
     6697:   9,   # IRC over SSL
     9999:   8,   # 常见反弹 shell / 木马
 
-    # --- 9 分：DNS / 数据走私隧道 ---
+    # --- 9 分：DNS / 数据传输隧道 ---
     53:     9,   # DNS 隧道（高熵 DNS 直接拉满）
 
     # --- 7-8 分：数据外泄高危端口 ---
-    22:     8,   # SSH 隧道 / SCP 抽水
+    22:     8,   # SSH 隧道 / SCP 数据传输
     21:     7,   # FTP 明文外传
     3389:   7,   # RDP 远程桌面数据泄露
     5900:   7,   # VNC 远程控制
@@ -167,20 +167,20 @@ def process_p4_report(msg):
     results = []
     pointer = 0
 
-    # 🌟 绝杀：滑动滑窗，利用首字节染色标签动态解析粘包
+    # 滑动窗口解析：利用首字节标签动态解析粘包
     while pointer < payload_len:
         if payload_len - pointer < 28:
             break
 
-        # 1. 偷看一眼当前块的前 4 字节（也就是 hash_index 所在的内存）
+        # 1. 读取当前块的前 4 字节（hash_index 所在位置）
         tag_bytes = payload[pointer: pointer + 4]
-        # 用大端解出无符号整数
+        # 大端解出无符号整数
         test_idx = struct.unpack('>I', tag_bytes)[0]
 
         # 2. 智能判定分流
-        # 如果最高字节被染成了 0xFF (即数值大于等于 0xFF000000)
+        # 如果最高字节为 0xFF (即数值大于等于 0xFF000000)
         if test_idx >= 0xFF000000:
-            # 🚨 坐实了！这是 28 字节的高危报警包！
+            # 检测到 28 字节高危报警包
             chunk = payload[pointer: pointer + 28]
             if len(chunk) == 28:
                 vector = build_feature_vector(chunk)
@@ -188,7 +188,7 @@ def process_p4_report(msg):
                     results.append(vector)
             pointer += 28  # 步长精准向前滑动 28 字节
         else:
-            # 🟢 这绝对是 34 字节的冷池首包！
+            # 检测到 34 字节冷池首包
             chunk = payload[pointer: pointer + 34]
             if len(chunk) == 34:
                 init_first_packet(chunk)
@@ -216,7 +216,7 @@ def build_feature_vector(chunk):
     """【特征熔炼】基于 28B 硬件无损契约，高保真还原 21 维态势感知矩阵"""
     logger.debug("开始解析 28B 高危报警包...")
     try:
-        # 🌟【完美解包】：结构、顺序与 P4 层的 audit_digest_t 形成了绝对咬合
+        # P4 层 audit_digest_t 结构解包
         hash_idx, pkts, bytes_len, sum_e, max_e, min_e, reason, ts_raw = struct.unpack(FMT_LIST2, chunk)
     except Exception as e:
         logger.error("解包失败，请检查 FMT_LIST2 是否对齐: %s", e)
@@ -239,7 +239,7 @@ def build_feature_vector(chunk):
 
         initial_ts = current_ts
 
-        # 原位拼接 21 维满血空张量
+        # 原位构建 21 维特征向量
         vector = [
             base[0], base[1], base[2], base[3], base[4],  # [0-4] 五元组
             src_tag, sp_tag, dp_tag,  # [5-7] 业务画像资产标签
@@ -248,10 +248,10 @@ def build_feature_vector(chunk):
             0, 0, 0, 0,  # [12-15] 瞬时PPS, 全局PPS, 瞬时BPS, 全局BPS
             0.0, 0, 9999,  # [16-18] 历史均熵, 历史最高熵, 历史最低熵
             reason,  # [19] 硬件最底层的原始触发原由
-            "Normal"  # [20] AI/模型判官预留的判决标签
+            "Normal"  # [20] AI/模型预留的判决标签
         ]
     else:
-        # 极端丢包防崩兜底
+        # 极端丢包容错兜底
         vector = ["Unknown"] * 8 + [0, 0, current_ts, current_ts, 0, 0, 0, 0, 0.0, 0, 9999, reason, "Normal"]
 
     # 3. 剥离状态，进行硬件级物理累加
@@ -261,10 +261,9 @@ def build_feature_vector(chunk):
     last_ts = vector[11]
 
     new_pkts = old_pkts + pkts
-    new_bytes = old_bytes + bytes_len  # 🌟【修复核心】：现在的 bytes_len 是硬件亲自吐上来的真数据！
+    new_bytes = old_bytes + bytes_len  # bytes_len 来自硬件上报的真实数据
 
-    # 4. 四维高性能速率引擎（附带完美的除零防护锁）
-    # 4. 四维速率引擎重装上阵 (引入 round() 精度保护)
+    # 4. 四维速率计算引擎 (含除零保护与精度保护)
     delta_instant = current_ts - last_ts if current_ts > last_ts else 0
     delta_global = current_ts - initial_ts if current_ts > initial_ts else 1
 
@@ -273,7 +272,7 @@ def build_feature_vector(chunk):
         instant_pps = 0
         instant_bps = 0
     else:
-        # 🌟【修复核心】：用 round() 代替 int()，让 0.99 变成 1，不再丢失低频精度
+        # 使用 round() 代替 int() 保留低频精度
         instant_pps = round((pkts / delta_instant) * 1000000)
         instant_bps = round((bytes_len / delta_instant) * 1000000)
 
@@ -318,7 +317,7 @@ def process_pulled_registers(vol_dump_str: bytes, ent_dump_str: bytes):
             continue
         raw_p4_binary = (vol_chunk + ent_chunk).hex()
         # 调试：打印每条非零记录的原始数据
-        logger.info("DEBUG hash=%d offset=%d vol=%s ent=%s pkts=%d bytes=%d score=%d",
+        logger.debug("hash=%d offset=%d vol=%s ent=%s pkts=%d bytes=%d score=%d",
             hash_idx, offset,
             vol_chunk.hex(),
             ent_chunk.hex(),

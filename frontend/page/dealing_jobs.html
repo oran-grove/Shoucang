@@ -87,12 +87,13 @@ layui.use(['layer'], function () {
         'employee': '员工',
         'country': '国家/地区',
         'traffic_size_text': '流量大小',
-        'traffic_size': '流量(字节)',
+        'accumulated_bytes': '流量(字节)',
         'entropy': '载荷熵值',
         'threat_level_text': '威胁等级',
         'verdict_text': 'AI 判定',
         'status_text': '处理状态',
         'block_text': '拦截状态',
+        'ai_reasoning': 'AI 分析理由',
         'packet_time': '发生时间',
         'created_at': '入库时间',
         'reason': '摘要',
@@ -105,7 +106,8 @@ layui.use(['layer'], function () {
         'hash_idx', 'src_tag', 'sp_tag', 'dp_tag',
         'ai_analyzed', 'ai_verdict', 'is_blocked',
         'accumulated_pkts', 'accumulated_bytes',
-        'global_pps', 'global_bps'
+        'global_pps', 'global_bps',
+        'ai_reasoning'  // 单独成行，不在表格格中显示
     ];
 
     function renderTable(data) {
@@ -167,6 +169,12 @@ layui.use(['layer'], function () {
                 '<tr class="detail-row" data-row="' + i + '">' +
                     '<td colspan="8" class="detail-cell">' +
                         '<div class="kv-list">' + kvHtml + '</div>' +
+                        (item.ai_reasoning ? (
+                            '<div style="margin-top:12px;padding-top:12px;border-top:1px dashed #e8e8e8;">' +
+                            '<div style="font-size:13px;color:#999;margin-bottom:4px;">AI 分析理由：</div>' +
+                            '<div style="font-size:13px;color:#333;line-height:1.8;white-space:pre-wrap;">' + item.ai_reasoning + '</div>' +
+                            '</div>'
+                        ) : '') +
                     '</td>' +
                 '</tr>';
         });

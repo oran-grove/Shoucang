@@ -138,7 +138,7 @@ def stop_db_writer(stop_event: threading.Event) -> None:
 # ============================================================================
 
 def _update_verdict_batch(rows: list[dict]) -> None:
-    """批量 UPDATE traffic_log，设置 ai_analyzed=1 和 ai_verdict。"""
+    """批量 UPDATE traffic_log，设置 ai_analyzed、ai_verdict、ai_reasoning。"""
     if not rows:
         return
 
@@ -146,10 +146,13 @@ def _update_verdict_batch(rows: list[dict]) -> None:
         with db_cursor() as (conn, cursor):
             sql = (
                 "UPDATE traffic_log "
-                "SET ai_analyzed = 1, ai_verdict = %s "
+                "SET ai_analyzed = 1, ai_verdict = %s, ai_reasoning = %s "
                 "WHERE id = %s"
             )
-            values_list = [(r["ai_verdict"], r["traffic_id"]) for r in rows]
+            values_list = [
+                (r["ai_verdict"], r.get("ai_reasoning", ""), r["traffic_id"])
+                for r in rows
+            ]
             cursor.executemany(sql, values_list)
             conn.commit()
             print(f"   📊 判定批量入库: {len(rows)} 条")
