@@ -88,6 +88,58 @@ def _validate(config_dict: dict) -> list[str]:
 # 增量计算
 # ============================================================
 
+def _coerce_types(current: dict, default: dict) -> dict:
+    """
+    将 current 中与 default 语义相等但类型不同的值，
+    强制转换为 default 中的类型。
+    用于解决 WebUI 表单提交全部为字符串的问题。
+    """
+    result = {}
+    for key, cur_val in current.items():
+        if key.startswith("_"):
+            result[key] = cur_val
+            continue
+        def_val = default.get(key)
+        if def_val is None:
+            result[key] = deepcopy(cur_val)
+            continue
+        if isinstance(cur_val, dict) and isinstance(def_val, dict):
+            result[key] = _coerce_types(cur_val, def_val)
+        elif isinstance(cur_val, list) and isinstance(def_val, list):
+            result[key] = [
+                _coerce_types_item(c, d) for c, d in
+                zip(cur_val, def_val * max(len(cur_val), len(def_val)))
+            ]
+        else:
+            result[key] = _coerce_item(cur_val, def_val)
+    return result
+
+
+def _coerce_item(cur_val: Any, def_val: Any) -> Any:
+    """将 cur_val 转换为与 def_val 语义相等的同类型值。"""
+    if isinstance(cur_val, type(def_val)):
+        return cur_val
+    # str → int / float / bool
+    if isinstance(cur_val, str) and isinstance(def_val, (int, float, bool)):
+        try:
+            if isinstance(def_val, bool):
+                return cur_val.lower() in ("true", "1", "yes")
+            return type(def_val)(cur_val)
+        except (ValueError, TypeError):
+            return cur_val
+    # int → float
+    if isinstance(cur_val, int) and isinstance(def_val, float):
+        return float(cur_val)
+    return cur_val
+
+
+def _coerce_types_item(cur_val: Any, def_val: Any) -> Any:
+    """用于 list 元素内部的类型强制转换。"""
+    if isinstance(cur_val, dict) and isinstance(def_val, dict):
+        return _coerce_types(cur_val, def_val)
+    return _coerce_item(cur_val, def_val)
+
+
 def _compute_delta(default: dict, current: dict) -> dict:
     """
     递归比较 current 与 default，只返回与默认值不同的键。

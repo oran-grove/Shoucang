@@ -356,21 +356,33 @@
             return false;
         });
 
-        // 默认配置按钮
+        // 默认配置按钮 — 仅重置当前页面管理的智能体配置节
         $('#btnResetConfig').on('click', function () {
-            layer.confirm('确认恢复默认配置？当前配置将被覆盖。', function (index) {
-                layer.close(index);
-                $.post('/api/config/reset', function (res) {
-                    if (res.code === 0) {
-                        layer.msg('已恢复默认配置', { icon: 1 });
-                        setTimeout(function () { location.reload(); }, 800);
-                    } else {
-                        layer.msg(res.msg || '恢复失败', { icon: 2 });
-                    }
-                }, 'json').fail(function () {
-                    layer.msg('请求失败', { icon: 2 });
-                });
-            });
+            layer.confirm(
+                '确认恢复智能体配置为默认值？数据库配置和后端 API 密钥不受影响。',
+                function (index) {
+                    layer.close(index);
+                    $.ajax({
+                        url: '/api/config/reset',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({
+                            sections: ['screening', 'backtrack', 'adjudication', 'feedback']
+                        }),
+                        success: function (res) {
+                            if (res.code === 0) {
+                                layer.msg('已恢复默认配置', { icon: 1 });
+                                setTimeout(function () { location.reload(); }, 800);
+                            } else {
+                                layer.msg(res.msg || '恢复失败', { icon: 2 });
+                            }
+                        },
+                        error: function () {
+                            layer.msg('请求失败', { icon: 2 });
+                        }
+                    });
+                }
+            );
         });
 
         //表单初始赋值

@@ -504,11 +504,23 @@ async def _close_backend(backend) -> None:
         pass
 
 
+class ConfigResetRequest(BaseModel):
+    sections: Optional[list[str]] = None  # None/空 = 全量重置
+
+
 @app.post("/api/config/reset")
-async def api_config_reset():
+async def api_config_reset(payload: ConfigResetRequest = ConfigResetRequest()):
     try:
-        reset_config()
-        return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
+        if payload.sections:
+            reset_config(*payload.sections)
+            return JSONResponse(
+                {"code": 0, "msg": f"已重置配置节: {', '.join(payload.sections)}"}
+            )
+        else:
+            reset_config()
+            return JSONResponse({"code": 0, "msg": "已恢复默认配置"})
+    except ValueError as e:
+        return JSONResponse({"code": 1, "msg": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 

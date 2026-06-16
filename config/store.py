@@ -40,7 +40,7 @@ from .schema import (
     ScreeningAgentConfig,
 )
 from .shared_config import DEFAULT_CONFIG_PATH, USER_CONFIG_PATH
-from .loader import _compute_delta, _deep_merge, _validate
+from .loader import _compute_delta, _deep_merge, _validate, _coerce_types
 
 logger = logging.getLogger(__name__)
 
@@ -431,7 +431,11 @@ class ConfigStore:
         with self._lock:
             current_dict = _structs_to_dict(self)
             merged = _deep_merge(current_dict, updates)
-            delta = _compute_delta(self._default_dict, merged)
+            # 将前端表单的字符串值强制转换为与默认配置相同的类型
+            # （如 "0.3" → 0.3, "1024" → 1024），避免类型差异导致
+            # _compute_delta 输出未实际变更的字段
+            normalized = _coerce_types(merged, self._default_dict)
+            delta = _compute_delta(self._default_dict, normalized)
             USER_CONFIG_PATH.write_text(
                 json.dumps(delta, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -441,11 +445,57 @@ class ConfigStore:
         self._loaded = False
         self.load()
 
-    def reset(self) -> None:
-        """删除用户配置并重新加载默认值。"""
-        if USER_CONFIG_PATH.exists():
-            USER_CONFIG_PATH.unlink()
-            logger.info("[config] 已删除 %s，重新加载默认配置", USER_CONFIG_PATH)
+    def reset(self, *sections: str) -> None:
+        """
+        重置配置。
+
+        - 无参：删除整个 config_user.json，恢复全部默认值。
+        - 指定节名：只从 config_user.json 中移除对应节，保留其他节的用户覆盖。
+        """
+        self._ensure_loaded()
+        if not sections:
+            # 全量重置
+            if USER_CONFIG_PATH.exists():
+                USER_CONFIG_PATH.unlink()
+                logger.info("[config] 已删除 %s，重新加载默认配置", USER_CONFIG_PATH)
+            self._loaded = False
+            self.load()
+            return
+
+        # 部分重置：移除指定节
+        valid = set(_SECTION_ATTRS.keys())
+        invalid = [s for s in sections if s not in valid]
+        if invalid:
+            raise ValueError(
+                f"未知的配置节: {invalid}。可选: {sorted(valid)}"
+            )
+
+        if not USER_CONFIG_PATH.exists():
+            logger.info("[config] %s 不存在，无配置需要重置", USER_CONFIG_PATH)
+            self._loaded = False
+            self.load()
+            return
+
+        with self._lock:
+            with open(USER_CONFIG_PATH, "r", encoding="utf-8") as f:
+                user_dict = json.load(f)
+
+            removed = []
+            for sec in sections:
+                if sec in user_dict:
+                    del user_dict[sec]
+                    removed.append(sec)
+
+            if removed:
+                USER_CONFIG_PATH.write_text(
+                    json.dumps(user_dict, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info("[config] 已重置配置节: %s", removed)
+            else:
+                logger.info("[config] 指定的配置节 %s 无用户覆盖，无需重置",
+                            list(sections))
+
         self._loaded = False
         self.load()
 
@@ -519,6 +569,11 @@ def save_config_dict(updates: dict) -> None:
     _store.save_dict(updates)
 
 
-def reset_config() -> None:
-    """删除 config_user.json，恢复默认配置。"""
-    _store.reset()
+def reset_config(*sections: str) -> None:
+    """
+    重置配置。
+
+    - reset_config()          → 全量重置
+    - reset_config("screening", "backtrack") → 只重置指定节
+    """
+    _store.reset(*sections)
