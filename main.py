@@ -43,7 +43,7 @@
   MySQL 初始化：
         登录 MySQL 后执行: source database/create_database.sql
 
-  P4 代码保存在 p4_program/data_platform.txt 文件内
+  P4 配置方式详见 README.md
 ================================================================================
 """
 
