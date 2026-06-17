@@ -28,9 +28,13 @@
     - 前后端分离架构
 
   使用方式：
-        python main.py                        # 全量启动
-        python main.py --no-live-scan         # 禁用逐条分析扫描
-        python main.py --no-llm               # 禁用多智能体系统（仅 P4 + 数据网关 + 前端）
+        python main.py                        # 全量启动 (所有层 + 逐条扫描 + 前端)
+        python main.py --no-llm               # 跳过 LLM 智能体 (仅 P4 + 数据网关 + 前端)
+        python main.py --no-live-scan         # 跳过逐条分析队列扫描
+        python main.py --no-p4                # 跳过 P4 控制器
+        python main.py --no-data-gateway      # 跳过数据网关
+        python main.py --no-frontend          # 跳过前端服务器
+        python main.py --frontend-port 3000   # 前端使用端口 3000
         python main.py --dry-run              # 仅打印启动信息，不实际运行
 
   依赖安装：
@@ -38,6 +42,8 @@
 
   MySQL 初始化：
         登录 MySQL 后执行: source database/create_database.sql
+
+  P4 代码保存在 p4_program/data_platform.txt 文件内
 ================================================================================
 """
 
