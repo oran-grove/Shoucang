@@ -755,6 +755,19 @@ async def api_traffic_action(payload: TrafficAction):
         except Exception as e:
             logger.error(f"P4 硬件拉黑异常: {e}")
 
+    if action == "忽视" and target_ip:
+        # 忽视 → 从黑名单中删除该 IP
+        try:
+            from database import remove_from_blacklist
+            detailed = _db("lists_manager", "get_blacklist_detailed", 1, 10000)
+            for row in detailed.get("rows", []):
+                if row.get("ip_address") == target_ip:
+                    remove_from_blacklist(row["id"])
+                    logger.info(f"已从数据库黑名单移除 {target_ip} (id={row['id']})")
+                    break
+        except Exception as e:
+            logger.error(f"数据库黑名单移除异常: {e}")
+
     if item_id:
         try:
             _db("lists_manager", "update_traffic_action", item_id, action)
@@ -802,14 +815,37 @@ async def api_alert_receive(payload: AlertData):
 
 @app.post("/api/alert/dismiss")
 async def api_alert_dismiss(payload: DismissRequest):
-    """移除告警"""
+    """移除告警（忽视操作）"""
+    dismissed_count = 0
     if payload.alert_id:
         ok = dismiss_alert_by_id(payload.alert_id)
-        return JSONResponse({"code": 0, "msg": "已移除" if ok else "未找到该告警"})
-    if payload.ip:
-        n = dismiss_alerts_for_ip(payload.ip)
-        return JSONResponse({"code": 0, "msg": f"已移除 {n} 条告警"})
-    return JSONResponse({"code": 1, "msg": "请提供 alert_id 或 ip"}, status_code=400)
+        dismissed_count = 1 if ok else 0
+    elif payload.ip:
+        dismissed_count = dismiss_alerts_for_ip(payload.ip)
+    else:
+        return JSONResponse({"code": 1, "msg": "请提供 alert_id 或 ip"}, status_code=400)
+
+    target_ip = payload.ip or ""
+    if target_ip and dismissed_count > 0:
+        # 从黑名单中移除
+        try:
+            from database import remove_from_blacklist
+            detailed = _db("lists_manager", "get_blacklist_detailed", 1, 10000)
+            for row in detailed.get("rows", []):
+                if row.get("ip_address") == target_ip:
+                    remove_from_blacklist(row["id"])
+                    logger.info(f"已从数据库黑名单移除 {target_ip} (id={row['id']})")
+                    break
+        except Exception as e:
+            logger.error(f"数据库黑名单移除异常: {e}")
+
+        # 记录到智能体记忆
+        _record_to_memory_from_admin(
+            item_id=0, action="忽视", reason="首页告警忽略",
+            target_ip=target_ip, ai_verdict="unknown", ai_confidence=0.0,
+        )
+
+    return JSONResponse({"code": 0, "msg": f"已移除 {dismissed_count} 条告警"})
 
 
 # ============================================================================
