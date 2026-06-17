@@ -270,7 +270,7 @@ layui.define(["jquery", "layer"], function (exports) {
          * @param options
          */
         render: function (options) {
-            options.bgColorDefault = options.bgColorDefault || false;
+            options.bgColorDefault = (options.bgColorDefault === false || options.bgColorDefault == null) ? false : options.bgColorDefault;
             options.listen = options.listen || false;
             var bgcolorId = sessionStorage.getItem('layuiminiBgcolorId');
             if (bgcolorId === null || bgcolorId === undefined || bgcolorId === '') {
@@ -286,7 +286,7 @@ layui.define(["jquery", "layer"], function (exports) {
          * @returns {boolean}
          */
         buildThemeCss: function (bgcolorId) {
-            if (!bgcolorId) {
+            if (bgcolorId === false || bgcolorId === null || bgcolorId === undefined || bgcolorId === '') {
                 return false;
             }
             var bgcolorData = miniTheme.config(bgcolorId);
