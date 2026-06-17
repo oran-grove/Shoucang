@@ -61,16 +61,109 @@ mysql -u root -p -e "source database/create_database.sql"
 - **OpenAI 兼容 API**：设为 `"openai"`，可接入任何兼容 OpenAI 接口的服务
 - **LM Studio**（本地模型）：设为 `"lmstudio"`，无需 API 密钥，模型自动加载
 
-### 4. 配置 P4 交换机连接 IP
+### 4. P4 交换机端配置
 
-编辑 [`p4_controller/control.py`](p4_controller/control.py#L37)，将 `P4_SWITCH_IPC` 改为你的 P4 交换机（BMv2 虚拟机）实际 IP：
+P4 程序源码在 [`p4_program/data_platform.txt`](p4_program/data_platform.txt)。
 
-```python
-# p4_controller/control.py 第 37 行
-P4_SWITCH_IPC = 'tcp://192.168.56.102:10001'  # 改成你的 P4 交换机 IP
+#### 4.1 搭建网络拓扑
+
+首先在 P4 VM 中创建 network namespace 和 veth pair，模拟内网主机与交换机的连接：
+
+```bash
+# 创建两个主机命名空间
+sudo ip netns add h1
+sudo ip netns add h2
+
+# 制作两根虚拟网线（h1↔s1, h2↔s2）
+sudo ip link add veth_h1 type veth peer name veth_s1
+sudo ip link add veth_h2 type veth peer name veth_s2
+
+# 把网线 host 端插入命名空间，配置 IP 并启动
+sudo ip link set veth_h1 netns h1
+sudo ip netns exec h1 ip addr add 10.0.0.1/24 dev veth_h1
+sudo ip netns exec h1 ip link set veth_h1 up
+sudo ip netns exec h1 ip link set lo up
+
+sudo ip link set veth_h2 netns h2
+sudo ip netns exec h2 ip addr add 10.0.0.2/24 dev veth_h2
+sudo ip netns exec h2 ip link set veth_h2 up
+sudo ip netns exec h2 ip link set lo up
+
+# 把网线交换机端启动
+sudo ip link set veth_s1 up
+sudo ip link set veth_s2 up
 ```
 
-如果你的 BMv2 `simple_switch` 和控制器运行在同一台机器上，Thrift 端口（9100）默认使用 `127.0.0.1` 无需修改。如果 BMv2 运行在远程 VM 中，还需要配置端口转发（将 VM 的 9100 端口转发到本机）。
+#### 4.2 编译 P4 程序
+
+```bash
+# 新版 p4c
+p4c --target bmv2 --arch v1model --std p4-16 \
+    p4_program/data_platform.txt \
+    -o p4_program/data_platform.json
+
+# 旧版 VM 若 p4c 不可用，改用 p4c-bm2-ss
+p4c-bm2-ss --target bmv2 --arch v1model \
+    p4_program/data_platform.txt \
+    -o p4_program/data_platform.json
+```
+
+#### 4.3 启动 BMv2 交换机
+
+```bash
+sudo simple_switch --device-id 0 \
+    --thrift-port 9100 \
+    --notifications-addr "tcp://0.0.0.0:10001" \
+    --log-console \
+    -i 1@veth_s1 -i 2@veth_s2 \
+    p4_program/data_platform.json
+```
+
+> `--notifications-addr` 开启 pynng IPC 通道，地址须与控制器的 `P4_SWITCH_IPC` 一致；`--thrift-port 9100` 供控制器读写寄存器和流表。交换机端口接 `veth_s1`/`veth_s2`（交换机侧），非 `veth_h1`/`veth_h2`（主机侧）。
+
+#### 4.4 配置交换机端口映射
+
+交换机启动后，在另一个终端中用 `simple_switch_CLI` 写入端口映射规则（P4 程序 `port_mapping_table` 要求端口 1↔2 互通）：
+
+```bash
+simple_switch_CLI --thrift-port 9100
+```
+
+进入 CLI 后执行：
+
+```
+table_add MyIngress.port_mapping_table MyIngress.set_egress 1 => 2
+table_add MyIngress.port_mapping_table MyIngress.set_egress 2 => 1
+```
+
+> 不配置端口映射，`port_mapping_table.apply().hit` 返回 false，所有流量在 Ingress 阶段被直接 drop。
+
+#### 4.5 配置控制器连接 IP
+
+编辑 [`p4_controller/control.py`](p4_controller/control.py#L37)：
+
+```python
+P4_SWITCH_IPC = 'tcp://192.168.56.102:10001'  # 改成 BMv2 虚拟机实际 IP
+```
+
+> IP 必须与 `simple_switch --notifications-addr` 中的地址一致。
+
+BMv2 的 Thrift 端口（9100）默认通过 `127.0.0.1` 本地连接。若 BMv2 在远程 VM 中，需做端口转发：
+
+```bash
+ssh -L 9100:127.0.0.1:9100 user@192.168.56.102
+```
+
+#### 4.6 拷贝 Thrift stubs
+
+控制器通过 Thrift 协议直连 BMv2，需要 [`bm_runtime/`](bm_runtime/) 目录中的 Python bindings。从 P4 VM 拷贝：
+
+```bash
+scp -r user@192.168.56.102:/usr/local/share/p4c/bm_runtime/standard bm_runtime/
+scp -r user@192.168.56.102:/usr/local/share/p4c/bm_runtime/simple_pre bm_runtime/
+```
+
+> 控制器启动时会自动清空交换机寄存器及黑白名单流表，并从每 100 秒拉取一次的寄存器数据中重置状态。
 
 ### 5. （可选）下载 GeoIP 数据库
 
@@ -154,7 +247,7 @@ python tests/reset_database.py
 
 ### `test_traffic_scenarios.py` — P4 全场景测试流量生成器
 
-**在 P4 虚拟机中运行**，通过 scapy 向 P4 交换机 (`veth_h1`) 发包，覆盖 6 组测试场景：
+**在 P4 VM 的 h1 命名空间中运行**，通过 scapy 向 P4 交换机发包（经由 `veth_h1` → `veth_s1`），覆盖 6 组测试场景：
 
 | 分组 | 说明 |
 |------|------|
@@ -166,15 +259,15 @@ python tests/reset_database.py
 | Group 6 | 跨部门行为对比（财务 vs 研发 vs 运维，同部门正常/异常） |
 
 ```bash
-# 在 P4 虚拟机中运行
-sudo python tests/test_traffic_scenarios.py                # 全部场景
-sudo python tests/test_traffic_scenarios.py --group 3      # 仅可疑流量
-sudo python tests/test_traffic_scenarios.py --group 1 4    # P4丢弃 + 恶意
-sudo python tests/test_traffic_scenarios.py --safe-only    # 仅安全场景（Group 1+2）
-sudo python tests/test_traffic_scenarios.py --dry-run      # 仅打印不发包
+# 在 P4 VM 的 h1 命名空间中运行
+sudo ip netns exec h1 python tests/test_traffic_scenarios.py                # 全部场景
+sudo ip netns exec h1 python tests/test_traffic_scenarios.py --group 3      # 仅可疑流量
+sudo ip netns exec h1 python tests/test_traffic_scenarios.py --group 1 4    # P4丢弃 + 恶意
+sudo ip netns exec h1 python tests/test_traffic_scenarios.py --safe-only    # 仅安全场景（Group 1+2）
+sudo ip netns exec h1 python tests/test_traffic_scenarios.py --dry-run      # 仅打印不发包
 ```
 
-> 需要 P4 虚拟机环境、`veth_h1` 网卡、BMv2 `simple_switch` 运行中。仅依赖 scapy，无项目内其他依赖。
+> 需要 P4 虚拟机环境、network namespace（h1/h2）、veth pair、BMv2 `simple_switch` 运行中且已配置端口映射。仅依赖 scapy，无项目内其他依赖。
 
 **完整测试链路**：
 
@@ -183,10 +276,12 @@ sudo python tests/test_traffic_scenarios.py --dry-run      # 仅打印不发包
     → traffic_log入库 → LiveScanOrchestrator → LLM三层管线 → 前端告警
 ```
 
-1. 先在 P4 VM 中启动 `simple_switch` 并加载 P4 程序
-2. 在本机启动系统：`python main.py`
-3. 在 P4 VM 中运行测试流量：`sudo python tests/test_traffic_scenarios.py`
-4. 观察前端 `http://localhost:8080` 的实时告警
+1. 在 P4 VM 中搭建网络拓扑（namespace + veth pair）
+2. 编译 P4 程序并启动 `simple_switch`
+3. 通过 `simple_switch_CLI` 配置端口映射
+4. 在本机启动系统：`python main.py`
+5. 在 P4 VM 的 h1 命名空间中运行测试流量：`sudo ip netns exec h1 python tests/test_traffic_scenarios.py`
+6. 观察前端 `http://localhost:8080` 的实时告警
 
 ---
 
