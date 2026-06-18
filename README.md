@@ -63,11 +63,11 @@ mysql -u root -p -e "source database/create_database.sql"
 
 ### 4. P4 交换机端配置
 
-P4 程序源码在 [`p4_program/data_platform.txt`](p4_program/data_platform.txt)。
+P4 程序源码在 [`p4_program/data_platform.p4`](p4_program/data_platform.p4)。
 
 #### 4.1 搭建网络拓扑
 
-首先在 P4 VM 中创建 network namespace 和 veth pair，模拟内网主机与交换机的连接：
+首先在 P4 VM 中创建 network namespace 和 veth pair，模拟内网主机与交换机的连接（请在终端中先切换到p4 文件所在的目录，然后运行以下命令）：
 
 ```bash
 # 创建两个主机命名空间
@@ -99,13 +99,13 @@ sudo ip link set veth_s2 up
 ```bash
 # 新版 p4c
 p4c --target bmv2 --arch v1model --std p4-16 \
-    p4_program/data_platform.txt \
-    -o p4_program/data_platform.json
+    data_platform.p4 \
+    -o data_platform.json
 
 # 旧版 VM 若 p4c 不可用，改用 p4c-bm2-ss
 p4c-bm2-ss --target bmv2 --arch v1model \
-    p4_program/data_platform.txt \
-    -o p4_program/data_platform.json
+    data_platform.p4 \
+    -o data_platform.json
 ```
 
 #### 4.3 启动 BMv2 交换机
@@ -116,7 +116,7 @@ sudo simple_switch --device-id 0 \
     --notifications-addr "tcp://0.0.0.0:10001" \
     --log-console \
     -i 1@veth_s1 -i 2@veth_s2 \
-    p4_program/data_platform.json
+    data_platform.json
 ```
 
 > `--notifications-addr` 开启 pynng IPC 通道，地址须与控制器的 `P4_SWITCH_IPC` 一致；`--thrift-port 9100` 供控制器读写寄存器和流表。交换机端口接 `veth_s1`/`veth_s2`（交换机侧），非 `veth_h1`/`veth_h2`（主机侧）。
@@ -382,7 +382,7 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 │   └── test_traffic_scenarios.py  #   P4 全场景测试流量生成器
 ├── bm_runtime/                # BMv2 交换机 Thrift 运行时（自动生成）
 ├── p4_program/                # P4 交换机程序源码
-│   └── data_platform.txt
+│   └── data_platform.p4
 └── requirements.txt
 ```
 

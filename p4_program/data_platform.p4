@@ -177,7 +177,7 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
             b8 = hdr.payload.data[63:56];   b9 = hdr.payload.data[55:48];   b10= hdr.payload.data[47:40];   b11= hdr.payload.data[39:32];
             b12= hdr.payload.data[31:24];   b13= hdr.payload.data[23:16];   b14= hdr.payload.data[15:8];    b15= hdr.payload.data[7:0];
             
-            // 【Layer 0: 基础异或层】15个节点完全并行计算，耗时 1 个逻辑门延迟
+            // 【Layer 0: 基础异或】15个节点完全并行计算
             bit<12> x0  = (bit<12>)(b0 ^ b1);   bit<12> x1  = (bit<12>)(b1 ^ b2);
             bit<12> x2  = (bit<12>)(b2 ^ b3);   bit<12> x3  = (bit<12>)(b3 ^ b4);
             bit<12> x4  = (bit<12>)(b4 ^ b5);   bit<12> x5  = (bit<12>)(b5 ^ b6);
@@ -187,11 +187,11 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
             bit<12> x12 = (bit<12>)(b12 ^ b13); bit<12> x13 = (bit<12>)(b13 ^ b14);
             bit<12> x14 = (bit<12>)(b14 ^ b15);
 
-            // 【Layer 1: 折叠第一层】15项归并为8项（两两成对并行相加，奇数项透传）
+            // 【Layer 1: 折叠第一层】15项归并为8项
             bit<12> s1_0 = x0 + x1;     bit<12> s1_1 = x2 + x3;
             bit<12> s1_2 = x4 + x5;     bit<12> s1_3 = x6 + x7;
             bit<12> s1_4 = x8 + x9;     bit<12> s1_5 = x10 + x11;
-            bit<12> s1_6 = x12 + x13;   bit<12> s1_7 = x14;          // 孤立项直接透传
+            bit<12> s1_6 = x12 + x13;   bit<12> s1_7 = x14;          
 
             // 【Layer 2: 折叠第二层】8项归并为4项
             bit<12> s2_0 = s1_0 + s1_1; bit<12> s2_1 = s1_2 + s1_3;
@@ -231,7 +231,7 @@ if (pkts == 0) {
             // 触发 28 字节高危报警
             meta.digest_trigger = 2; 
             
-            // 🌟【硬核染色】：将 20 位的 hash_idx 注入低位，最高字节强行染成 0xFF000000 
+            // 将 20 位的 hash_idx 注入低位，最高字节强行染成 0xFF000000 
 
             meta.msg2_cache.hash_index = ((bit<32>)hash_idx) | 0xFF000000; 
             
