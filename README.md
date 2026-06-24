@@ -12,11 +12,18 @@
 
 ### 1. 创建虚拟环境并安装依赖
 
+项目提供 `pyproject.toml` 和 `requirements.txt` 两套依赖声明，按所用工具选择：
+
 ```bash
+# pyproject.toml
+uv sync
+uv run python main.py
+```
+```bash
+# requirements.txt
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1      # Windows PowerShell
 # 或 source .venv/bin/activate    # Linux / macOS
-
 pip install -r requirements.txt
 ```
 
@@ -383,12 +390,16 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ├── bm_runtime/                # BMv2 交换机 Thrift 运行时（自动生成）
 ├── p4_program/                # P4 交换机程序源码
 │   └── data_platform.p4
-└── requirements.txt
+├── pyproject.toml             # 项目元数据与依赖声明（新版 Python 规范，推荐配合 uv 使用）
+├── uv.lock                    # uv 依赖锁定文件
+└── requirements.txt           # pip 兼容依赖列表（旧版工作流）
 ```
 
 ## 技术栈
 
 **运行环境**：Python 3.11+、MySQL 8.0
+
+**依赖管理**：`pyproject.toml`（uv）+ `requirements.txt`（pip），两种方式等效
 
 **后端**：FastAPI + Flask（共存，各有分工）、uvicorn、pynng、Thrift、Paramiko
 
@@ -405,3 +416,4 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 - **P4 控制器**：模块支持 `try: from . import` 双模式导入（包内/独立运行），修改时保持兼容。
 - **GeoIP**：`GeoLite2-City.mmdb` 通过 jsDelivr CDN 每 7 天自动更新，`maxminddb` 包缺失时自动降级跳过。
 - **前端**：无构建工具，FastAPI 直接托管 `frontend/` 目录。前端通过 REST API 与后端通信，不直接读配置或数据库。
+- **依赖管理**：`pyproject.toml` 和 `requirements.txt` 同步维护，新增依赖时需同时更新两处。
