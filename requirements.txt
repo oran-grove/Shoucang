@@ -31,6 +31,9 @@ psutil>=5.9.0             # 系统资源监控 (CPU/RAM/网络)，前端仪表�
 # ---- 数据库批量写入 (database/) ----
 # pymysql 已在上方声明
 
+# ---- WebUI 鉴权 ----
+pyjwt>=2.8.0              # JWT token 签发/验证（管理员登录鉴权）
+
 # ---- 前端相关 ----
 # 前端为纯静态文件 (HTML/CSS/JS/LayUI)，无需额外 pip 包
 # FastAPI 统一托管前端静态资源，不再需要 PHP / Nginx / Apache

@@ -10,14 +10,17 @@
 告警数据以 traffic_log 表为唯一数据源。
 """
 
+import hashlib
 import json
 import logging
 import os
+import secrets
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import jwt
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -82,6 +85,114 @@ app.add_middleware(
 
 _should_serve_static = False
 _server_instance = None
+
+# ============================================================================
+# WebUI 鉴权 — 密码哈希 / JWT / 中间件
+# ============================================================================
+
+_SCRYPT_N = 16384
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+
+
+def _hash_password(password: str) -> str:
+    """stdlib scrypt 哈希密码，返回 'hexhash:hexsalt'。"""
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P)
+    return h.hex() + ":" + salt.hex()
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    """验证密码，常量时间比较。"""
+    try:
+        h_hex, s_hex = stored.split(":", 1)
+        target = bytes.fromhex(h_hex)
+        salt = bytes.fromhex(s_hex)
+        actual = hashlib.scrypt(password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P)
+        return secrets.compare_digest(actual, target)
+    except Exception:
+        return False
+
+
+def _create_token(username: str, secret: str, expiry_hours: int) -> str:
+    """签发 JWT access token。"""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": username,
+        "iat": now,
+        "exp": now + timedelta(hours=expiry_hours),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def _verify_token(token: str, secret: str) -> dict | None:
+    """验证 JWT，有效返回 payload，无效/过期返回 None。"""
+    try:
+        return jwt.decode(token, secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+
+
+def _token_from_request(request: Request) -> str | None:
+    """从 Authorization header 或 Cookie 中提取 token。"""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return request.cookies.get("token")
+
+
+def _ensure_auth_config():
+    """首次启动：自动生成 jwt_secret 和默认管理员密码哈希，持久化到 config_user.json。"""
+    cfg = get_config().webui_auth
+    changed = {}
+    first_run = not cfg.admin_password_hash
+    if not cfg.jwt_secret:
+        changed["jwt_secret"] = secrets.token_urlsafe(32)
+    if first_run:
+        changed["admin_password_hash"] = _hash_password("admin123")
+    if changed:
+        save_config_dict({"webui_auth": changed})
+
+    logger.info("=" * 60)
+    logger.info("🔐 WebUI 管理员登录凭据")
+    logger.info(f"   用户名: {cfg.admin_user}")
+    if first_run:
+        logger.info("   密码:   admin123 (首次启动默认密码，请尽快修改)")
+    else:
+        logger.info("   密码:   (已设置，若遗忘请编辑 config/config_user.json")
+        logger.info("          删除 webui_auth.admin_password_hash 后重启将重置为 admin123)")
+    logger.info("=" * 60)
+
+
+# ---- HTTP 鉴权中间件 ----
+_PUBLIC_PATHS = {
+    "/", "/index.html", "/favicon.ico",
+    "/api/auth/login", "/api/alert", "/api/health", "/api/status",
+}
+_PUBLIC_PREFIXES = ("/lib/", "/css/", "/js/", "/images/", "/error/", "/page/")
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # 放行：白名单精确路径、静态资源前缀、OPTIONS 预检、静态 JSON 文件
+    if path in _PUBLIC_PATHS or request.method == "OPTIONS":
+        return await call_next(request)
+    if path.startswith(_PUBLIC_PREFIXES):
+        return await call_next(request)
+    if path.startswith("/api/") and path.endswith(".json"):
+        return await call_next(request)
+
+    # 鉴权
+    token = _token_from_request(request)
+    if not token:
+        return JSONResponse({"code": 401, "msg": "未登录"}, status_code=401)
+    payload = _verify_token(token, get_config().webui_auth.jwt_secret)
+    if payload is None:
+        return JSONResponse({"code": 401, "msg": "登录已过期"}, status_code=401)
+    request.state.username = payload["sub"]
+    return await call_next(request)
+
 
 # ============================================================================
 # 统一数据转换：traffic_log 行 → 前端响应（中文字段）
@@ -361,6 +472,53 @@ async def api_init():
             "version": "3.1.0",
         }
     })
+
+
+# ============================================================================
+# API: 管理员鉴权
+# ============================================================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(payload: LoginRequest):
+    cfg = get_config().webui_auth
+    if payload.username != cfg.admin_user:
+        return JSONResponse({"code": 1, "msg": "用户名或密码错误"}, status_code=401)
+    if not _verify_password(payload.password, cfg.admin_password_hash):
+        return JSONResponse({"code": 1, "msg": "用户名或密码错误"}, status_code=401)
+    token = _create_token(payload.username, cfg.jwt_secret, cfg.jwt_expiry_hours)
+    resp = JSONResponse({
+        "code": 0,
+        "msg": "登录成功",
+        "data": {
+            "token": token,
+            "username": payload.username,
+            "expires_in": cfg.jwt_expiry_hours * 3600,
+        }
+    })
+    # ponytail: Cookie 让 iframe 子页面也能自动携带 token，无需逐页修改
+    resp.set_cookie(
+        key="token", value=token,
+        max_age=cfg.jwt_expiry_hours * 3600,
+        httponly=True, samesite="lax",
+    )
+    return resp
+
+
+@app.get("/api/auth/status")
+async def api_auth_status(request: Request):
+    """检查当前登录状态。"""
+    token = _token_from_request(request)
+    if not token:
+        return JSONResponse({"code": 0, "data": {"authenticated": False}})
+    payload = _verify_token(token, get_config().webui_auth.jwt_secret)
+    if payload is None:
+        return JSONResponse({"code": 0, "data": {"authenticated": False}})
+    return JSONResponse({"code": 0, "data": {"authenticated": True, "username": payload["sub"]}})
 
 
 # ============================================================================
@@ -912,6 +1070,7 @@ async def startup():
         _should_serve_static = False
         logger.warning(f"⚠️ 前端静态文件目录未找到: {_FRONTEND_ROOT}")
 
+    _ensure_auth_config()
     _start_alert_expiry_thread()
     logger.info("✅ 告警自动过期线程已启动 (TTL=%ds)", _ALERT_TTL_SECONDS)
 

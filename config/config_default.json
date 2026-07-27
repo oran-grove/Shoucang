@@ -145,5 +145,13 @@
     "enabled": true,
     "download_url": "https://cdn.jsdelivr.net/npm/geolite2-city/GeoLite2-City.mmdb.gz",
     "db_path": "data_gateway/GeoLite2-City.mmdb"
+  },
+
+  "webui_auth": {
+    "_comment": "WebUI 管理员登录鉴权 — admin_password_hash 和 jwt_secret 留空时首次启动自动生成",
+    "admin_user": "admin",
+    "admin_password_hash": "",
+    "jwt_secret": "",
+    "jwt_expiry_hours": 24
   }
 }

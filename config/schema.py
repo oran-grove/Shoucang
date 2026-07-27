@@ -211,6 +211,19 @@ class GeoipConfig:
 
 
 # ============================================================
+# WebUI 鉴权配置
+# ============================================================
+
+@dataclass
+class WebuiAuthConfig:
+    """WebUI 管理员登录鉴权配置"""
+    admin_user: str = "admin"
+    admin_password_hash: str = ""   # scrypt hash:salt，空=首次启动自动生成
+    jwt_secret: str = ""            # JWT 签名密钥，空=首次启动自动生成
+    jwt_expiry_hours: int = 24
+
+
+# ============================================================
 # 总配置（所有节的聚合）
 # ============================================================
 
@@ -225,6 +238,7 @@ class FullConfig:
     feedback: FeedbackAgentConfig = field(default_factory=FeedbackAgentConfig)
     live_scan: LiveScanConfig = field(default_factory=LiveScanConfig)
     geoip: GeoipConfig = field(default_factory=GeoipConfig)
+    webui_auth: WebuiAuthConfig = field(default_factory=WebuiAuthConfig)
 
     def to_dict(self) -> dict:
         """序列化为 JSON 兼容的字典（枚举转字符串）。"""
@@ -258,6 +272,12 @@ class FullConfig:
                 "update_interval_hours": self.geoip.update_interval_hours,
                 "download_url": self.geoip.download_url,
                 "db_path": self.geoip.db_path,
+            },
+            "webui_auth": {
+                "admin_user": self.webui_auth.admin_user,
+                "admin_password_hash": self.webui_auth.admin_password_hash,
+                "jwt_secret": self.webui_auth.jwt_secret,
+                "jwt_expiry_hours": self.webui_auth.jwt_expiry_hours,
             },
         }
 
@@ -341,5 +361,6 @@ __all__ = [
     "FeedbackAgentConfig",
     "LiveScanConfig",
     "GeoipConfig",
+    "WebuiAuthConfig",
     "FullConfig",
 ]

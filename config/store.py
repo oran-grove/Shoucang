@@ -38,6 +38,7 @@ from .schema import (
     LLMBackendConfig,
     LiveScanConfig,
     ScreeningAgentConfig,
+    WebuiAuthConfig,
 )
 from .shared_config import DEFAULT_CONFIG_PATH, USER_CONFIG_PATH
 from .loader import _compute_delta, _deep_merge, _validate, _coerce_types
@@ -54,6 +55,7 @@ _SECTION_ATTRS = {
     "feedback":    "_feedback",
     "live_scan":   "_live_scan",
     "geoip":       "_geoip",
+    "webui_auth":  "_webui_auth",
 }
 
 
@@ -183,6 +185,16 @@ def _build_geoip(d: dict) -> GeoipConfig:
     )
 
 
+def _build_webui_auth(d: dict) -> WebuiAuthConfig:
+    a = d.get("webui_auth", {})
+    return WebuiAuthConfig(
+        admin_user=a.get("admin_user", "admin"),
+        admin_password_hash=a.get("admin_password_hash", ""),
+        jwt_secret=a.get("jwt_secret", ""),
+        jwt_expiry_hours=a.get("jwt_expiry_hours", 24),
+    )
+
+
 # ============================================================
 # 结构体 → dict 序列化（save 时临时使用）
 # ============================================================
@@ -272,6 +284,12 @@ def _structs_to_dict(store: "ConfigStore") -> dict:
             "download_url": store._geoip.download_url,
             "db_path": store._geoip.db_path,
         },
+        "webui_auth": {
+            "admin_user": store._webui_auth.admin_user,
+            "admin_password_hash": store._webui_auth.admin_password_hash,
+            "jwt_secret": store._webui_auth.jwt_secret,
+            "jwt_expiry_hours": store._webui_auth.jwt_expiry_hours,
+        },
     }
 
 
@@ -289,6 +307,7 @@ ConfigSection = Union[
     FeedbackAgentConfig,
     LiveScanConfig,
     GeoipConfig,
+    WebuiAuthConfig,
 ]
 
 
@@ -308,6 +327,7 @@ class ConfigStore:
         self._feedback: FeedbackAgentConfig = FeedbackAgentConfig()
         self._live_scan: LiveScanConfig = LiveScanConfig()
         self._geoip: GeoipConfig = GeoipConfig()
+        self._webui_auth: WebuiAuthConfig = WebuiAuthConfig()
 
         # 缓存的默认配置 dict（用于 delta 计算，仅 load 时写入一次）
         self._default_dict: dict = {}
@@ -344,6 +364,7 @@ class ConfigStore:
         self._feedback = _build_feedback(merged)
         self._live_scan = _build_live_scan(merged)
         self._geoip = _build_geoip(merged)
+        self._webui_auth = _build_webui_auth(merged)
 
         self._loaded = True
         logger.info("[config] 配置已加载 (来源: %s)",
@@ -385,6 +406,7 @@ class ConfigStore:
                 feedback=self._feedback,
                 live_scan=self._live_scan,
                 geoip=self._geoip,
+                webui_auth=self._webui_auth,
             )
 
         results = tuple(self._get_section(s) for s in sections)
