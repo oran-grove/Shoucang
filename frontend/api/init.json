@@ -1,7 +1,7 @@
 {
   "homeInfo": {
     "title": "首页",
-    "href": "page/welcome-1.html"
+    "href": "page/dashboard.html"
   },
   "logoInfo": {
     "title": "守藏",
@@ -10,56 +10,56 @@
   },
   "menuInfo": [
     {
-      "title": "",
+      "title": "导航",
       "icon": "fa fa-address-book",
       "href": "",
       "target": "_self",
       "child": [
         {
           "title": "首页",
-          "href": "page/welcome-1.html",
+          "href": "page/dashboard.html",
           "icon": "fa fa-home",
           "target": "_self"
         },
         {
           "title": "智能体配置",
-          "href": "page/zntpz.html",
+          "href": "page/agent-config.html",
           "icon": "fa fa-window-maximize",
           "target": "_self"
         },
         {
           "title": "员工管理",
-          "href": "page/management.html",
+          "href": "page/employees.html",
           "icon": "fa fa-gears",
           "target": "_self"
         },
         {
-          "title": "api管理",
-          "href": "page/table.html",
+          "title": "API 管理",
+          "href": "page/backend-config.html",
           "icon": "fa fa-file-text",
           "target": "_self"
         },
         {
           "title": "系统设置",
-          "href": "page/system_settings.html",
+          "href": "page/settings.html",
           "icon": "fa fa-cog",
           "target": "_self"
         },
         {
-          "title": "IP管理",
+          "title": "IP 管理",
           "href": "",
           "icon": "fa fa-shield",
           "target": "_self",
           "child": [
             {
               "title": "黑名单管理",
-              "href": "page/ip_blacklist.html",
+              "href": "page/blacklist.html",
               "icon": "fa fa-ban",
               "target": "_self"
             },
             {
               "title": "白名单管理",
-              "href": "page/ip_whitelist.html",
+              "href": "page/whitelist.html",
               "icon": "fa fa-check-circle",
               "target": "_self"
             }

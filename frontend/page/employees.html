@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>系统管理终端</title>
+    <title>守藏 — 员工管理</title>
     <meta name="renderer" content="webkit">
     <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
@@ -129,7 +129,7 @@
                     maxmin:true,
                     shadeClose: true,
                     area: ['100%', '100%'],
-                    content: '/page/table/add.html',
+                    content: '/page/employee-add.html',
                 });
                 $(window).on("resize", function () {
                     layer.full(index);
@@ -182,7 +182,7 @@
                     maxmin:true,
                     shadeClose: true,
                     area: ['100%', '100%'],
-                    content: '/page/table/edit.html?' + params,
+                    content: '/page/employee-edit.html?' + params,
                 });
                 $(window).on("resize", function () {
                     layer.full(index);

@@ -799,7 +799,7 @@ async def api_employee_delete(emp_id: int):
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
 
 
-@app.get("/api/ip_map")
+@app.get("/api/ip-map")
 async def api_ip_map_get():
     try:
         data = _db("lists_manager", "get_ip_dept_map")
@@ -1148,16 +1148,6 @@ async def serve_api_json(filename: str):
     if file_path.exists() and file_path.is_file():
         return FileResponse(str(file_path))
     return JSONResponse({"code": 0, "data": []})
-
-
-@app.get("/page/table/{filename:path}")
-async def serve_table_page(filename: str):
-    if not _should_serve_static:
-        return HTMLResponse("<h2>前端文件未找到</h2>", status_code=404)
-    file_path = _FRONTEND_ROOT / "page" / "table" / filename
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(str(file_path))
-    raise HTTPException(status_code=404)
 
 
 # ============================================================================
