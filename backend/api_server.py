@@ -31,6 +31,12 @@ from config.shared_config import PROJECT_ROOT as _PROJECT_ROOT
 _FRONTEND_ROOT = _PROJECT_ROOT / "frontend"
 
 from config import get_config, reset_config, save_config_dict
+from database.lists_manager import (
+    get_employees, add_employee, update_employee, delete_employee,
+    get_ip_dept_map, get_blacklist_detailed, add_to_db_blacklist,
+    remove_from_blacklist, get_whitelist_detailed, add_to_db_whitelist,
+    remove_from_whitelist, get_traffic_logs, update_traffic_action,
+)
 
 logger = logging.getLogger("UnifiedBackend")
 
@@ -269,21 +275,6 @@ def _enrich_traffic_row(row: dict) -> dict:
     row["reason"] = " ".join(parts)
 
     return row
-
-
-# ============================================================================
-# Database 模块统一调用接口
-# ============================================================================
-def _db(module_name: str, func_name: str, *args, **kwargs):
-    """通用的 database 模块调用包装器"""
-    import importlib
-    try:
-        mod = importlib.import_module(f"database.{module_name}")
-        fn = getattr(mod, func_name)
-        return fn(*args, **kwargs)
-    except Exception as e:
-        logger.error(f"database.{module_name}.{func_name} 调用失败: {e}")
-        raise
 
 
 # ============================================================================
@@ -763,7 +754,7 @@ async def api_employees_get(
             v = locals().get(k, "")
             if v:
                 filters[k] = v
-        total, rows = _db("lists_manager", "get_employees", filters, page, limit)
+        total, rows = get_employees(filters, page, limit)
         return JSONResponse({"code": 0, "data": rows, "count": total})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -772,7 +763,7 @@ async def api_employees_get(
 @app.post("/api/employees")
 async def api_employee_add(payload: EmployeeAddRequest):
     try:
-        _db("lists_manager", "add_employee",
+        add_employee(
             payload.number, payload.ip, payload.department, payload.name)
         return JSONResponse({"code": 0, "msg": "添加成功"})
     except Exception as e:
@@ -782,7 +773,7 @@ async def api_employee_add(payload: EmployeeAddRequest):
 @app.put("/api/employees/{emp_id}")
 async def api_employee_update(emp_id: int, payload: EmployeeAddRequest):
     try:
-        _db("lists_manager", "update_employee",
+        update_employee(
             emp_id, number=payload.number, ip=payload.ip,
             department=payload.department, name=payload.name)
         return JSONResponse({"code": 0, "msg": "更新成功"})
@@ -793,7 +784,7 @@ async def api_employee_update(emp_id: int, payload: EmployeeAddRequest):
 @app.delete("/api/employees/{emp_id}")
 async def api_employee_delete(emp_id: int):
     try:
-        _db("lists_manager", "delete_employee", emp_id)
+        delete_employee(emp_id)
         return JSONResponse({"code": 0, "msg": "删除成功"})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -802,7 +793,7 @@ async def api_employee_delete(emp_id: int):
 @app.get("/api/ip-map")
 async def api_ip_map_get():
     try:
-        data = _db("lists_manager", "get_ip_dept_map")
+        data = get_ip_dept_map()
         return JSONResponse({"code": 0, "data": data})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -817,7 +808,7 @@ async def api_blacklist_get(
     limit: int = Query(10),
 ):
     try:
-        result = _db("lists_manager", "get_blacklist_detailed", page, limit)
+        result = get_blacklist_detailed(page, limit)
         return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -826,7 +817,7 @@ async def api_blacklist_get(
 @app.post("/api/blacklist")
 async def api_blacklist_add(payload: BlacklistAddRequest):
     try:
-        _db("lists_manager", "add_to_db_blacklist",
+        add_to_db_blacklist(
             ip=payload.ip,
             threat_level=payload.threat_level,
             reason=payload.reason or "手动添加",
@@ -841,7 +832,7 @@ async def api_blacklist_add(payload: BlacklistAddRequest):
 @app.delete("/api/blacklist/{item_id}")
 async def api_blacklist_delete(item_id: int):
     try:
-        ok = _db("lists_manager", "remove_from_blacklist", item_id)
+        ok = remove_from_blacklist(item_id)
         if ok:
             return JSONResponse({"code": 0, "msg": "删除成功"})
         return JSONResponse({"code": 1, "msg": "删除失败"}, status_code=500)
@@ -855,7 +846,7 @@ async def api_whitelist_get(
     limit: int = Query(10),
 ):
     try:
-        result = _db("lists_manager", "get_whitelist_detailed", page, limit)
+        result = get_whitelist_detailed(page, limit)
         return JSONResponse({"code": 0, "data": result["rows"], "count": result["total"]})
     except Exception as e:
         return JSONResponse({"code": 1, "msg": str(e)}, status_code=500)
@@ -864,7 +855,7 @@ async def api_whitelist_get(
 @app.post("/api/whitelist")
 async def api_whitelist_add(payload: WhitelistAddRequest):
     try:
-        _db("lists_manager", "add_to_db_whitelist",
+        add_to_db_whitelist(
             ip=payload.ip,
             reason=payload.reason or "手动添加",
             port=payload.port,
@@ -878,7 +869,7 @@ async def api_whitelist_add(payload: WhitelistAddRequest):
 @app.delete("/api/whitelist/{item_id}")
 async def api_whitelist_delete(item_id: int):
     try:
-        ok = _db("lists_manager", "remove_from_whitelist", item_id)
+        ok = remove_from_whitelist(item_id)
         if ok:
             return JSONResponse({"code": 0, "msg": "删除成功"})
         return JSONResponse({"code": 1, "msg": "删除失败"}, status_code=500)
@@ -894,7 +885,7 @@ async def api_traffic_get():
     """获取流量事件列表（数据库为唯一数据源）。"""
     data = []
     try:
-        rows = _db("lists_manager", "get_traffic_logs", 200, 0)
+        rows = get_traffic_logs(200, 0)
         for row in rows:
             if isinstance(row.get("packet_time"), datetime):
                 row["packet_time"] = row["packet_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -921,7 +912,7 @@ async def api_traffic_action(payload: TrafficAction):
 
     if item_id:
         try:
-            rows = _db("lists_manager", "get_traffic_logs", 200, 0)
+            rows = get_traffic_logs(200, 0)
             for row in rows:
                 if row.get("id") == item_id:
                     target_ip = row.get("src_ip")
@@ -942,8 +933,7 @@ async def api_traffic_action(payload: TrafficAction):
     if action == "忽视" and target_ip:
         # 忽视 → 从黑名单中删除该 IP
         try:
-            from database import remove_from_blacklist
-            detailed = _db("lists_manager", "get_blacklist_detailed", 1, 10000)
+            detailed = get_blacklist_detailed(1, 10000)
             for row in detailed.get("rows", []):
                 if row.get("ip_address") == target_ip:
                     remove_from_blacklist(row["id"])
@@ -954,7 +944,7 @@ async def api_traffic_action(payload: TrafficAction):
 
     if item_id:
         try:
-            _db("lists_manager", "update_traffic_action", item_id, action)
+            update_traffic_action(item_id, action)
         except Exception:
             pass
 
@@ -977,7 +967,7 @@ async def api_alerts_get():
     """获取告警列表 — 数据库为唯一数据源。"""
     data = []
     try:
-        rows = _db("lists_manager", "get_traffic_logs", 200, 0)
+        rows = get_traffic_logs(200, 0)
         for row in rows:
             if isinstance(row.get("packet_time"), datetime):
                 row["packet_time"] = row["packet_time"].strftime("%Y-%m-%d %H:%M:%S")
@@ -1013,8 +1003,7 @@ async def api_alert_dismiss(payload: DismissRequest):
     if target_ip and dismissed_count > 0:
         # 从黑名单中移除
         try:
-            from database import remove_from_blacklist
-            detailed = _db("lists_manager", "get_blacklist_detailed", 1, 10000)
+            detailed = get_blacklist_detailed(1, 10000)
             for row in detailed.get("rows", []):
                 if row.get("ip_address") == target_ip:
                     remove_from_blacklist(row["id"])

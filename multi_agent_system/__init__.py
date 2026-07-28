@@ -91,17 +91,6 @@ class MultiAgentSystem:
         await self._orchestrator.stop()
         self._started = False
 
-    def _ensure_started(self) -> None:
-        """懒启动（同步场景）"""
-        if self._started:
-            return
-        import asyncio
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(self._orchestrator.start())
-            self._started = True
-
     # --- 流量分析 ---
 
     async def analyze(self, flow: FlowEvent) -> ThreatVerdict:
@@ -109,11 +98,6 @@ class MultiAgentSystem:
         if not self._started:
             raise RuntimeError("系统未启动，请先调用 await system.start()")
         return await self._orchestrator.analyze_flow(flow)
-
-    def analyze_sync(self, flow: FlowEvent) -> ThreatVerdict:
-        """同步分析流量（线程安全）"""
-        self._ensure_started()
-        return self._orchestrator.analyze_flow_sync(flow)
 
     # --- 管理员反馈 ---
 
@@ -129,24 +113,6 @@ class MultiAgentSystem:
         if not self._started:
             raise RuntimeError("系统未启动")
         return await self._orchestrator.admin_feedback(
-            feedback_type=feedback_type,
-            src_ip=src_ip,
-            dst_ip=dst_ip,
-            verdict_id=verdict_id,
-            admin_note=admin_note,
-        )
-
-    def feedback_sync(
-        self,
-        feedback_type: str,
-        src_ip: str = "",
-        dst_ip: str = "",
-        verdict_id: str = "",
-        admin_note: str = "",
-    ) -> dict:
-        """同步管理员反馈"""
-        self._ensure_started()
-        return self._orchestrator.admin_feedback_sync(
             feedback_type=feedback_type,
             src_ip=src_ip,
             dst_ip=dst_ip,

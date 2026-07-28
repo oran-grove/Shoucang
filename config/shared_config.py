@@ -8,30 +8,7 @@
 不应硬编码在各业务模块中。
 """
 
-import os
 from pathlib import Path
-from typing import TypedDict
-
-
-# ==================== 数据库配置 ====================
-class DbConfig(TypedDict):
-    """数据库连接参数 —— 精确类型以消除 PyMySQL connect() 的类型误报。"""
-    host: str
-    user: str
-    password: str
-    database: str
-    port: int
-    charset: str
-
-
-DB_CONFIG: DbConfig = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'insider_threat_db',
-    'port': 3306,
-    'charset': 'utf8mb4',
-}
 
 
 # ==================== 项目根目录 ====================
@@ -64,13 +41,3 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "config_default.json"
 USER_CONFIG_PATH = PROJECT_ROOT / "config" / "config_user.json"
 
 
-# ==================== 多智能体系统配置路径 ====================
-# Python 后端的配置目录
-PYTHON_CONFIG_DIR = PROJECT_ROOT / "config"
-
-
-# ==================== 前端配置路径（供前端 API 跨模块引用）====================
-# 前端通过 Python API 后端获取配置，不再直接读取 JSON 文件
-# 这些路径供后端 API 提供配置服务时使用
-FRONTEND_CONFIG_RELATIVE_PATH = "../../config/config_user.json"
-FRONTEND_DEFAULT_CONFIG_RELATIVE_PATH = "../../config/config_default.json"

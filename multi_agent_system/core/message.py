@@ -11,6 +11,19 @@ from typing import Any, Optional
 from uuid import uuid4
 
 
+def fmt_window(hours: float) -> str:
+    """格式化回溯窗口为人类可读字符串 (e.g. 0.5→30m, 24→1d, 168→7d)"""
+    if hours < 1:
+        return f"{int(hours * 60)}m"
+    if hours < 24:
+        return f"{hours:.0f}h"
+    if hours % 24 == 0:
+        return f"{hours // 24:.0f}d"
+    d = int(hours // 24)
+    h = int(hours % 24)
+    return f"{d}d{h}h"
+
+
 class TrafficVerdict(Enum):
     """流量判定"""
     MALICIOUS = "malicious"
@@ -129,7 +142,29 @@ class ThreatVerdict:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+def get_pattern_context(flow) -> str:
+    """从记忆系统查询匹配的历史模式，返回提示词注入文本。"""
+    try:
+        from ..memory import get_index
+        index = get_index()
+        features = {
+            "department": getattr(flow, "department", ""),
+            "protocol": getattr(flow, "protocol", "TCP"),
+            "direction": (
+                "internal" if getattr(flow, "dst_ip", "").startswith(
+                    ("10.", "192.168.", "172.")
+                ) else "outbound"
+            ),
+            "encryption": getattr(flow, "entropy_score", 0) > 7.0,
+        }
+        return index.format_context(features)
+    except Exception:
+        return ""
+
+
 __all__ = [
+    "fmt_window",
+    "get_pattern_context",
     "TrafficVerdict",
     "SeverityLevel",
     "FlowEvent",

@@ -13,7 +13,6 @@ pydantic>=2.5.0             # 数据验证模型
 pynng>=0.8.0              # 与P4交换机的NNG IPC收发 (control.py)
 requests>=2.31.0          # 向前端推送实时告警 (control.py)
 flask>=3.0.0              # 控制面REST API服务 (control.py)
-paramiko>=3.4.0           # SSH远程注入P4流表规则 (add_ip.py)
 thrift>=0.16.0            # Thrift直连BMv2交换机 (control.py telemetry_job / reset_switch_on_startup)
 
 # ---- 多智能体系统 (multi_agent_system/) ----

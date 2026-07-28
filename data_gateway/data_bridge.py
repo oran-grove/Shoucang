@@ -20,7 +20,6 @@
   - 五元组取自未分析流，资产标签默认 5，其余取未分析流解析值
 """
 
-import json
 import logging
 import threading
 from datetime import datetime
@@ -424,29 +423,6 @@ class DataBridge:
 
         # 启动后台数据库写入线程（零拷贝 queue.Queue）
         self.write_queue, self.stop_event = start_db_writer()
-
-    def handle_payload(self, data: bytes):
-        try:
-            payload = json.loads(data.decode("utf-8"))
-        except json.JSONDecodeError as e:
-            logger.error("JSON 解析失败: %s", e)
-            return
-
-        unanalyzed = payload.get("unanalyzed_data", {})
-        analyzed = payload.get("analyzed_data", {})
-
-        logger.info("[数据桥] 未分析流 %d 条, 已分析流 %d 条", len(unanalyzed), len(analyzed))
-
-        with self.lock:
-            result = process_tables(unanalyzed, analyzed)
-            if result:
-                # dict 直接入队，零拷贝（引用传递，无 JSON 序列化）
-                for row in result.values():
-                    self.write_queue.put(row)
-                logger.info("  已入队 %d 条 (queue.Queue → DB攒批写入)", len(result))
-
-            enriched = sum(1 for r in result.values() if r.get("country") or r.get("employee"))
-            logger.info("输出 %d 条记录 (含 GeoIP/员工信息: %d 条)", len(result), enriched)
 
     def _print_rows(self, result: dict):
         """入库前记录每行数据的关键字段，方便调试"""

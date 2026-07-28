@@ -27,7 +27,7 @@ from config.schema import (
 )
 from .backends.base import LoadModelConfig
 from .core.message import (
-    FlowEvent, ThreatVerdict, TrafficVerdict,
+    FlowEvent, ThreatVerdict, TrafficVerdict, fmt_window,
 )
 from .backends import OpenAIBackend, LMStudioBackend, DeepSeekBackend, BaseLLMBackend
 from .agents.screening_agent import ScreeningAgent
@@ -36,19 +36,6 @@ from .agents.adjudication_agent import AdjudicationAgent
 from .agents.feedback_agent import FeedbackAgent, AdminFeedback
 
 logger = logging.getLogger(__name__)
-
-
-def _fmt_window(hours: float) -> str:
-    """格式化回溯窗口为人类可读字符串 (e.g. 0.5→30m, 24→1d, 168→7d)"""
-    if hours < 1:
-        return f"{int(hours * 60)}m"
-    if hours < 24:
-        return f"{hours:.0f}h"
-    if hours % 24 == 0:
-        return f"{hours // 24:.0f}d"
-    d = int(hours // 24)
-    h = int(hours % 24)
-    return f"{d}d{h}h"
 
 
 class Orchestrator:
@@ -337,7 +324,7 @@ class Orchestrator:
         final_adjudication: Optional[ThreatVerdict] = None
 
         for win_idx, lookback_hours in enumerate(lookback_windows):
-            window_label = _fmt_window(lookback_hours)
+            window_label = fmt_window(lookback_hours)
             logger.info(
                 "[%s] L2-回溯 第%d/%d轮 窗口=%s",
                 pipeline_id, win_idx + 1, total_windows, window_label,
@@ -385,7 +372,7 @@ class Orchestrator:
                     pipeline_id, window_label,
                 )
                 if win_idx < total_windows - 1:
-                    next_label = _fmt_window(lookback_windows[win_idx + 1])
+                    next_label = fmt_window(lookback_windows[win_idx + 1])
                     logger.info(
                         "[%s] 回溯窗口 %s → %s (无新增数据)",
                         pipeline_id, window_label, next_label,
@@ -394,7 +381,7 @@ class Orchestrator:
                     logger.info(
                         "[%s] 已遍历全部回溯窗口(最大=%s)且无新增，"
                         "降级上报告警将在管线结束后处理",
-                        pipeline_id, _fmt_window(lookback_windows[-1]),
+                        pipeline_id, fmt_window(lookback_windows[-1]),
                     )
                 continue
 
@@ -428,7 +415,7 @@ class Orchestrator:
 
             # suspicious → 扩展窗口继续回溯
             if win_idx < total_windows - 1:
-                next_label = _fmt_window(lookback_windows[win_idx + 1])
+                next_label = fmt_window(lookback_windows[win_idx + 1])
                 logger.info(
                     "[%s] L3 仍可疑，扩展回溯窗口 %s → %s 继续...",
                     pipeline_id, window_label, next_label,
@@ -436,7 +423,7 @@ class Orchestrator:
             else:
                 logger.info(
                     "[%s] L3 已遍历全部回溯窗口(最大=%s)，降级上报告警",
-                    pipeline_id, _fmt_window(lookback_windows[-1]),
+                    pipeline_id, fmt_window(lookback_windows[-1]),
                 )
 
         # ---- 循环结束后的处理 ----
@@ -449,18 +436,6 @@ class Orchestrator:
             self._alert_if_needed(final_adjudication, flow, pipeline_id)
 
         return final_adjudication
-
-    def analyze_flow_sync(self, flow: FlowEvent) -> ThreatVerdict:
-        """同步版本的流量分析"""
-        import asyncio
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.analyze_flow(flow))
-        else:
-            raise RuntimeError(
-                "在已有事件循环中无法使用同步方法，请使用 await orchestrator.analyze_flow()"
-            )
 
     # ========== 历史相似流量查询 ==========
 
@@ -523,32 +498,6 @@ class Orchestrator:
         result = await feedback_agent.process(feedback=feedback)
         logger.info("管理员反馈处理结果: %s", result)
         return result
-
-    def admin_feedback_sync(
-        self,
-        feedback_type: str,
-        src_ip: str = "",
-        dst_ip: str = "",
-        verdict_id: str = "",
-        admin_note: str = "",
-    ) -> dict:
-        import asyncio
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(
-                self.admin_feedback(feedback_type, src_ip, dst_ip,
-                                    verdict_id, admin_note)
-            )
-        else:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(
-                    lambda: asyncio.run(
-                        self.admin_feedback(feedback_type, src_ip, dst_ip,
-                                           verdict_id, admin_note)
-                    )
-                ).result()
 
     def get_statistics(self) -> dict:
         """获取系统统计信息"""

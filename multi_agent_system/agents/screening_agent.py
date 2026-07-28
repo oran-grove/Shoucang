@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from ..core.agent import BaseAgent
-from ..core.message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel
+from ..core.message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel, get_pattern_context
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class ScreeningAgent(BaseAgent):
         Raises:
             RuntimeError: 多次重试后仍无法解析 LLM 返回值
         """
-        pattern_context = self._get_pattern_context(flow)
+        pattern_context = get_pattern_context(flow)
         user_prompt = f"请分析以下流量：\n{flow.to_prompt_text()}"
         if pattern_context:
             user_prompt = (
@@ -140,17 +140,6 @@ class ScreeningAgent(BaseAgent):
             f"[{self.name}] 3 次重试全部失败: {last_error}"
         )
 
-    def _fallback_verdict(self, flow: FlowEvent, reason: str) -> ThreatVerdict:
-        """LLM 不可用或解析失败时的降级判定"""
-        return ThreatVerdict(
-            flow_ids=[flow.flow_id],
-            verdict=TrafficVerdict.SUSPICIOUS,
-            severity=SeverityLevel.LOW,
-            confidence=0.5,
-            threat_type="未知",
-            reasoning=reason,
-            recommended_action="monitor",
-        )
 
     def classify_threshold(self, verdict: ThreatVerdict) -> str:
         """
@@ -170,26 +159,6 @@ class ScreeningAgent(BaseAgent):
             return "suspicious"
         # 非 safe 但置信度不足 → 保留为可疑，不降级删除
         return "suspicious"
-
-    @staticmethod
-    def _get_pattern_context(flow: FlowEvent) -> str:
-        """从记忆系统查询匹配的历史模式，返回提示词注入文本。"""
-        try:
-            from ..memory import get_index
-            index = get_index()
-            features = {
-                "department": getattr(flow, "department", ""),
-                "protocol": getattr(flow, "protocol", "TCP"),
-                "direction": (
-                    "internal" if getattr(flow, "dst_ip", "").startswith(
-                        ("10.", "192.168.", "172.")
-                    ) else "outbound"
-                ),
-                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
-            }
-            return index.format_context(features)
-        except Exception:
-            return ""
 
 
 __all__ = ["ScreeningAgent"]

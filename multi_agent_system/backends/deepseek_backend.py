@@ -27,19 +27,6 @@ from .openai_backend import OpenAIBackend
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# DeepSeek 模型名称常量
-# ============================================================
-
-
-class DeepSeekModel:
-    """DeepSeek V4 官方模型名称常量"""
-
-    FLASH = "deepseek-v4-flash"  # 快速响应模型
-    PRO = "deepseek-v4-pro"      # 旗舰推理模型
-    DEFAULT = "deepseek-v4-flash"
-
-
-# ============================================================
 # DeepSeekBackend
 # ============================================================
 
@@ -93,7 +80,7 @@ class DeepSeekBackend(OpenAIBackend):
         api_base: str = "https://api.deepseek.com",
         timeout: float = 120.0,
         max_retries: int = 5,
-        default_model: str = DeepSeekModel.DEFAULT,
+        default_model: str = "deepseek-v4-flash",
         default_thinking_enabled: Optional[bool] = None,
         default_reasoning_effort: Optional[str] = None,
         include_reasoning: bool = False,
@@ -404,5 +391,4 @@ class DeepSeekBackend(OpenAIBackend):
 
 __all__ = [
     "DeepSeekBackend",
-    "DeepSeekModel",
 ]

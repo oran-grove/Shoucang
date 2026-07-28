@@ -128,23 +128,6 @@ class FeedbackAgent(BaseAgent):
 
         return result
 
-    def process_sync(
-        self,
-        feedback: Optional[AdminFeedback] = None,
-        verdict: Optional[ThreatVerdict] = None,
-    ) -> dict:
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.process(feedback, verdict))
-        else:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(
-                    lambda: asyncio.run(self.process(feedback, verdict))
-                ).result()
-
     def _apply_feedback_rules(
         self, feedback: AdminFeedback, hist_verdict: Optional[ThreatVerdict]
     ) -> dict:

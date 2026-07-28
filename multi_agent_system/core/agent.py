@@ -60,25 +60,6 @@ class BaseAgent(ABC):
             max_tokens=self.max_tokens,
         )
 
-    def call_llm_sync(
-        self,
-        user_prompt: str,
-        system_prompt_override: str = "",
-    ) -> str:
-        """
-        同步调用 LLM 后端。
-        """
-        if not self._llm_backend:
-            raise RuntimeError(f"智能体 [{self.name}] 未绑定 LLM 后端")
-        sys_prompt = system_prompt_override or self.system_prompt
-        return self._llm_backend.chat_sync(
-            system_prompt=sys_prompt,
-            user_prompt=user_prompt,
-            model=self.model_name,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-
     @staticmethod
     def extract_json_from_response(text: str) -> dict[str, Any]:
         """

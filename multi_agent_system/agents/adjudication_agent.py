@@ -15,7 +15,7 @@ import random
 from typing import Any
 
 from ..core.agent import BaseAgent
-from ..core.message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel
+from ..core.message import FlowEvent, ThreatVerdict, TrafficVerdict, SeverityLevel, fmt_window, get_pattern_context
 from .backtrack_agent import TOKENS_PER_RECORD  # 复用 L2 的 token 估算常量
 
 logger = logging.getLogger(__name__)
@@ -67,18 +67,6 @@ class AdjudicationAgent(BaseAgent):
                 "\"weak_signal_score\": 整数(0-10) }"
             )
 
-    @staticmethod
-    def _fmt_window(hours: float) -> str:
-        if hours < 1:
-            return f"{int(hours * 60)}m"
-        if hours < 24:
-            return f"{hours:.0f}h"
-        if hours % 24 == 0:
-            return f"{hours // 24:.0f}d"
-        d = int(hours // 24)
-        h = int(hours % 24)
-        return f"{d}d{h}h"
-
     async def process(
         self,
         flow: FlowEvent,
@@ -118,7 +106,7 @@ class AdjudicationAgent(BaseAgent):
             context_lines.append(f"筛查推理: {screening_result.reasoning[:200]}")
 
         if lookback_window_hours > 0:
-            context_lines.append(f"当前回溯窗口: {self._fmt_window(lookback_window_hours)}")
+            context_lines.append(f"当前回溯窗口: {fmt_window(lookback_window_hours)}")
             context_lines.append(f"关联历史记录总数: {len(related_context)}"
                                f"{' (展示抽样' + str(len(display_context)) + '条)' if len(related_context) > len(display_context) else ''}")
 
@@ -138,7 +126,7 @@ class AdjudicationAgent(BaseAgent):
         else:
             context_lines.append("未经过历史回溯（L1直接判断为可疑）")
 
-        pattern_context = self._get_pattern_context(flow)
+        pattern_context = get_pattern_context(flow)
         user_prompt = (
             f"=== 原始流量 ===\n"
             f"{flow.to_prompt_text()}\n\n"
@@ -216,36 +204,7 @@ class AdjudicationAgent(BaseAgent):
             f"[{self.name}] 3 次重试全部失败: {last_error}"
         )
 
-    def _fallback_verdict(self, flow: FlowEvent, reason: str) -> ThreatVerdict:
-        return ThreatVerdict(
-            flow_ids=[flow.flow_id],
-            verdict=TrafficVerdict.SUSPICIOUS,
-            severity=SeverityLevel.LOW,
-            confidence=0.3,
-            threat_type="未知",
-            reasoning=reason,
-            recommended_action="monitor",
-        )
 
-    @staticmethod
-    def _get_pattern_context(flow: FlowEvent) -> str:
-        """从记忆系统查询匹配的历史模式，返回提示词注入文本。"""
-        try:
-            from ..memory import get_index
-            index = get_index()
-            features = {
-                "department": getattr(flow, "department", ""),
-                "protocol": getattr(flow, "protocol", "TCP"),
-                "direction": (
-                    "internal" if getattr(flow, "dst_ip", "").startswith(
-                        ("10.", "192.168.", "172.")
-                    ) else "outbound"
-                ),
-                "encryption": getattr(flow, "entropy_score", 0) > 7.0,
-            }
-            return index.format_context(features)
-        except Exception:
-            return ""
 
 
 __all__ = ["AdjudicationAgent"]

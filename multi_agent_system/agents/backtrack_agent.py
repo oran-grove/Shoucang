@@ -15,7 +15,7 @@ import logging
 from typing import Any
 
 from ..core.agent import BaseAgent
-from ..core.message import FlowEvent
+from ..core.message import FlowEvent, fmt_window
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ class BacktrackAgent(BaseAgent):
             dict: {"matched_records": [...], "summary": "..."}
         """
         if not similar_records:
-            window_label = _fmt_window(lookback_window_hours)
+            window_label = fmt_window(lookback_window_hours)
             return {
                 "matched_records": [],
                 "summary": f"近{window_label}内无历史相似记录",
@@ -112,7 +112,7 @@ class BacktrackAgent(BaseAgent):
             for i in range(0, total, max_per_batch)
         ]
 
-        window_label = _fmt_window(lookback_window_hours)
+        window_label = fmt_window(lookback_window_hours)
         if len(batches) > 1:
             logger.info(
                 "[%s] 分批: %s条 → %s批 (每批≤%s条, 窗口=%s)",
@@ -200,16 +200,6 @@ class BacktrackAgent(BaseAgent):
         return "\n".join(lines)
 
 
-def _fmt_window(hours: float) -> str:
-    if hours < 1:
-        return f"{int(hours * 60)}m"
-    if hours < 24:
-        return f"{hours:.0f}h"
-    if hours % 24 == 0:
-        return f"{hours // 24:.0f}d"
-    d = int(hours // 24)
-    h = int(hours % 24)
-    return f"{d}d{h}h"
 
 
 __all__ = ["BacktrackAgent", "TOKENS_PER_RECORD"]

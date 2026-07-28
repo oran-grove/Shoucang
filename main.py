@@ -120,7 +120,6 @@ _global_state = {
     "verdict_write_queue": None,
     "verdict_stop_event": None,
     "backend_server": None,
-    "backend_port": None,
     "backend_port": 8080,
 }
 
@@ -308,16 +307,8 @@ async def start_multi_agent_system(
                     f"({verdict.verdict.value}, 置信度:{verdict.confidence:.0%}",
                 ]
                 if lookback_hours > 0:
-                    if lookback_hours < 1:
-                        win_label = f"{int(lookback_hours * 60)}m"
-                    elif lookback_hours < 24:
-                        win_label = f"{lookback_hours:.0f}h"
-                    elif lookback_hours % 24 == 0:
-                        win_label = f"{int(lookback_hours // 24)}d"
-                    else:
-                        d = int(lookback_hours // 24)
-                        h = int(lookback_hours % 24)
-                        win_label = f"{d}d{h}h"
+                    from multi_agent_system.core.message import fmt_window
+                    win_label = fmt_window(lookback_hours)
                     label_parts[-1] += f", 回溯窗口{win_label}"
                 label_parts[-1] += ")"
 

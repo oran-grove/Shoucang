@@ -196,104 +196,6 @@ def _build_webui_auth(d: dict) -> WebuiAuthConfig:
 
 
 # ============================================================
-# 结构体 → dict 序列化（save 时临时使用）
-# ============================================================
-
-def _backend_to_dict(be: LLMBackendConfig) -> dict:
-    return {
-        "model_name": be.model_name,
-        "api_base": be.api_base,
-        "api_key": be.api_key,
-        "temperature": be.temperature,
-        "max_tokens": be.max_tokens,
-        "max_context_tokens": be.max_context_tokens,
-        "timeout": be.timeout,
-        "max_retries": be.max_retries,
-        "auto_load": be.auto_load,
-        "load_config": be.load_config,
-        "thinking_enabled": be.thinking_enabled,
-        "reasoning_effort": be.reasoning_effort,
-        "include_reasoning": be.include_reasoning,
-    }
-
-
-def _structs_to_dict(store: "ConfigStore") -> dict:
-    """将所有结构体序列化为合并字典（仅在 save 时临时使用）。"""
-    return {
-        "database": {
-            "host": store._database.host,
-            "port": store._database.port,
-            "user": store._database.user,
-            "password": store._database.password,
-            "database": store._database.database,
-            "charset": store._database.charset,
-        },
-        "backends": {
-            "openai": _backend_to_dict(store._backends.openai),
-            "lmstudio": _backend_to_dict(store._backends.lmstudio),
-            "deepseek": _backend_to_dict(store._backends.deepseek),
-        },
-        "screening": {
-            "enabled": store._screening.enabled,
-            "backend": store._screening.backend.value,
-            "model_name": store._screening.model_name,
-            "system_prompt": store._screening.system_prompt,
-            "temperature": store._screening.temperature,
-            "max_tokens": store._screening.max_tokens,
-            "max_context_tokens": store._screening.max_context_tokens,
-            "confidence_threshold_dangerous": store._screening.confidence_threshold_dangerous,
-            "confidence_threshold_suspicious": store._screening.confidence_threshold_suspicious,
-        },
-        "backtrack": {
-            "enabled": store._backtrack.enabled,
-            "backend": store._backtrack.backend.value,
-            "model_name": store._backtrack.model_name,
-            "system_prompt": store._backtrack.system_prompt,
-            "temperature": store._backtrack.temperature,
-            "max_tokens": store._backtrack.max_tokens,
-            "lookback_windows": store._backtrack.lookback_windows,
-            "relevance_threshold": store._backtrack.relevance_threshold,
-            "batch_context_ratio": store._backtrack.batch_context_ratio,
-        },
-        "adjudication": {
-            "enabled": store._adjudication.enabled,
-            "backend": store._adjudication.backend.value,
-            "model_name": store._adjudication.model_name,
-            "system_prompt": store._adjudication.system_prompt,
-            "temperature": store._adjudication.temperature,
-            "max_tokens": store._adjudication.max_tokens,
-        },
-        "feedback": {
-            "enabled": store._feedback.enabled,
-            "backend": store._feedback.backend.value,
-            "model_name": store._feedback.model_name,
-            "system_prompt": store._feedback.system_prompt,
-            "temperature": store._feedback.temperature,
-            "max_tokens": store._feedback.max_tokens,
-        },
-        "live_scan": {
-            "enabled": store._live_scan.enabled,
-            "idle_poll_interval_seconds": store._live_scan.idle_poll_interval_seconds,
-            "batch_size_multiplier": store._live_scan.batch_size_multiplier,
-            "max_concurrent_analyses": store._live_scan.max_concurrent_analyses,
-            "start_from": store._live_scan.start_from,
-        },
-        "geoip": {
-            "enabled": store._geoip.enabled,
-            "update_interval_hours": store._geoip.update_interval_hours,
-            "download_url": store._geoip.download_url,
-            "db_path": store._geoip.db_path,
-        },
-        "webui_auth": {
-            "admin_user": store._webui_auth.admin_user,
-            "admin_password_hash": store._webui_auth.admin_password_hash,
-            "jwt_secret": store._webui_auth.jwt_secret,
-            "jwt_expiry_hours": store._webui_auth.jwt_expiry_hours,
-        },
-    }
-
-
-# ============================================================
 # ConfigStore 单例
 # ============================================================
 
@@ -432,7 +334,7 @@ class ConfigStore:
                 setattr(self, attr, value)
 
             # 序列化 → 计算增量 → 写入
-            current_dict = _structs_to_dict(self)
+            current_dict = self.get().to_dict()
             delta = _compute_delta(self._default_dict, current_dict)
             USER_CONFIG_PATH.write_text(
                 json.dumps(delta, ensure_ascii=False, indent=2),
@@ -451,7 +353,7 @@ class ConfigStore:
         """
         self._ensure_loaded()
         with self._lock:
-            current_dict = _structs_to_dict(self)
+            current_dict = self.get().to_dict()
             merged = _deep_merge(current_dict, updates)
             # 将前端表单的字符串值强制转换为与默认配置相同的类型
             # （如 "0.3" → 0.3, "1024" → 1024），避免类型差异导致
