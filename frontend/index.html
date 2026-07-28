@@ -107,8 +107,8 @@
 <script src="lib/layui-v2.6.3/layui.js" charset="utf-8"></script>
 <script src="js/lay-config.js?v=2.0.0" charset="utf-8"></script>
 <script>
-    // —— 鉴权检查：无 token → 跳转登录页（vanilla JS，不依赖 jQuery）——
-    if (!localStorage.getItem('token')) {
+    // —— 鉴权检查：未登录 → 跳转登录页（vanilla JS，不依赖 jQuery）——
+    if (!localStorage.getItem('loggedIn')) {
         location.replace('page/login.html');
     }
 
@@ -118,18 +118,10 @@
             miniAdmin = layui.miniAdmin,
             miniTab = layui.miniTab;
 
-        // —— 全局 AJAX 鉴权拦截 ——
-        $.ajaxSetup({
-            beforeSend: function (xhr) {
-                var token = localStorage.getItem('token');
-                if (token) {
-                    xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-                }
-            }
-        });
+        // —— 全局 401 拦截：token 过期 / 未登录 → 跳转登录页 ——
         $(document).ajaxError(function (e, xhr) {
             if (xhr.status === 401) {
-                localStorage.removeItem('token');
+                localStorage.removeItem('loggedIn');
                 localStorage.removeItem('username');
                 location.replace('page/login.html');
             }
@@ -161,7 +153,7 @@
         });
 
         $('.login-out').on("click", function () {
-            localStorage.removeItem('token');
+            localStorage.removeItem('loggedIn');
             localStorage.removeItem('username');
             location.replace('page/login.html');
         });

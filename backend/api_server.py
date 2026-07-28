@@ -134,10 +134,7 @@ def _verify_token(token: str, secret: str) -> dict | None:
 
 
 def _token_from_request(request: Request) -> str | None:
-    """从 Authorization header 或 Cookie 中提取 token。"""
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[7:]
+    """从 Cookie 中提取 token。"""
     return request.cookies.get("token")
 
 
@@ -495,16 +492,14 @@ async def api_auth_login(payload: LoginRequest):
         "code": 0,
         "msg": "登录成功",
         "data": {
-            "token": token,
             "username": payload.username,
             "expires_in": cfg.jwt_expiry_hours * 3600,
         }
     })
-    # ponytail: Cookie 让 iframe 子页面也能自动携带 token，无需逐页修改
     resp.set_cookie(
         key="token", value=token,
         max_age=cfg.jwt_expiry_hours * 3600,
-        httponly=True, samesite="lax",
+        httponly=True, samesite="lax", path="/",
     )
     return resp
 
