@@ -383,6 +383,11 @@ layui.define(["jquery", "layer"], function (exports) {
                 '/**tab选项卡选中颜色 tabActiveColor */\n' +
                 '.layuimini-tab .layui-tab-title .layui-this .layuimini-tab-active {\n' +
                 '    background-color: ' + bgcolorData.tabActiveColor + ';\n' +
+                '}\n' +
+                '\n' +
+                '/**下拉选择框选中颜色 */\n' +
+                '.layui-form-select dl dd.layui-this {\n' +
+                '    background-color: ' + bgcolorData.tabActiveColor + ' !important;\n' +
                 '}\n';
             $('#layuimini-bg-color').html(styleHtml);
         },
@@ -429,9 +434,6 @@ layui.define(["jquery", "layer"], function (exports) {
                     '<div class="color-content">\n' +
                     '<ul>\n' + bgColorHtml + '</ul>\n' +
                     '</div>\n' +
-                    '<div class="more-menu-list">\n' +
-                    '<a class="more-menu-item" href="https://github.com/zhongshaofa/layuimini" target="_blank"><i class="layui-icon layui-icon-tabs" style="font-size: 16px;"></i> 开源地址</a>\n' +
-                    '</div>' +
                     '</div>';
                 layer.open({
                     type: 1,

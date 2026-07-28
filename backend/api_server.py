@@ -521,6 +521,37 @@ async def api_auth_status(request: Request):
     return JSONResponse({"code": 0, "data": {"authenticated": True, "username": payload["sub"]}})
 
 
+class UpdateAccountRequest(BaseModel):
+    username: str = ""
+    current_password: str = ""
+    new_password: str = ""
+    jwt_expiry_hours: int = 0
+
+
+@app.post("/api/auth/update-account")
+async def api_auth_update_account(payload: UpdateAccountRequest):
+    """更新账户设置（用户名 / 密码 / 登录有效期）。中间件已鉴权。"""
+    cfg = get_config().webui_auth
+    updates = {}
+
+    if payload.username and payload.username != cfg.admin_user:
+        updates["admin_user"] = payload.username
+
+    if payload.new_password:
+        if not _verify_password(payload.current_password, cfg.admin_password_hash):
+            return JSONResponse({"code": 1, "msg": "当前密码错误"}, status_code=400)
+        updates["admin_password_hash"] = _hash_password(payload.new_password)
+
+    if payload.jwt_expiry_hours > 0:
+        updates["jwt_expiry_hours"] = payload.jwt_expiry_hours
+
+    if updates:
+        save_config_dict({"webui_auth": updates})
+        logger.info("[鉴权] 账户设置已更新: %s", list(updates.keys()))
+        return JSONResponse({"code": 0, "msg": "账户设置已保存"})
+    return JSONResponse({"code": 0, "msg": "无变更"})
+
+
 # ============================================================================
 # API: 配置管理
 # ============================================================================

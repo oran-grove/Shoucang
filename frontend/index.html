@@ -61,6 +61,9 @@
                     <a href="javascript:;">管理员</a>
                     <dl class="layui-nav-child">
                         <dd>
+                            <a href="javascript:;" class="account-setting">账户管理</a>
+                        </dd>
+                        <dd>
                             <a href="javascript:;" class="login-out">退出登录</a>
                         </dd>
                     </dl>
@@ -109,10 +112,11 @@
         location.replace('page/login.html');
     }
 
-    layui.use(['jquery', 'layer', 'miniAdmin'], function () {
+    layui.use(['jquery', 'layer', 'miniAdmin', 'miniTab'], function () {
         var $ = layui.jquery,
             layer = layui.layer,
-            miniAdmin = layui.miniAdmin;
+            miniAdmin = layui.miniAdmin,
+            miniTab = layui.miniTab;
 
         // —— 全局 AJAX 鉴权拦截 ——
         $.ajaxSetup({
@@ -143,6 +147,18 @@
             maxTabNum: 20,              // 最大的tab打开数量
         };
         miniAdmin.render(options);
+
+        $('.account-setting').on("click", function () {
+            miniTab.openNewTabByIframe({
+                href: 'page/account.html',
+                title: '账户管理'
+            });
+            // LayUI 事件委托在直接绑定之后触发，延迟移除高亮
+            setTimeout(function () {
+                $('.layuimini-setting').removeClass('layui-this');
+                $('.layuimini-setting .layui-nav-child dd').removeClass('layui-this');
+            }, 50);
+        });
 
         $('.login-out').on("click", function () {
             localStorage.removeItem('token');
