@@ -6,7 +6,7 @@
 
 ### 环境要求
 
-- **Python** 3.11+
+- **Python** 3.14+
 - **MySQL** 8.0
 - **P4 交换机**：BMv2 (`simple_switch`) 或 Tofino 硬件交换机
 
@@ -15,12 +15,12 @@
 项目提供 `pyproject.toml` 和 `requirements.txt` 两套依赖声明，按所用工具选择：
 
 ```bash
-# pyproject.toml
+# uv（推荐）
 uv sync
 uv run python main.py
 ```
 ```bash
-# requirements.txt
+# pip
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1      # Windows PowerShell
 # 或 source .venv/bin/activate    # Linux / macOS
@@ -68,11 +68,24 @@ mysql -u root -p -e "source database/create_database.sql"
 - **OpenAI 兼容 API**：设为 `"openai"`，可接入任何兼容 OpenAI 接口的服务
 - **LM Studio**（本地模型）：设为 `"lmstudio"`，无需 API 密钥，模型自动加载
 
-### 4. P4 交换机端配置
+### 4. 登录与账户管理
+
+首次启动时系统自动生成 JWT 密钥和默认管理员账户，并在终端输出：
+
+```
+用户名: admin
+密码:   admin123（首次启动自动生成，建议登录后立即修改）
+```
+
+登录后通过右上角「管理员 → 账户管理」可修改用户名、密码和登录有效期。Token 通过 HttpOnly Cookie 传输，前端不可访问。
+
+如果忘记密码，删除 `config/config_user.json` 中 `webui_auth.admin_password_hash` 字段后重启，密码即重置为 `admin123`。
+
+### 5. P4 交换机端配置
 
 P4 程序源码在 [`p4_program/data_platform.p4`](p4_program/data_platform.p4)。
 
-#### 4.1 搭建网络拓扑
+#### 5.1 搭建网络拓扑
 
 首先在 P4 VM 中创建 network namespace 和 veth pair，模拟内网主机与交换机的连接（请在终端中先切换到p4 文件所在的目录，然后运行以下命令）：
 
@@ -101,7 +114,7 @@ sudo ip link set veth_s1 up
 sudo ip link set veth_s2 up
 ```
 
-#### 4.2 编译 P4 程序
+#### 5.2 编译 P4 程序
 
 ```bash
 # 新版 p4c
@@ -115,7 +128,7 @@ p4c-bm2-ss --target bmv2 --arch v1model \
     -o data_platform.json
 ```
 
-#### 4.3 启动 BMv2 交换机
+#### 5.3 启动 BMv2 交换机
 
 ```bash
 sudo simple_switch --device-id 0 \
@@ -128,7 +141,7 @@ sudo simple_switch --device-id 0 \
 
 > `--notifications-addr` 开启 pynng IPC 通道，地址须与控制器的 `P4_SWITCH_IPC` 一致；`--thrift-port 9100` 供控制器读写寄存器和流表。交换机端口接 `veth_s1`/`veth_s2`（交换机侧），非 `veth_h1`/`veth_h2`（主机侧）。
 
-#### 4.4 配置交换机端口映射
+#### 5.4 配置交换机端口映射
 
 交换机启动后，在另一个终端中用 `simple_switch_CLI` 写入端口映射规则（P4 程序 `port_mapping_table` 要求端口 1↔2 互通）：
 
@@ -145,7 +158,7 @@ table_add MyIngress.port_mapping_table MyIngress.set_egress 2 => 1
 
 > 不配置端口映射，`port_mapping_table.apply().hit` 返回 false，所有流量在 Ingress 阶段被直接 drop。
 
-#### 4.5 配置控制器连接 IP
+#### 5.5 配置控制器连接 IP
 
 编辑 [`p4_controller/control.py`](p4_controller/control.py#L37)：
 
@@ -161,7 +174,7 @@ BMv2 的 Thrift 端口（9100）默认通过 `127.0.0.1` 本地连接。若 BMv2
 ssh -L 9100:127.0.0.1:9100 user@192.168.56.102
 ```
 
-#### 4.6 拷贝 Thrift stubs
+#### 5.6 拷贝 Thrift stubs
 
 控制器通过 Thrift 协议直连 BMv2，需要 [`bm_runtime/`](bm_runtime/) 目录中的 Python bindings。从 P4 VM 拷贝：
 
@@ -172,7 +185,7 @@ scp -r user@192.168.56.102:/usr/local/share/p4c/bm_runtime/simple_pre bm_runtime
 
 > 控制器启动时会自动清空交换机寄存器及黑白名单流表，并从每 100 秒拉取一次的寄存器数据中重置状态。
 
-### 5. （可选）下载 GeoIP 数据库
+### 6. （可选）下载 GeoIP 数据库
 
 GeoIP 用于流量地理位置富化（可选组件，缺失时自动跳过）：
 
@@ -182,7 +195,7 @@ python main.py --update-geoip-now
 
 首次运行时会从 jsDelivr CDN 下载 `GeoLite2-City.mmdb` 到 `data_gateway/` 目录。系统默认每 7 天自动更新。
 
-### 6. 注入初始数据
+### 7. 注入初始数据
 
 运行以下脚本将示例数据（黑白名单、员工 IP 映射）写入数据库：
 
@@ -190,7 +203,7 @@ python main.py --update-geoip-now
 python tests/test_data.py
 ```
 
-### 7. 启动系统
+### 8. 启动系统
 
 ```bash
 # 全量启动（四层 + 前端）
@@ -198,6 +211,7 @@ python main.py
 
 # 打开浏览器访问
 # http://localhost:8080
+# 首次登录凭据：admin / admin123
 ```
 
 #### 启动参数
@@ -219,9 +233,28 @@ python main.py
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| Web 前端 (FastAPI) | 8080 | 仪表盘 / REST API / 静态文件 |
+| Web 前端 (FastAPI) | 8080 | 仪表盘 / REST API / JWT 鉴权 / 静态文件 |
 | P4 控制面 (Flask) | 5000 | pynng 接收 + 黑白名单 API |
 | 数据网关 (UDP) | 9999 | 流量数据接收 + GeoIP 富化 |
+
+---
+
+## WebUI 功能页面
+
+所有页面均为纯静态 HTML/CSS/JS（LayUI 2.6），通过 REST API 与后端通信：
+
+| 页面 | 文件 | 说明 |
+|------|------|------|
+| 登录页 | `page/login.html` | 管理员登录，JWT Cookie 鉴权 |
+| 仪表盘 | `page/dashboard.html` | 实时告警、系统状态（CPU/RAM/网络） |
+| 智能体配置 | `page/agent-config.html` | L1/L2/L3 智能体参数 + 系统提示词 |
+| API 管理 | `page/backend-config.html` | DeepSeek / OpenAI / LM Studio 后端配置 |
+| 员工管理 | `page/employees.html` | IP-部门-员工映射 CRUD |
+| 黑名单管理 | `page/blacklist.html` | 恶意 IP 管理 + 流量处置 |
+| 白名单管理 | `page/whitelist.html` | 受信任 IP 管理 |
+| 流量日志 | `page/traffic.html` | 流量记录查看 + AI 判定结果 |
+| 系统设置 | `page/settings.html` | 数据库、GeoIP、扫描参数 |
+| 账户管理 | `page/account.html` | 修改用户名、密码、登录有效期 |
 
 ---
 
@@ -233,7 +266,7 @@ python main.py
 
 向数据库注入预定义的：
 - **黑名单**（35 条）：C2 服务器、恶意软件分发、暴力破解、Tor 出口、挖矿池、钓鱼、僵尸网络等
-- **白名单**（30 条）：内网基础设施、公共 DNS、CDN、云服务商、代码仓库、系统更新源、NTP 等
+- **白名单**（40 条）：内网基础设施、公共 DNS、CDN、云服务商、代码仓库、系统更新源、NTP 等
 - **员工 IP 映射**（30 条）：覆盖财务部、研发部、人事部、运维部、市场部、法务部、管理层
 
 ```bash
@@ -305,9 +338,11 @@ sudo ip netns exec h1 python tests/test_traffic_scenarios.py --dry-run      # �
 | **P4 硬件层** | 数据面包转发、特征提取、硬线速拦截 | P4 (BMv2) + pynng + Thrift + Flask | 5000 |
 | **多智能体系统** | L1筛查 → L2回溯 ⇄ L3研判 三层管线 + 逐条分析扫描 | 异步 LLM 后端（OpenAI/LMStudio/DeepSeek） | —（内部） |
 | **数据网关** | UDP 流量数据接收、P4 寄存器解析、GeoIP 富化、攒批入 MySQL | UDP socket + queue.Queue + PyMySQL | 9999 |
-| **统一管理面** | Web 仪表盘、策略配置、告警处置、日志审计、系统设置 | FastAPI + LayUI 纯静态前端 | 8080 |
+| **统一管理面** | Web 仪表盘、策略配置、告警处置、日志审计、账户管理 | FastAPI + JWT 鉴权 + LayUI 纯静态前端 | 8080 |
 
 跨层闭环：深度分析生成的策略可直接向 P4 交换机下发流表规则，也可反馈给检测阈值。管理面的人工处置（拉黑/加白、配置修改）通过 FastAPI 后端同步至各子系统。
+
+WebUI 使用 JWT 鉴权，登录签发的 Token 随 HttpOnly Cookie 传输。密码通过标准库 `hashlib.scrypt` 哈希存储。除登录接口和静态资源外，所有 `/api/*` 路由均需要有效 Token。
 
 ## 多智能体分析流水线
 
@@ -352,67 +387,72 @@ config_user.json        ← 用户覆盖（只需写要改的字段）
 ├── config/                    # 统一配置
 │   ├── config_default.json    #   出厂默认配置
 │   ├── config_user.json       #   用户覆盖配置（gitignored）
-│   ├── schema.py              #   配置结构体定义
+│   ├── schema.py              #   配置结构体定义 + FullConfig.to_dict()
 │   ├── store.py               #   ConfigStore 单例 + get_config / save_config API
 │   ├── loader.py              #   内部辅助（合并、校验、增量计算）
 │   └── shared_config.py       #   系统级常量
 ├── p4_controller/             # P4 硬件控制面
 │   ├── control.py             #   Flask 守护进程 + pynng 监听 + Thrift 遥测
 │   ├── add_ip.py              #   Thrift 直连注入 P4 流表规则
-│   ├── analyzer.py            #   流量特征提取 / 规则匹配
-│   ├── data_packer.py         #   P4 寄存器数据打包 / 合并流表
+│   ├── analyzer.py            #   21 维特征分析 + 威胁评分引擎
+│   ├── data_packer.py         #   P4 寄存器打包 / 双缓冲 / 冷热池
 │   └── timer.py               #   遥测定时器
 ├── multi_agent_system/        # 多智能体系统
+│   ├── __init__.py            #   MultiAgentSystem 便捷主类
 │   ├── orchestrator.py        #   编排器（三层管线调度）
-│   ├── agents/                #   screening / backtrack / adjudication / feedback
+│   ├── agents/                #   L1筛查 / L2回溯 / L3研判 / 反馈
 │   ├── backends/              #   OpenAI / LMStudio / DeepSeek 后端
-│   ├── core/                  #   BaseAgent 基类 + 消息数据模型
+│   ├── core/                  #   BaseAgent 基类 + 消息模型 + 共享工具函数
 │   ├── memory/                #   模式卡片 / 聚类 / 进化 / 周度提取
 │   └── orchestrators/         #   LiveScanOrchestrator 逐条扫描调度
 ├── backend/                   # FastAPI 统一后端
-│   └── api_server.py          #   REST API + 前端静态文件托管
+│   └── api_server.py          #   REST API + JWT 鉴权 + 前端静态文件托管
 ├── database/                  # 数据持久化
-│   ├── connection.py          #   数据库连接工厂
-│   ├── writer.py              #   双队列攒批写入（INSERT + UPDATE）
-│   ├── lists_manager.py       #   黑白名单 / IP 映射内存缓存
+│   ├── connection.py          #   数据库连接工厂（统一使用 get_config("database")）
+│   ├── writer.py              #   多队列攒批写入（traffic_log INSERT + ai_verdict UPDATE + 删除）
+│   ├── lists_manager.py       #   黑白名单 / IP 映射内存缓存 + 流量查询
 │   └── create_database.sql    #   建库 DDL
 ├── data_gateway/              # 数据网关
-│   └── data_bridge.py         #   UDP :9999 接收 + P4 寄存器解析 + GeoIP 富化
+│   └── data_bridge.py         #   双缓冲事件驱动 + P4 寄存器解析 + GeoIP 富化
 ├── frontend/                  # 纯静态前端（LayUI 2.6）
-│   ├── index.html             #   主框架
-│   ├── page/                  #   各功能页面
-│   ├── lib/                   #   第三方库（LayUI、jQuery、ECharts 等）
-│   └── api/                   #   前端静态 API mock
+│   ├── index.html             #   主框架（dashboard）
+│   ├── page/                  #   17 个功能页面（登录/仪表盘/配置/账户/黑白名单/员工/流量）
+│   ├── js/                    #   LayUI 初始化 + lay-module（miniAdmin/miniMenu/miniTab/miniTheme）
+│   ├── lib/                   #   第三方库（LayUI、jQuery 3.4.1、Font Awesome 4.7）
+│   └── api/                   #   前端静态配置（init.json 菜单结构）
 ├── tests/                     # 测试脚本
 │   ├── test_data.py           #   示例数据注入（黑白名单 + 员工映射）
 │   ├── reset_database.py      #   数据库一键重置
 │   └── test_traffic_scenarios.py  #   P4 全场景测试流量生成器
-├── bm_runtime/                # BMv2 交换机 Thrift 运行时（自动生成）
+├── bm_runtime/                # BMv2 交换机 Thrift 运行时（P4 VM 中拷贝）
 ├── p4_program/                # P4 交换机程序源码
 │   └── data_platform.p4
-├── pyproject.toml             # 项目元数据与依赖声明（新版 Python 规范，推荐配合 uv 使用）
+├── pyproject.toml             # 项目元数据与依赖声明（推荐配合 uv 使用）
 ├── uv.lock                    # uv 依赖锁定文件
-└── requirements.txt           # pip 兼容依赖列表（旧版工作流）
+└── requirements.txt           # pip 兼容依赖列表
 ```
 
 ## 技术栈
 
-**运行环境**：Python 3.11+、MySQL 8.0
+**运行环境**：Python 3.14+、MySQL 8.0
 
 **依赖管理**：`pyproject.toml`（uv）+ `requirements.txt`（pip），两种方式等效
 
-**后端**：FastAPI + Flask（共存，各有分工）、uvicorn、pynng、Thrift、Paramiko
+**后端**：FastAPI（统一 REST API + JWT 鉴权）+ Flask（P4 控制面）+ uvicorn + pynng + Thrift
+
+**鉴权**：stdlib `hashlib.scrypt` 密码哈希 + `pyjwt` JWT 签发/验证（HS256），Token 跟随 HttpOnly Cookie
 
 **AI 推理**：httpx（异步 HTTP 调用 LLM API），支持 OpenAI / LM Studio / DeepSeek V4
 
-**数据处理**：PyMySQL（攒批写入）、maxminddb（GeoIP，可选）、psutil（系统监控）
+**数据处理**：PyMySQL（攒批写入）、maxminddb（GeoIP，可选）、psutil（系统监控）、json5（LLM 宽松 JSON 解析）
 
-**前端**：LayUI 2.6、纯静态 HTML/CSS/JS，零构建步骤
+**前端**：LayUI 2.6、jQuery 3.4.1、纯静态 HTML/CSS/JS，零构建步骤
 
 ## 约束与约定
 
 - **数据库**：MySQL 是唯一数据源。所有 DB 访问通过 [`database/`](database/) 模块暴露的接口，禁止各模块私自打开连接。
 - **配置**：LLM 提示词和 API 密钥一律放在 `config/config_user.json` 中，不在源码硬编码。
+- **鉴权**：WebUI 所有 `/api/*` 路由（除登录、告警接收、健康检查等白名单外）均需有效 JWT。Token 不返回给前端 JavaScript，仅通过 Cookie 传输。
 - **P4 控制器**：模块支持 `try: from . import` 双模式导入（包内/独立运行），修改时保持兼容。
 - **GeoIP**：`GeoLite2-City.mmdb` 通过 jsDelivr CDN 每 7 天自动更新，`maxminddb` 包缺失时自动降级跳过。
 - **前端**：无构建工具，FastAPI 直接托管 `frontend/` 目录。前端通过 REST API 与后端通信，不直接读配置或数据库。
